@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7
+
+### Fixed
+
+- generated `verify_completion_control_plane.sh` now validates canonical `plan.json` and `active-slice.json` structure instead of only checking JSON parseability
+- exact implementer handoff states now require `priority` and `why_now`, matching the completion protocol docs and role expectations
+- scaffolded `active-slice.json` now includes `priority` and `why_now` placeholders to avoid schema drift during later role updates
+- `ensureGitignore` now repairs duplicated or drifted completion-protocol ignore blocks instead of bailing out on the first marker match
+- smoke test now covers the selected active-slice handoff schema regression and fails closed when `priority`/`why_now` are missing
+
 ## 0.1.6
 
 ### Fixed
