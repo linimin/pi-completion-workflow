@@ -515,8 +515,22 @@ function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
 	return lines.join("\n");
 }
 
+function isStaleContextError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes("This extension ctx is stale after session replacement or reload");
+}
+
+function safeUiCall(action: () => void) {
+	try {
+		action();
+	} catch (error) {
+		if (isStaleContextError(error)) return;
+		throw error;
+	}
+}
+
 function emitCommandText(ctx: { hasUI: boolean; ui: any }, text: string, level: "info" | "success" | "warning" | "error" = "info") {
-	if (ctx.hasUI) ctx.ui.notify(text, level);
+	if (ctx.hasUI) safeUiCall(() => ctx.ui.notify(text, level));
 	else console.log(text);
 }
 
@@ -589,11 +603,19 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 	if (!ctx.hasUI) return;
 	const snapshot = await loadCompletionSnapshot(ctx.cwd);
 	if (!snapshot) {
-		ctx.ui.setStatus(COMPLETION_STATUS_KEY, "");
-		ctx.ui.setWidget(COMPLETION_STATUS_KEY, []);
+		safeUiCall(() => {
+			ctx.ui.setStatus(COMPLETION_STATUS_KEY, "");
+			ctx.ui.setWidget(COMPLETION_STATUS_KEY, []);
+		});
 		return;
 	}
-	const theme = ctx.ui.theme;
+	let theme: any;
+	try {
+		theme = ctx.ui.theme;
+	} catch (error) {
+		if (isStaleContextError(error)) return;
+		throw error;
+	}
 	const policy = asString(snapshot.state?.continuation_policy);
 	const prefix =
 		policy === "done"
@@ -603,8 +625,10 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 				: policy === "paused"
 					? theme.fg("warning", "‖ ")
 					: theme.fg("accent", "● ");
-	ctx.ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
-	ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
+	safeUiCall(() => {
+		ctx.ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
+		ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
+	});
 }
 
 function parseReportFields(text: string): Record<string, string> {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+### Fixed
+
+- stale extension context handling after session replacement or reload
+- guarded UI status, widget, theme, and notify calls to avoid stale-ctx runtime errors
+
 ## 0.1.4
 
 ### Improved
