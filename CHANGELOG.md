@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+### Improved
+
+- stronger implementer instructions for roadmap-level drift discovered during implementation
+- explicit requirement to hand plan repair back to `completion-regrounder` instead of silently redesigning slices
+- implementer report now includes `Plan adjustment required: yes/no - ...`
+
 ## 0.1.3
 
 ### Improved

@@ -23,6 +23,7 @@ This skill defines shared protocol facts only. Role-specific behavior belongs in
 - `state.json` is the persistent machine-readable workflow controller. Keep `current_phase`, `continuation_policy`, `continuation_reason`, `next_mandatory_role`, and `next_mandatory_action` truthful after every transition.
 - Every slice in `plan.json` must have non-empty `acceptance_criteria` — concrete, verifiable conditions that define done. A slice without acceptance criteria is invalid and must not be selected.
 - Acceptance criteria are immutable after lock except for removing a criterion already satisfied with evidence or adding a missing criterion discovered during implementation.
+- If implementation discovers roadmap-level drift — such as invalid slice boundaries, missing prerequisite slices, dependency reordering, or a blocker that changes the current slice contract — the implementer must not silently redesign the plan. It must report the new truth and return control for canonical reconciliation by `completion-regrounder`.
 - During re-ground, evaluate each slice's `acceptance_criteria` against current repo truth and update `status` and `evidence` accordingly.
 - A slice may only transition to `done` when every acceptance criterion is satisfied with proof in `evidence`.
 - Run exactly one implementation slice at a time.
