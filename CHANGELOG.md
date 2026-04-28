@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+### Improved
+
+- stronger post-compaction driver recovery instructions
+- transient post-compaction recovery marker with automatic cleanup after recovery turn
+- stricter canonical-file-first continuation guidance after compaction
+
 ## 0.1.1
 
 ### Improved

@@ -37,12 +37,14 @@ type JsonRecord = Record<string, unknown>;
 type CompletionFiles = {
 	root: string;
 	agentDir: string;
+	tmpDir: string;
 	profilePath: string;
 	statePath: string;
 	planPath: string;
 	activePath: string;
 	sliceHistoryPath: string;
 	stopHistoryPath: string;
+	compactionMarkerPath: string;
 };
 
 type CompletionStateSnapshot = {
@@ -91,15 +93,18 @@ function roleFromEnv(): string | undefined {
 
 function resolveFiles(root: string): CompletionFiles {
 	const agentDir = path.join(root, ".agent");
+	const tmpDir = path.join(agentDir, "tmp");
 	return {
 		root,
 		agentDir,
+		tmpDir,
 		profilePath: path.join(agentDir, "profile.json"),
 		statePath: path.join(agentDir, "state.json"),
 		planPath: path.join(agentDir, "plan.json"),
 		activePath: path.join(agentDir, "active-slice.json"),
 		sliceHistoryPath: path.join(agentDir, "slice-history.jsonl"),
 		stopHistoryPath: path.join(agentDir, "stop-check-history.jsonl"),
+		compactionMarkerPath: path.join(tmpDir, "post-compaction-recovery.json"),
 	};
 }
 
@@ -198,6 +203,14 @@ async function pathExists(targetPath: string): Promise<boolean> {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+async function readText(filePath: string): Promise<string | undefined> {
+	try {
+		return await fsp.readFile(filePath, "utf8");
+	} catch {
+		return undefined;
 	}
 }
 
@@ -429,6 +442,29 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 		"If continuation_policy == continue, do not stop after a slice or ask whether to continue; dispatch the next mandatory role directly.",
 		"Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
 		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
+		"When recovering from compaction, prefer a deterministic restart from canonical files over conversational inference.",
+	].join(" ");
+}
+
+function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot, marker: JsonRecord | undefined): string {
+	const markerAt = typeof marker?.recorded_at === "number" ? new Date(marker.recorded_at).toISOString() : "(unknown time)";
+	const nextRole = asString(snapshot.state?.next_mandatory_role) ?? "unknown";
+	const nextAction = asString(snapshot.state?.next_mandatory_action) ?? "unknown";
+	const continuation = asString(snapshot.state?.continuation_policy) ?? "unknown";
+	const activeSliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)";
+	return [
+		"POST-COMPACTION RECOVERY MODE is active.",
+		`Compaction marker time: ${markerAt}`,
+		"Treat the previous conversation as lossy continuity support only.",
+		"Before taking any substantive action, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl from disk.",
+		`Canonical next mandatory role is currently: ${nextRole}`,
+		`Canonical next mandatory action is currently: ${nextAction}`,
+		`Canonical continuation policy is currently: ${continuation}`,
+		`Canonical active slice is currently: ${activeSliceId}`,
+		"Do not trust pre-compaction memory over canonical files.",
+		"If the canonical state is ambiguous, inconsistent, missing, or stale after re-reading it, your first mandatory action is to dispatch completion-regrounder rather than guessing.",
+		"If continuation_policy == continue and canonical state is coherent, continue dispatching the mandatory role directly without asking the user whether to continue.",
+		"If you are about to implement after compaction, confirm the active slice snapshot still matches .agent/plan.json before doing any work.",
 	].join(" ");
 }
 
@@ -911,14 +947,30 @@ export default function completionExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
+		const snapshot = await loadCompletionSnapshot(ctx.cwd);
+		if (snapshot && (await pathExists(snapshot.files.compactionMarkerPath))) {
+			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
+		}
 		await refreshStatus(ctx);
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		const loaded = await loadCompletionDataForReminder(ctx.cwd);
 		if (!loaded) return;
+		const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
+		let marker: JsonRecord | undefined;
+		if (markerText) {
+			try {
+				const parsed = JSON.parse(markerText);
+				marker = isRecord(parsed) ? parsed : undefined;
+			} catch {
+				marker = undefined;
+			}
+		}
+		const additions = [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
+		if (marker) additions.push(buildPostCompactionDriverInstructions(loaded.snapshot, marker));
 		return {
-			systemPrompt: `${ctx.getSystemPrompt()}\n\n${buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)}`,
+			systemPrompt: `${ctx.getSystemPrompt()}\n\n${additions.join("\n\n")}`,
 		};
 	});
 
@@ -927,6 +979,19 @@ export default function completionExtension(pi: ExtensionAPI) {
 		if (!loaded) return;
 		const { preparation } = event;
 		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
+		await fsp.mkdir(loaded.snapshot.files.tmpDir, { recursive: true });
+		await fsp.writeFile(
+			loaded.snapshot.files.compactionMarkerPath,
+			`${JSON.stringify({
+				recorded_at: Date.now(),
+				mission_anchor: asString(loaded.snapshot.state?.mission_anchor) ?? null,
+				next_mandatory_role: asString(loaded.snapshot.state?.next_mandatory_role) ?? null,
+				next_mandatory_action: asString(loaded.snapshot.state?.next_mandatory_action) ?? null,
+				continuation_policy: asString(loaded.snapshot.state?.continuation_policy) ?? null,
+				active_slice_id: asString(loaded.snapshot.active?.slice_id) ?? asString(loaded.snapshot.activeSlice?.slice_id) ?? null,
+			}, null, 2)}\n`,
+			"utf8",
+		);
 		ctx.ui.notify("Completion continuity capsule injected for compaction", "info");
 		return {
 			compaction: {
