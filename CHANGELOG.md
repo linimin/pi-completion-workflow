@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+### Fixed
+
+- additional stale-context guards for command handlers and completion role execution
+- avoid stale ctx access through cwd, hasUI, ui, and system-prompt lookups after session replacement or reload
+
 ## 0.1.5
 
 ### Fixed

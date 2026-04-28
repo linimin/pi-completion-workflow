@@ -529,9 +529,50 @@ function safeUiCall(action: () => void) {
 	}
 }
 
+function getCtxCwd(ctx: { cwd: string }): string {
+	try {
+		return ctx.cwd;
+	} catch (error) {
+		if (isStaleContextError(error)) return process.cwd();
+		throw error;
+	}
+}
+
+function getCtxHasUI(ctx: { hasUI: boolean }): boolean {
+	try {
+		return ctx.hasUI;
+	} catch (error) {
+		if (isStaleContextError(error)) return false;
+		throw error;
+	}
+}
+
+function getCtxUi<T extends { ui: any }>(ctx: T): any | undefined {
+	try {
+		return ctx.ui;
+	} catch (error) {
+		if (isStaleContextError(error)) return undefined;
+		throw error;
+	}
+}
+
+function getSystemPromptSafe(ctx: { getSystemPrompt: () => string }): string | undefined {
+	try {
+		return ctx.getSystemPrompt();
+	} catch (error) {
+		if (isStaleContextError(error)) return undefined;
+		throw error;
+	}
+}
+
 function emitCommandText(ctx: { hasUI: boolean; ui: any }, text: string, level: "info" | "success" | "warning" | "error" = "info") {
-	if (ctx.hasUI) safeUiCall(() => ctx.ui.notify(text, level));
-	else console.log(text);
+	if (getCtxHasUI(ctx)) {
+		const ui = getCtxUi(ctx);
+		if (ui) safeUiCall(() => ui.notify(text, level));
+		else console.log(text);
+	} else {
+		console.log(text);
+	}
 }
 
 function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
@@ -600,18 +641,21 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 }
 
 async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
-	if (!ctx.hasUI) return;
-	const snapshot = await loadCompletionSnapshot(ctx.cwd);
+	if (!getCtxHasUI(ctx)) return;
+	const cwd = getCtxCwd(ctx);
+	const ui = getCtxUi(ctx);
+	if (!ui) return;
+	const snapshot = await loadCompletionSnapshot(cwd);
 	if (!snapshot) {
 		safeUiCall(() => {
-			ctx.ui.setStatus(COMPLETION_STATUS_KEY, "");
-			ctx.ui.setWidget(COMPLETION_STATUS_KEY, []);
+			ui.setStatus(COMPLETION_STATUS_KEY, "");
+			ui.setWidget(COMPLETION_STATUS_KEY, []);
 		});
 		return;
 	}
 	let theme: any;
 	try {
-		theme = ctx.ui.theme;
+		theme = ui.theme;
 	} catch (error) {
 		if (isStaleContextError(error)) return;
 		throw error;
@@ -626,8 +670,8 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 					? theme.fg("warning", "‖ ")
 					: theme.fg("accent", "● ");
 	safeUiCall(() => {
-		ctx.ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
-		ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
+		ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
+		ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
 	});
 }
 
@@ -992,7 +1036,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		const snapshot = await loadCompletionSnapshot(ctx.cwd);
+		const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
 		if (snapshot && (await pathExists(snapshot.files.compactionMarkerPath))) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
@@ -1000,7 +1044,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		const loaded = await loadCompletionDataForReminder(ctx.cwd);
+		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
 		if (!loaded) return;
 		const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
 		let marker: JsonRecord | undefined;
@@ -1014,13 +1058,15 @@ export default function completionExtension(pi: ExtensionAPI) {
 		}
 		const additions = [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
 		if (marker) additions.push(buildPostCompactionDriverInstructions(loaded.snapshot, marker));
+		const systemPrompt = getSystemPromptSafe(ctx);
+		if (!systemPrompt) return;
 		return {
-			systemPrompt: `${ctx.getSystemPrompt()}\n\n${additions.join("\n\n")}`,
+			systemPrompt: `${systemPrompt}\n\n${additions.join("\n\n")}`,
 		};
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
-		const loaded = await loadCompletionDataForReminder(ctx.cwd);
+		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
 		if (!loaded) return;
 		const { preparation } = event;
 		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
@@ -1037,7 +1083,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			}, null, 2)}\n`,
 			"utf8",
 		);
-		ctx.ui.notify("Completion continuity capsule injected for compaction", "info");
+		emitCommandText(ctx, "Completion continuity capsule injected for compaction", "info");
 		return {
 			compaction: {
 				summary,
@@ -1050,9 +1096,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		const role = roleFromEnv();
-		const snapshot = await loadCompletionSnapshot(ctx.cwd);
+		const cwd = getCtxCwd(ctx);
+		const snapshot = await loadCompletionSnapshot(cwd);
 		const completionActive = Boolean(snapshot) && asString(snapshot?.state?.continuation_policy) !== "done";
-		const root = snapshot?.files.root ?? findRepoRoot(ctx.cwd) ?? ctx.cwd;
+		const root = snapshot?.files.root ?? findRepoRoot(cwd) ?? cwd;
 
 		if (event.toolName === "completion_role" && role) {
 			return { block: true, reason: `Nested completion role dispatch is forbidden for ${role}.` };
@@ -1109,7 +1156,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const role = params.role as CompletionRole;
-			const runCwd = findCompletionRoot(ctx.cwd) ?? findRepoRoot(ctx.cwd) ?? ctx.cwd;
+			const cwd = getCtxCwd(ctx);
+			const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 			const agent = await loadAgentDefinition(runCwd, role);
 			type RunningDetails = {
 				role: string;
@@ -1245,10 +1293,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 				const reportFields = parseReportFields(output);
 				const transcription = exitCode === 0 ? await transcribeRoleOutput(role, runCwd, output, reportFields) : undefined;
 				if (transcription?.appended.length) {
-					ctx.ui.notify(`Completion transcription appended: ${transcription.appended.join(", ")}`, "info");
+					emitCommandText(ctx, `Completion transcription appended: ${transcription.appended.join(", ")}`, "info");
 				}
 				if (transcription?.errors.length) {
-					ctx.ui.notify(`Completion transcription warning: ${transcription.errors.join(" | ")}`, "warning");
+					emitCommandText(ctx, `Completion transcription warning: ${transcription.errors.join(" | ")}`, "warning");
 				}
 				return {
 					content: [{ type: "text", text: output }],
@@ -1349,15 +1397,17 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const goal = args.trim();
 			if (!goal) {
-				ctx.ui.notify("Usage: /complete <goal>", "error");
+				emitCommandText(ctx, "Usage: /complete <goal>", "error");
 				return;
 			}
-			let snapshot = await loadCompletionSnapshot(ctx.cwd);
+			const cwd = getCtxCwd(ctx);
+			let snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
-				const root = findRepoRoot(ctx.cwd) ?? ctx.cwd;
+				const root = findRepoRoot(cwd) ?? cwd;
 				const missionAnchor = goal;
 				const created = await scaffoldCompletionFiles(root, missionAnchor);
-				ctx.ui.notify(
+				emitCommandText(
+					ctx,
 					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
 					"info",
 				);
@@ -1365,14 +1415,15 @@ export default function completionExtension(pi: ExtensionAPI) {
 			}
 			pi.setSessionName(`completion: ${goal.slice(0, 60)}`);
 			pi.sendUserMessage(completionKickoff(goal));
-			ctx.ui.notify("Queued completion workflow kickoff", "info");
+			emitCommandText(ctx, "Queued completion workflow kickoff", "info");
 		},
 	});
 
 	pi.registerCommand("completion-init", {
 		description: "Scaffold canonical .agent completion control-plane files in the current repo",
 		handler: async (args, ctx) => {
-			const root = findRepoRoot(ctx.cwd) ?? ctx.cwd;
+			const cwd = getCtxCwd(ctx);
+			const root = findRepoRoot(cwd) ?? cwd;
 			const missionAnchor = args.trim() || `Drive ${path.basename(root)} to truthful, verifiable completion.`;
 			const result = await scaffoldCompletionFiles(root, missionAnchor);
 			const summary = [
@@ -1380,8 +1431,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 				result.created.length > 0 ? `created=${result.created.join(", ")}` : "created=(none)",
 				result.updated.length > 0 ? `updated=${result.updated.join(", ")}` : "updated=(none)",
 			].join(" | ");
-			ctx.ui.notify(summary, "info");
-			await refreshStatus({ cwd: root, hasUI: ctx.hasUI, ui: ctx.ui });
+			emitCommandText(ctx, summary, "info");
+			await refreshStatus({ cwd: root, hasUI: getCtxHasUI(ctx), ui: getCtxUi(ctx) });
 		},
 	});
 
@@ -1389,7 +1440,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		description: "Resume the completion workflow from canonical .agent state",
 		handler: async (_args, ctx) => {
 			pi.sendUserMessage(completionResumePrompt());
-			ctx.ui.notify("Queued completion workflow resume", "info");
+			emitCommandText(ctx, "Queued completion workflow resume", "info");
 		},
 	});
 
@@ -1397,21 +1448,25 @@ export default function completionExtension(pi: ExtensionAPI) {
 		description: "Force a canonical re-ground of the completion workflow",
 		handler: async (_args, ctx) => {
 			pi.sendUserMessage(completionRegroundPrompt());
-			ctx.ui.notify("Queued completion re-ground", "info");
+			emitCommandText(ctx, "Queued completion re-ground", "info");
 		},
 	});
 
 	pi.registerCommand("completion-status", {
 		description: "Show a concise summary of canonical completion state",
 		handler: async (_args, ctx) => {
-			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			const cwd = getCtxCwd(ctx);
+			const snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
 				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
 			}
 			await refreshStatus(ctx);
 			const text = buildReadableStatus(snapshot);
-			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, text.split("\n"));
+			if (getCtxHasUI(ctx)) {
+				const ui = getCtxUi(ctx);
+				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, text.split("\n")));
+			}
 			emitCommandText(ctx, text, "info");
 		},
 	});
@@ -1419,7 +1474,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("completion-history", {
 		description: "Show recent canonical completion history records",
 		handler: async (args, ctx) => {
-			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			const cwd = getCtxCwd(ctx);
+			const snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
 				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
@@ -1435,7 +1491,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 				return;
 			}
 			const lines = merged.map(formatRecordLine);
-			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
+			if (getCtxHasUI(ctx)) {
+				const ui = getCtxUi(ctx);
+				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, lines));
+			}
 			emitCommandText(ctx, lines.join("\n"), "info");
 		},
 	});
@@ -1443,7 +1502,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("completion-verify", {
 		description: "Run completion control-plane and stop verifiers in the current repo",
 		handler: async (_args, ctx) => {
-			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			const cwd = getCtxCwd(ctx);
+			const snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
 				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
@@ -1456,7 +1516,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 				`stop: exit=${stop.code}`,
 				stop.stdout.trim() || stop.stderr.trim() || "(no output)",
 			];
-			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
+			if (getCtxHasUI(ctx)) {
+				const ui = getCtxUi(ctx);
+				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, lines));
+			}
 			emitCommandText(
 				ctx,
 				`${control.code === 0 && stop.code === 0 ? "Completion verification passed" : `Completion verification failed (control=${control.code}, stop=${stop.code})`}\n${lines.join("\n")}`,
@@ -1468,7 +1531,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("completion-pause", {
 		description: "Pause the completion workflow by updating canonical state",
 		handler: async (_args, ctx) => {
-			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			const cwd = getCtxCwd(ctx);
+			const snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot || !snapshot.state) {
 				emitCommandText(ctx, "No canonical completion state found", "error");
 				return;

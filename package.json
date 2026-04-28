@@ -1,6 +1,6 @@
 {
   "name": "pi-completion-workflow",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Pi package for long-running completion workflows with canonical .agent state, role-based subagents, continuity, and verification helpers.",
   "license": "MIT",
   "private": false,
