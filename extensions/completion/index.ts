@@ -1,0 +1,1301 @@
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import { promises as fsp } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { StringEnum } from "@mariozechner/pi-ai";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "typebox";
+
+const PROTOCOL_ID = "completion";
+const ROLE_NAMES = [
+	"completion-bootstrapper",
+	"completion-regrounder",
+	"completion-implementer",
+	"completion-reviewer",
+	"completion-auditor",
+	"completion-stop-judge",
+] as const;
+const AGENT_HOME = path.join(os.homedir(), ".pi", "agent");
+const COMPLETION_STATUS_KEY = "completion";
+const EXTENSION_DIR = typeof __dirname === "string" ? __dirname : process.cwd();
+const PACKAGE_ROOT_CANDIDATE = path.resolve(EXTENSION_DIR, "..", "..");
+const PACKAGE_ROOT = fs.existsSync(path.join(PACKAGE_ROOT_CANDIDATE, "package.json")) ? PACKAGE_ROOT_CANDIDATE : undefined;
+const PACKAGE_SKILL_PATH = PACKAGE_ROOT ? path.join(PACKAGE_ROOT, "skills", "completion-protocol", "SKILL.md") : undefined;
+const PACKAGE_REFERENCE_PATH = PACKAGE_ROOT
+	? path.join(PACKAGE_ROOT, "skills", "completion-protocol", "references", "completion.md")
+	: undefined;
+const PACKAGE_AGENTS_DIR = PACKAGE_ROOT ? path.join(PACKAGE_ROOT, "agents") : undefined;
+const SKILL_PATH = PACKAGE_SKILL_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "SKILL.md");
+const REFERENCE_PATH = PACKAGE_REFERENCE_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "references", "completion.md");
+
+type CompletionRole = (typeof ROLE_NAMES)[number];
+type JsonRecord = Record<string, unknown>;
+
+type CompletionFiles = {
+	root: string;
+	agentDir: string;
+	profilePath: string;
+	statePath: string;
+	planPath: string;
+	activePath: string;
+	sliceHistoryPath: string;
+	stopHistoryPath: string;
+};
+
+type CompletionStateSnapshot = {
+	files: CompletionFiles;
+	profile?: JsonRecord;
+	state?: JsonRecord;
+	plan?: JsonRecord;
+	active?: JsonRecord;
+	activeSlice?: JsonRecord;
+};
+
+type AgentDefinition = {
+	name: string;
+	description?: string;
+	tools?: string[];
+	model?: string;
+	systemPrompt: string;
+	filePath: string;
+};
+
+function isRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		: [];
+}
+
+function roleFromEnv(): string | undefined {
+	return asString(process.env.PI_COMPLETION_ROLE);
+}
+
+function resolveFiles(root: string): CompletionFiles {
+	const agentDir = path.join(root, ".agent");
+	return {
+		root,
+		agentDir,
+		profilePath: path.join(agentDir, "profile.json"),
+		statePath: path.join(agentDir, "state.json"),
+		planPath: path.join(agentDir, "plan.json"),
+		activePath: path.join(agentDir, "active-slice.json"),
+		sliceHistoryPath: path.join(agentDir, "slice-history.jsonl"),
+		stopHistoryPath: path.join(agentDir, "stop-check-history.jsonl"),
+	};
+}
+
+function walkUpForDir(startCwd: string, segments: string[]): string | undefined {
+	let current = path.resolve(startCwd);
+	while (true) {
+		const candidate = path.join(current, ...segments);
+		if (fs.existsSync(candidate)) return candidate;
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+function findCompletionRoot(startCwd: string): string | undefined {
+	const profilePath = walkUpForDir(startCwd, [".agent", "profile.json"]);
+	return profilePath ? path.dirname(path.dirname(profilePath)) : undefined;
+}
+
+function findRepoRoot(startCwd: string): string | undefined {
+	const gitPath = walkUpForDir(startCwd, [".git"]);
+	return gitPath ? path.dirname(gitPath) : undefined;
+}
+
+async function readJson(filePath: string): Promise<JsonRecord | undefined> {
+	try {
+		const raw = await fsp.readFile(filePath, "utf8");
+		const parsed = JSON.parse(raw);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function readJsonl(filePath: string): Promise<JsonRecord[]> {
+	try {
+		const raw = await fsp.readFile(filePath, "utf8");
+		return raw
+			.split("\n")
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.flatMap((line) => {
+				try {
+					const parsed = JSON.parse(line);
+					return isRecord(parsed) ? [parsed] : [];
+				} catch {
+					return [];
+				}
+			});
+	} catch {
+		return [];
+	}
+}
+
+function candidateSlices(plan: JsonRecord | undefined): JsonRecord[] {
+	const slices = plan?.candidate_slices;
+	return Array.isArray(slices) ? slices.filter(isRecord) : [];
+}
+
+function findActiveSlice(plan: JsonRecord | undefined, active: JsonRecord | undefined): JsonRecord | undefined {
+	const sliceId = asString(active?.slice_id);
+	if (!sliceId) return undefined;
+	return candidateSlices(plan).find((slice) => asString(slice.slice_id) === sliceId);
+}
+
+async function loadCompletionSnapshot(startCwd: string): Promise<CompletionStateSnapshot | undefined> {
+	const root = findCompletionRoot(startCwd);
+	if (!root) return undefined;
+	const files = resolveFiles(root);
+	const profile = await readJson(files.profilePath);
+	if (asString(profile?.protocol_id) !== PROTOCOL_ID) return undefined;
+	const state = await readJson(files.statePath);
+	const plan = await readJson(files.planPath);
+	const active = await readJson(files.activePath);
+	return {
+		files,
+		profile,
+		state,
+		plan,
+		active,
+		activeSlice: findActiveSlice(plan, active),
+	};
+}
+
+async function loadCompletionDataForReminder(startCwd: string) {
+	const snapshot = await loadCompletionSnapshot(startCwd);
+	if (!snapshot) return undefined;
+	const sliceHistory = await readJsonl(snapshot.files.sliceHistoryPath);
+	const stopHistory = await readJsonl(snapshot.files.stopHistoryPath);
+	return { snapshot, sliceHistory, stopHistory };
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+	try {
+		await fsp.access(targetPath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function detectDocsSurfaces(root: string): Promise<string[]> {
+	const candidates = ["README.md", "docs/", "docs", "CHANGELOG.md"];
+	const found: string[] = [];
+	for (const candidate of candidates) {
+		if (await pathExists(path.join(root, candidate))) found.push(candidate.endsWith("/") ? candidate : candidate.replace(/\/$/, ""));
+	}
+	return found.length > 0 ? found : ["README.md"];
+}
+
+async function detectVerifierCommand(root: string): Promise<string | undefined> {
+	const packageJsonPath = path.join(root, "package.json");
+	const packageJson = await readJson(packageJsonPath);
+	if (packageJson) {
+		const scripts = isRecord(packageJson.scripts) ? packageJson.scripts : undefined;
+		const packageManager = asString((packageJson as JsonRecord).packageManager) ?? "";
+		const runner = packageManager.startsWith("pnpm") ? "pnpm" : packageManager.startsWith("yarn") ? "yarn" : packageManager.startsWith("bun") ? "bun" : "npm";
+		if (scripts && asString(scripts.test)) return runner === "npm" ? "npm test" : `${runner} test`;
+		if (scripts && asString(scripts.check)) return runner === "npm" ? "npm run check" : `${runner} check`;
+		if (scripts && asString(scripts.lint)) return runner === "npm" ? "npm run lint" : `${runner} lint`;
+	}
+	if (await pathExists(path.join(root, "pnpm-lock.yaml"))) return "pnpm test";
+	if (await pathExists(path.join(root, "bun.lockb")) || await pathExists(path.join(root, "bun.lock"))) return "bun test";
+	if (await pathExists(path.join(root, "yarn.lock"))) return "yarn test";
+	if (await pathExists(path.join(root, "Cargo.toml"))) return "cargo test";
+	if (await pathExists(path.join(root, "pyproject.toml")) || await pathExists(path.join(root, "pytest.ini"))) return "pytest";
+	if (await pathExists(path.join(root, "go.mod"))) return "go test ./...";
+	if (await pathExists(path.join(root, "Makefile"))) return "make test";
+	return undefined;
+}
+
+function defaultState(missionAnchor: string): JsonRecord {
+	return {
+		schema_version: 1,
+		mission_anchor: missionAnchor,
+		current_phase: "reground",
+		continuation_policy: "continue",
+		continuation_reason: "Fresh completion bootstrap requires canonical re-ground",
+		project_done: false,
+		requires_reground: true,
+		slices_since_last_reground: 0,
+		remaining_release_blockers: null,
+		remaining_high_value_gaps: null,
+		unsatisfied_contract_ids: [],
+		release_blocker_ids: [],
+		next_mandatory_action: "Reconcile canonical state from current repo truth",
+		next_mandatory_role: "completion-regrounder",
+		remaining_stop_judges: 3,
+		last_reground_at: null,
+		last_auditor_verdict: null,
+		contract_status: "unknown",
+		latest_completed_slice: null,
+		latest_verified_slice: null,
+	};
+}
+
+function defaultPlan(missionAnchor: string): JsonRecord {
+	return {
+		schema_version: 1,
+		mission_anchor: missionAnchor,
+		last_reground_at: null,
+		plan_basis: "bootstrap",
+		candidate_slices: [],
+	};
+}
+
+function defaultActiveSlice(missionAnchor: string): JsonRecord {
+	return {
+		schema_version: 1,
+		mission_anchor: missionAnchor,
+		status: "idle",
+		slice_id: null,
+		goal: null,
+		contract_ids: [],
+		acceptance_criteria: [],
+		blocked_on: [],
+		locked_notes: [],
+		must_fix_findings: [],
+		basis_commit: null,
+		remaining_contract_ids_before: [],
+		release_blocker_count_before: null,
+		high_value_gap_count_before: null,
+	};
+}
+
+function buildAgentReadme(projectName: string): string {
+	return `# Completion Control Plane\n\nThis repository uses the \`completion\` workflow for long-running coding tasks.\n\n## Canonical tracked contract files\n\n- \`.agent/README.md\`\n- \`.agent/mission.md\`\n- \`.agent/profile.json\`\n- \`.agent/verify_completion_stop.sh\`\n- \`.agent/verify_completion_control_plane.sh\`\n\n## Ignored canonical execution state\n\n- \`.agent/state.json\`\n- \`.agent/plan.json\`\n- \`.agent/active-slice.json\`\n- \`.agent/slice-history.jsonl\`\n- \`.agent/stop-check-history.jsonl\`\n- \`.agent/*.log\`\n- \`.agent/tmp/\`\n\nThe source of truth for long-running completion work is canonical \`.agent/**\` state plus current repo truth.\n\nProject: ${projectName}\n`;
+}
+
+function buildMission(projectName: string, missionAnchor: string): string {
+	return `# Mission\n\nProject: ${projectName}\n\nMission anchor:\n${missionAnchor}\n\nThis file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n`;
+}
+
+function buildVerifyStopScript(verifierCommand?: string): string {
+	const repoCheck = verifierCommand
+		? `echo "[completion] running repo-level verification: ${verifierCommand}"\n${verifierCommand}`
+		: `echo "[completion] no repo-specific verifier auto-detected; control-plane verification only"`;
+	return `#!/usr/bin/env bash\nset -euo pipefail\n\nbash .agent/verify_completion_control_plane.sh\n${repoCheck}\n`;
+}
+
+function buildVerifyControlPlaneScript(): string {
+	return `#!/usr/bin/env bash\nset -euo pipefail\n\nfor file in \\
+  .agent/README.md \\
+  .agent/mission.md \\
+  .agent/profile.json \\
+  .agent/verify_completion_stop.sh \\
+  .agent/verify_completion_control_plane.sh \\
+  .agent/state.json \\
+  .agent/plan.json \\
+  .agent/active-slice.json; do\n  [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }\ndone\n\nnode <<'NODE'\nconst fs = require('node:fs');\nconst requiredState = [\n  'schema_version','mission_anchor','current_phase','continuation_policy','continuation_reason','project_done',\n  'requires_reground','slices_since_last_reground','remaining_release_blockers','remaining_high_value_gaps',\n  'unsatisfied_contract_ids','release_blocker_ids','next_mandatory_action','next_mandatory_role',\n  'remaining_stop_judges','last_reground_at','last_auditor_verdict','contract_status','latest_completed_slice','latest_verified_slice'\n];\nfor (const file of ['.agent/profile.json','.agent/state.json','.agent/plan.json','.agent/active-slice.json']) {\n  JSON.parse(fs.readFileSync(file, 'utf8'));\n}\nconst state = JSON.parse(fs.readFileSync('.agent/state.json', 'utf8'));\nfor (const key of requiredState) {\n  if (!(key in state)) {\n    console.error('missing state field:', key);\n    process.exit(1);\n  }\n}\nNODE\n`;
+}
+
+async function ensureGitignore(root: string): Promise<boolean> {
+	const gitignorePath = path.join(root, ".gitignore");
+	const block = [
+		"# completion protocol",
+		".agent/*",
+		"!.agent/README.md",
+		"!.agent/mission.md",
+		"!.agent/profile.json",
+		"!.agent/verify_completion_stop.sh",
+		"!.agent/verify_completion_control_plane.sh",
+		".agent/tmp/",
+	].join("\n");
+	const existing = (await pathExists(gitignorePath)) ? await fsp.readFile(gitignorePath, "utf8") : "";
+	if (existing.includes("# completion protocol")) return false;
+	const content = existing.trimEnd().length > 0 ? `${existing.trimEnd()}\n\n${block}\n` : `${block}\n`;
+	await fsp.writeFile(gitignorePath, content, "utf8");
+	return true;
+}
+
+type ScaffoldResult = {
+	root: string;
+	created: string[];
+	updated: string[];
+	missionAnchor: string;
+};
+
+async function scaffoldCompletionFiles(root: string, missionAnchor: string): Promise<ScaffoldResult> {
+	const files = resolveFiles(root);
+	const created: string[] = [];
+	const updated: string[] = [];
+	await fsp.mkdir(files.agentDir, { recursive: true });
+	await fsp.mkdir(path.join(files.agentDir, "tmp"), { recursive: true });
+	const projectName = path.basename(root);
+	const docsSurfaces = await detectDocsSurfaces(root);
+	const verifierCommand = await detectVerifierCommand(root);
+	const trackedFiles: Array<{ path: string; content: string; executable?: boolean }> = [
+		{ path: path.join(files.agentDir, "README.md"), content: buildAgentReadme(projectName) },
+		{ path: path.join(files.agentDir, "mission.md"), content: buildMission(projectName, missionAnchor) },
+		{
+			path: files.profilePath,
+			content: `${JSON.stringify({ schema_version: 1, protocol_id: PROTOCOL_ID, project_name: projectName, required_stop_judges: 3, priority_policy_id: "completion-default", docs_surfaces: docsSurfaces }, null, 2)}\n`,
+		},
+		{ path: path.join(files.agentDir, "verify_completion_stop.sh"), content: buildVerifyStopScript(verifierCommand), executable: true },
+		{ path: path.join(files.agentDir, "verify_completion_control_plane.sh"), content: buildVerifyControlPlaneScript(), executable: true },
+		{ path: files.statePath, content: `${JSON.stringify(defaultState(missionAnchor), null, 2)}\n` },
+		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor), null, 2)}\n` },
+		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor), null, 2)}\n` },
+		{ path: files.sliceHistoryPath, content: "" },
+		{ path: files.stopHistoryPath, content: "" },
+	];
+	for (const file of trackedFiles) {
+		if (await pathExists(file.path)) continue;
+		await fsp.writeFile(file.path, file.content, "utf8");
+		if (file.executable) await fsp.chmod(file.path, 0o755);
+		created.push(path.relative(root, file.path));
+	}
+	if (await ensureGitignore(root)) updated.push(".gitignore");
+	return { root, created, updated, missionAnchor };
+}
+
+function remainingSliceCount(plan: JsonRecord | undefined): number {
+	return candidateSlices(plan).filter((slice) => {
+		const status = asString(slice.status);
+		return status !== "done" && status !== "cancelled";
+	}).length;
+}
+
+function historyCounts(sliceHistory: JsonRecord[], stopHistory: JsonRecord[]) {
+	return {
+		reviewed: sliceHistory.filter((item) => asString(item.type) === "reviewed").length,
+		audited: sliceHistory.filter((item) => asString(item.type) === "audited").length,
+		accepted: sliceHistory.filter((item) => asString(item.type) === "accepted").length,
+		reopened: sliceHistory.filter((item) => asString(item.type) === "reopened").length,
+		judgments: stopHistory.filter((item) => asString(item.type) === "judgment").length,
+	};
+}
+
+function activeSliceMatchesPlan(snapshot: CompletionStateSnapshot): "yes" | "no" | "unknown" {
+	const activeId = asString(snapshot.active?.slice_id);
+	if (!activeId) return "unknown";
+	return snapshot.activeSlice ? "yes" : "no";
+}
+
+function handoffSnapshotState(active: JsonRecord | undefined): "present" | "missing_or_unclear" {
+	const required = [
+		active?.acceptance_criteria,
+		active?.priority,
+		active?.why_now,
+		active?.blocked_on,
+		active?.locked_notes,
+		active?.must_fix_findings,
+		active?.basis_commit,
+		active?.remaining_contract_ids_before,
+		active?.release_blocker_count_before,
+		active?.high_value_gap_count_before,
+	];
+	return required.every((value) => value !== undefined && value !== null) ? "present" : "missing_or_unclear";
+}
+
+function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
+	const history = historyCounts(sliceHistory, stopHistory);
+	return [
+		"Completion workflow detected.",
+		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
+		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`Current phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
+		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
+		`Continuation reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
+		`Next mandatory role: ${asString(snapshot.state?.next_mandatory_role) ?? "unknown"}`,
+		`Next mandatory action: ${asString(snapshot.state?.next_mandatory_action) ?? "unknown"}`,
+		`Remaining slice count: ${remainingSliceCount(snapshot.plan)}`,
+		`Remaining stop judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
+		`History counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}.`,
+		"Re-read canonical .agent state after compaction or recovery instead of relying on conversation memory.",
+		"If continuation_policy == continue, do not stop after a slice or ask whether to continue; dispatch the next mandatory role directly.",
+		"Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
+		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
+	].join(" ");
+}
+
+function buildStatusSummary(snapshot: CompletionStateSnapshot): string {
+	const phase = asString(snapshot.state?.current_phase) ?? "unknown";
+	const policy = asString(snapshot.state?.continuation_policy) ?? "unknown";
+	const nextRole = asString(snapshot.state?.next_mandatory_role) ?? "none";
+	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "none";
+	return `completion ${phase} | policy=${policy} | slice=${sliceId} | next=${nextRole}`;
+}
+
+function buildStatusLines(snapshot: CompletionStateSnapshot): string[] {
+	const mission = asString(snapshot.state?.mission_anchor) ?? "(unknown mission)";
+	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
+	const contractIds = asStringArray(snapshot.state?.unsatisfied_contract_ids);
+	const selectedGoal = asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)";
+	const continuationReason = asString(snapshot.state?.continuation_reason) ?? "(unknown)";
+	return [
+		buildStatusSummary(snapshot),
+		`mission=${mission}`,
+		`goal=${selectedGoal}`,
+		`reason=${continuationReason}`,
+		`remaining_slices=${remainingSliceCount(snapshot.plan)}${blockers.length > 0 ? ` | blockers=${blockers.join(",")}` : ""}`,
+		contractIds.length > 0 ? `contracts=${contractIds.join(", ")}` : "contracts=(none)",
+	];
+}
+
+function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
+	const lines = [
+		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`Current phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
+		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
+		`Continuation reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
+		`Next mandatory role: ${asString(snapshot.state?.next_mandatory_role) ?? "none"}`,
+		`Next mandatory action: ${asString(snapshot.state?.next_mandatory_action) ?? "(unknown)"}`,
+		`Active slice id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
+		`Active slice goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)"}`,
+		`Remaining slices: ${remainingSliceCount(snapshot.plan)}`,
+		`Remaining stop judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
+		`Requires reground: ${asBoolean(snapshot.state?.requires_reground) ?? "unknown"}`,
+		`Active slice matches plan: ${activeSliceMatchesPlan(snapshot)}`,
+		`Implementer handoff snapshot: ${handoffSnapshotState(snapshot.active)}`,
+	];
+	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
+	const contracts = asStringArray(snapshot.state?.unsatisfied_contract_ids);
+	if (blockers.length > 0) lines.push(`Release blockers: ${blockers.join(", ")}`);
+	if (contracts.length > 0) lines.push(`Unsatisfied contract IDs: ${contracts.join(", ")}`);
+	return lines.join("\n");
+}
+
+function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
+	const history = historyCounts(sliceHistory, stopHistory);
+	const acceptance = asStringArray(snapshot.active?.acceptance_criteria).length > 0
+		? asStringArray(snapshot.active?.acceptance_criteria)
+		: asStringArray(snapshot.activeSlice?.acceptance_criteria);
+	const contractIds = asStringArray(snapshot.active?.contract_ids).length > 0
+		? asStringArray(snapshot.active?.contract_ids)
+		: asStringArray(snapshot.activeSlice?.contract_ids);
+	const blockedOn = asStringArray(snapshot.active?.blocked_on).length > 0
+		? asStringArray(snapshot.active?.blocked_on)
+		: asStringArray(snapshot.activeSlice?.blocked_on);
+	const lockedNotes = asStringArray(snapshot.active?.locked_notes);
+	const mustFixFindings = asStringArray(snapshot.active?.must_fix_findings);
+	const remainingBefore = asStringArray(snapshot.active?.remaining_contract_ids_before);
+	const lines = [
+		"Authoritative completion resume capsule:",
+		"",
+		"<completion-state>",
+		`mission_anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`current_phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
+		`continuation_policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
+		`continuation_reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
+		`requires_reground: ${asBoolean(snapshot.state?.requires_reground) ?? "unknown"}`,
+		`next_mandatory_role: ${asString(snapshot.state?.next_mandatory_role) ?? "unknown"}`,
+		`next_mandatory_action: ${asString(snapshot.state?.next_mandatory_action) ?? "unknown"}`,
+		`remaining_slice_count: ${remainingSliceCount(snapshot.plan)}`,
+		`remaining_stop_judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
+		`active_slice_matches_plan: ${activeSliceMatchesPlan(snapshot)}`,
+		`implementer_handoff_snapshot: ${handoffSnapshotState(snapshot.active)}`,
+		`history_counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}`,
+		"",
+		"active_slice:",
+		`- slice_id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
+		`- status: ${asString(snapshot.active?.status) ?? asString(snapshot.activeSlice?.status) ?? "unknown"}`,
+		`- goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(unknown)"}`,
+		`- contract_ids: ${contractIds.length > 0 ? contractIds.join(", ") : "(none)"}`,
+	];
+	if (blockedOn.length > 0) lines.push(`- blocked_on: ${blockedOn.join(", ")}`);
+	if (lockedNotes.length > 0) lines.push(`- locked_notes: ${lockedNotes.join(" | ")}`);
+	if (mustFixFindings.length > 0) lines.push(`- must_fix_findings: ${mustFixFindings.join(" | ")}`);
+	lines.push(`- basis_commit: ${asString(snapshot.active?.basis_commit) ?? "(none)"}`);
+	lines.push(`- remaining_contract_ids_before: ${remainingBefore.length > 0 ? remainingBefore.join(", ") : "(none)"}`);
+	lines.push(`- release_blocker_count_before: ${asNumber(snapshot.active?.release_blocker_count_before) ?? "(unknown)"}`);
+	lines.push(`- high_value_gap_count_before: ${asNumber(snapshot.active?.high_value_gap_count_before) ?? "(unknown)"}`);
+	lines.push("", "acceptance_criteria:");
+	if (acceptance.length === 0) lines.push("- (none)");
+	else lines.push(...acceptance.map((item) => `- ${item}`));
+	lines.push(
+		"",
+		"Rules:",
+		"- Treat this block as continuity support derived from canonical .agent state.",
+		"- Preserve exact slice_id, contract_ids, acceptance criteria, locked notes, and must-fix findings where still true.",
+		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl before resuming long-running completion work.",
+		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
+		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",
+		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no or implementer_handoff_snapshot is missing_or_unclear.",
+		"- If continuation_policy is continue, do not stop after a slice or ask whether to continue. Dispatch the next mandatory role directly.",
+		"- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
+		"- If you are completion-implementer after compaction, resume from the canonical active-slice handoff instead of asking the user to resend the original caller payload.",
+		"- Do not replace canonical .agent state with summary inference.",
+		"</completion-state>",
+	);
+	return lines.join("\n");
+}
+
+async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
+	if (!ctx.hasUI) return;
+	const snapshot = await loadCompletionSnapshot(ctx.cwd);
+	if (!snapshot) {
+		ctx.ui.setStatus(COMPLETION_STATUS_KEY, "");
+		ctx.ui.setWidget(COMPLETION_STATUS_KEY, []);
+		return;
+	}
+	const theme = ctx.ui.theme;
+	const policy = asString(snapshot.state?.continuation_policy);
+	const prefix =
+		policy === "done"
+			? theme.fg("success", "✓ ")
+			: policy === "blocked"
+				? theme.fg("error", "! ")
+				: policy === "paused"
+					? theme.fg("warning", "‖ ")
+					: theme.fg("accent", "● ");
+	ctx.ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
+	ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
+}
+
+function parseReportFields(text: string): Record<string, string> {
+	const fields: Record<string, string> = {};
+	for (const rawLine of text.split("\n")) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const normalized = line.replace(/^-\s*/, "").replace(/^`/, "").replace(/`$/, "");
+		const match = normalized.match(/^([A-Za-z][A-Za-z0-9 _\/-]*?):\s*(.*)$/);
+		if (!match) continue;
+		const [, key, value] = match;
+		fields[key.trim()] = value.trim();
+	}
+	return fields;
+}
+
+function parseYesNo(value: string | undefined): boolean | undefined {
+	if (!value) return undefined;
+	const normalized = value.trim().toLowerCase();
+	if (normalized.startsWith("yes")) return true;
+	if (normalized.startsWith("no")) return false;
+	return undefined;
+}
+
+function parseFirstNumber(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const match = value.match(/-?\d+/);
+	if (!match) return undefined;
+	const parsed = Number.parseInt(match[0], 10);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+async function gitHeadSha(cwd: string): Promise<string | undefined> {
+	return await new Promise((resolve) => {
+		const proc = spawn("git", ["rev-parse", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"] });
+		let stdout = "";
+		proc.stdout.on("data", (chunk) => {
+			stdout += chunk.toString();
+		});
+		proc.on("close", (code) => {
+			resolve(code === 0 ? asString(stdout) : undefined);
+		});
+		proc.on("error", () => resolve(undefined));
+	});
+}
+
+type TranscriptionResult = {
+	appended: string[];
+	skipped: string[];
+	errors: string[];
+};
+
+async function appendJsonlRecord(filePath: string, record: JsonRecord): Promise<void> {
+	await fsp.mkdir(path.dirname(filePath), { recursive: true });
+	await fsp.appendFile(filePath, `${JSON.stringify(record)}\n`, "utf8");
+}
+
+async function runCommand(
+	cwd: string,
+	command: string,
+	args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
+	return await new Promise((resolve) => {
+		const proc = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		proc.stdout.on("data", (chunk) => {
+			stdout += chunk.toString();
+		});
+		proc.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+		});
+		proc.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+		proc.on("error", (error) => resolve({ code: 1, stdout, stderr: stderr + String(error) }));
+	});
+}
+
+function formatRecordLine(record: JsonRecord): string {
+	const type = asString(record.type) ?? "unknown";
+	const sliceId = asString(record.slice_id);
+	const headSha = asString(record.head_sha);
+	const when = typeof record.recorded_at === "number" ? new Date(record.recorded_at).toLocaleString() : "(unknown time)";
+	const suffix = [sliceId ? `slice=${sliceId}` : undefined, headSha ? `head=${headSha.slice(0, 12)}` : undefined]
+		.filter(Boolean)
+		.join(" ");
+	return `${when} | ${type}${suffix ? ` | ${suffix}` : ""}`;
+}
+
+async function transcribeRoleOutput(role: CompletionRole, cwd: string, output: string, reportFields: Record<string, string>): Promise<TranscriptionResult> {
+	const result: TranscriptionResult = { appended: [], skipped: [], errors: [] };
+	const snapshot = await loadCompletionSnapshot(cwd);
+	if (!snapshot) {
+		result.skipped.push("No canonical completion snapshot found.");
+		return result;
+	}
+	const headSha = await gitHeadSha(snapshot.files.root);
+	if (!headSha) {
+		result.errors.push("Could not resolve git HEAD for transcription.");
+		return result;
+	}
+
+	const sliceId =
+		asString(snapshot.active?.slice_id) ??
+		asString(snapshot.activeSlice?.slice_id) ??
+		asString(snapshot.state?.latest_completed_slice);
+
+		if (role === "completion-reviewer" || role === "completion-auditor") {
+		if (!sliceId) {
+			result.errors.push(`Missing slice_id for ${role} transcription.`);
+			return result;
+		}
+		const type = role === "completion-reviewer" ? "reviewed" : "audited";
+		const history = await readJsonl(snapshot.files.sliceHistoryPath);
+		const duplicate = history.some((entry) => {
+			return (
+				asString(entry.type) === type &&
+				asString(entry.slice_id) === sliceId &&
+				asString(entry.head_sha) === headSha &&
+				asString(entry.report_text) === output.trim()
+			);
+		});
+		if (duplicate) {
+			result.skipped.push(`Skipped duplicate ${type} record for slice ${sliceId} at ${headSha.slice(0, 12)}.`);
+			return result;
+		}
+		await appendJsonlRecord(snapshot.files.sliceHistoryPath, {
+			schema_version: 1,
+			type,
+			recorded_at: Date.now(),
+			slice_id: sliceId,
+			commit_sha: headSha,
+			head_sha: headSha,
+			role,
+			report_fields: reportFields,
+			report_text: output.trim(),
+		});
+		result.appended.push(`${type}:${sliceId}`);
+		return result;
+	}
+
+	if (role === "completion-stop-judge") {
+		const canStop = parseYesNo(reportFields["Can the project stop now"]);
+		const blockerCount = parseFirstNumber(reportFields["Blocker count"]);
+		const highValueGapCount = parseFirstNumber(reportFields["High-value gap count"]);
+		if (canStop === undefined || blockerCount === undefined || highValueGapCount === undefined) {
+			result.errors.push("Missing required stop-judge fields for canonical judgment transcription.");
+			return result;
+		}
+		const history = await readJsonl(snapshot.files.stopHistoryPath);
+		const duplicate = history.some((entry) => {
+			return asString(entry.type) === "judgment" && asString(entry.head_sha) === headSha && asString(entry.report_text) === output.trim();
+		});
+		if (duplicate) {
+			result.skipped.push(`Skipped duplicate judgment record at ${headSha.slice(0, 12)}.`);
+			return result;
+		}
+		await appendJsonlRecord(snapshot.files.stopHistoryPath, {
+			schema_version: 1,
+			type: "judgment",
+			recorded_at: Date.now(),
+			head_sha: headSha,
+			can_stop: canStop,
+			blocker_count: blockerCount,
+			high_value_gap_count: highValueGapCount,
+			role,
+			report_fields: reportFields,
+			report_text: output.trim(),
+		});
+		result.appended.push(`judgment:${headSha.slice(0, 12)}`);
+		return result;
+	}
+
+	if (role === "completion-regrounder") {
+		const rawDecision = asString(reportFields["Reconciliation decision"])?.toLowerCase();
+		const decision = rawDecision?.match(/\b(accepted|reopened|none)\b/)?.[1];
+		if (!decision || decision === "none") {
+			result.skipped.push("No reconciliation decision emitted by completion-regrounder.");
+			return result;
+		}
+		const reconciledSliceId =
+			asString(reportFields["Reconciled slice ID"]) ??
+			asString(reportFields["Current selected slice"]) ??
+			sliceId;
+		if (!reconciledSliceId || reconciledSliceId === "none" || reconciledSliceId === "(none)") {
+			result.errors.push("Missing reconciled slice id for completion-regrounder transcription.");
+			return result;
+		}
+		const history = await readJsonl(snapshot.files.sliceHistoryPath);
+		const duplicate = history.some((entry) => {
+			return (
+				asString(entry.type) === decision &&
+				asString(entry.slice_id) === reconciledSliceId &&
+				asString(entry.head_sha) === headSha &&
+				asString(entry.report_text) === output.trim()
+			);
+		});
+		if (duplicate) {
+			result.skipped.push(`Skipped duplicate ${decision} record for slice ${reconciledSliceId} at ${headSha.slice(0, 12)}.`);
+			return result;
+		}
+		await appendJsonlRecord(snapshot.files.sliceHistoryPath, {
+			schema_version: 1,
+			type: decision,
+			recorded_at: Date.now(),
+			slice_id: reconciledSliceId,
+			commit_sha: headSha,
+			head_sha: headSha,
+			role,
+			report_fields: reportFields,
+			report_text: output.trim(),
+		});
+		result.appended.push(`${decision}:${reconciledSliceId}`);
+		return result;
+	}
+
+	result.skipped.push(`No automatic transcription configured for ${role}.`);
+	return result;
+}
+
+function isPathInside(root: string, candidatePath: string): boolean {
+	const resolvedRoot = path.resolve(root);
+	const resolvedCandidate = path.resolve(candidatePath);
+	return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
+}
+
+function resolveToolPath(cwd: string, rawPath: string): string {
+	return path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
+}
+
+function isAllowedControlPlanePath(root: string, rawPath: string): boolean {
+	const resolved = resolveToolPath(root, rawPath);
+	if (path.basename(resolved) === ".gitignore") return true;
+	return isPathInside(path.join(root, ".agent"), resolved);
+}
+
+function startsWithAny(value: string, prefixes: string[]): boolean {
+	return prefixes.some((prefix) => value.startsWith(prefix));
+}
+
+function normalizeCommand(command: string): string {
+	return command.trim().replace(/\s+/g, " ");
+}
+
+function isMutatingBash(command: string): boolean {
+	const normalized = normalizeCommand(command);
+	return startsWithAny(normalized, [
+		"git add",
+		"git commit",
+		"git push",
+		"rm ",
+		"mv ",
+		"cp ",
+		"mkdir ",
+		"touch ",
+		"chmod ",
+		"chown ",
+		"sed -i",
+		"perl -pi",
+		"python -c",
+		"python3 -c",
+		"node -e",
+		"bun -e",
+		"tee ",
+	]) || normalized.includes(">") || normalized.includes("| tee") || normalized.includes("apply_patch");
+}
+
+async function loadAgentDefinition(cwd: string, role: CompletionRole): Promise<AgentDefinition> {
+	const projectAgent = walkUpForDir(cwd, [".pi", "agents", `${role}.md`]);
+	const packageAgent = PACKAGE_AGENTS_DIR ? path.join(PACKAGE_AGENTS_DIR, `${role}.md`) : undefined;
+	const candidates = [projectAgent, packageAgent, path.join(AGENT_HOME, "agents", `${role}.md`)].filter(
+		(candidate): candidate is string => Boolean(candidate),
+	);
+	for (const candidate of candidates) {
+		if (!fs.existsSync(candidate)) continue;
+		const raw = await fsp.readFile(candidate, "utf8");
+		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(raw);
+		return {
+			name: frontmatter.name ?? role,
+			description: frontmatter.description,
+			tools: frontmatter.tools?.split(",").map((tool) => tool.trim()).filter(Boolean),
+			model: frontmatter.model,
+			systemPrompt: body.trim(),
+			filePath: candidate,
+		};
+	}
+	throw new Error(`Missing completion agent definition for ${role}`);
+}
+
+async function writeTempFile(prefix: string, content: string): Promise<{ dir: string; filePath: string }> {
+	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
+	const filePath = path.join(dir, "prompt.md");
+	await fsp.writeFile(filePath, content, { encoding: "utf8", mode: 0o600 });
+	return { dir, filePath };
+}
+
+function getPiInvocation(args: string[]): { command: string; args: string[] } {
+	const currentScript = process.argv[1];
+	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
+	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
+		return { command: process.execPath, args: [currentScript, ...args] };
+	}
+	const execName = path.basename(process.execPath).toLowerCase();
+	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
+	if (!isGenericRuntime) return { command: process.execPath, args };
+	return { command: "pi", args };
+}
+
+function lastAssistantText(messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const texts = message.content
+			.filter((part) => part.type === "text" && typeof part.text === "string")
+			.map((part) => part.text?.trim())
+			.filter((part): part is string => Boolean(part));
+		if (texts.length > 0) return texts.join("\n\n");
+	}
+	return "";
+}
+
+function completionKickoff(goal: string): string {
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nUser goal:\n${goal}\n\nDriver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+}
+
+function completionResumePrompt(): string {
+	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+}
+
+function completionRegroundPrompt(): string {
+	return `/skill:completion-protocol Force a canonical re-ground of the completion workflow.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nRe-ground instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json.\n- Invoke completion_role with role completion-regrounder.\n- Reconcile canonical state truthfully before any further implementation.`;
+}
+
+export default function completionExtension(pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		await refreshStatus(ctx);
+	});
+
+	pi.on("turn_end", async (_event, ctx) => {
+		await refreshStatus(ctx);
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		await refreshStatus(ctx);
+	});
+
+	pi.on("before_agent_start", async (_event, ctx) => {
+		const loaded = await loadCompletionDataForReminder(ctx.cwd);
+		if (!loaded) return;
+		return {
+			systemPrompt: `${ctx.getSystemPrompt()}\n\n${buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)}`,
+		};
+	});
+
+	pi.on("session_before_compact", async (event, ctx) => {
+		const loaded = await loadCompletionDataForReminder(ctx.cwd);
+		if (!loaded) return;
+		const { preparation } = event;
+		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
+		ctx.ui.notify("Completion continuity capsule injected for compaction", "info");
+		return {
+			compaction: {
+				summary,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: preparation.fileOps,
+			},
+		};
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		const role = roleFromEnv();
+		const snapshot = await loadCompletionSnapshot(ctx.cwd);
+		const completionActive = Boolean(snapshot) && asString(snapshot?.state?.continuation_policy) !== "done";
+		const root = snapshot?.files.root ?? findRepoRoot(ctx.cwd) ?? ctx.cwd;
+
+		if (event.toolName === "completion_role" && role) {
+			return { block: true, reason: `Nested completion role dispatch is forbidden for ${role}.` };
+		}
+
+		if (event.toolName === "edit" || event.toolName === "write") {
+			const rawPath = asString((event.input as JsonRecord).path);
+			if (!rawPath) return;
+
+			if (role === "completion-reviewer" || role === "completion-auditor" || role === "completion-stop-judge") {
+				return { block: true, reason: `${role} is read-only.` };
+			}
+
+			if ((role === "completion-bootstrapper" || role === "completion-regrounder") && !isAllowedControlPlanePath(root, rawPath)) {
+				return { block: true, reason: `${role} may only edit .agent/** or .gitignore.` };
+			}
+
+			if (!role && completionActive && !isAllowedControlPlanePath(root, rawPath)) {
+				return { block: true, reason: "The workflow driver may not edit tracked product files directly during completion." };
+			}
+		}
+
+		if (event.toolName !== "bash") return;
+		const command = asString((event.input as JsonRecord).command);
+		if (!command) return;
+		const normalized = normalizeCommand(command);
+
+		if (["completion-reviewer", "completion-auditor", "completion-stop-judge"].includes(role ?? "") && isMutatingBash(normalized)) {
+			return { block: true, reason: `${role} is read-only and cannot run mutating bash.` };
+		}
+
+		if ((role === "completion-bootstrapper" || role === "completion-regrounder") && startsWithAny(normalized, ["git add", "git commit"])) {
+			return { block: true, reason: `${role} may not create commits.` };
+		}
+
+		if (!role && completionActive && startsWithAny(normalized, ["git add", "git commit"])) {
+			return { block: true, reason: "The workflow driver may not create commits directly during completion." };
+		}
+	});
+
+	pi.registerTool({
+		name: "completion_role",
+		label: "Completion Role",
+		description: "Run one completion workflow role in an isolated pi subprocess. Only the main workflow driver should call this tool.",
+		promptSnippet: "Dispatch one completion workflow role in isolated context.",
+		promptGuidelines: [
+			"Use completion_role when driving the completion workflow and a mandatory completion role must act next.",
+			"Use completion_role only for completion-bootstrapper, completion-regrounder, completion-implementer, completion-reviewer, completion-auditor, or completion-stop-judge.",
+			"Do not use completion_role from inside a completion role; only the workflow driver may dispatch roles.",
+		],
+		parameters: Type.Object({
+			role: StringEnum(ROLE_NAMES, { description: "The completion role to invoke." }),
+			task: Type.Optional(Type.String({ description: "Optional extra task context for the selected role." })),
+		}),
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const role = params.role as CompletionRole;
+			const runCwd = findCompletionRoot(ctx.cwd) ?? findRepoRoot(ctx.cwd) ?? ctx.cwd;
+			const agent = await loadAgentDefinition(runCwd, role);
+			const systemPromptTemp = await writeTempFile("pi-completion-role-", agent.systemPrompt);
+			const taskLines = [
+				`Completion role: ${role}`,
+				"Before acting, read the completion protocol skill and reference:",
+				`- ${SKILL_PATH}`,
+				`- ${REFERENCE_PATH}`,
+				"Use canonical .agent/** state as the source of truth.",
+			];
+			if (params.task?.trim()) {
+				taskLines.push("", "Supplemental task context:", params.task.trim());
+			}
+			const prompt = taskLines.join("\n");
+			const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath];
+			if (agent.model) args.push("--model", agent.model);
+			if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+			args.push(prompt);
+
+			const invocation = getPiInvocation(args);
+			const messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }> = [];
+			let stderr = "";
+			let latestOutput = "";
+			onUpdate?.({ content: [{ type: "text", text: `Running ${role}...` }], details: { role, status: "running" } });
+
+			try {
+				const exitCode = await new Promise<number>((resolve) => {
+					const proc = spawn(invocation.command, invocation.args, {
+						cwd: runCwd,
+						env: { ...process.env, PI_COMPLETION_ROLE: role },
+						stdio: ["ignore", "pipe", "pipe"],
+						shell: false,
+					});
+					let buffer = "";
+
+					const processLine = (line: string) => {
+						if (!line.trim()) return;
+						try {
+							const event = JSON.parse(line) as JsonRecord;
+							if (event.type === "message_end" && isRecord(event.message)) {
+								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
+								messages.push(message);
+								latestOutput = lastAssistantText(messages) || latestOutput;
+								onUpdate?.({
+									content: [{ type: "text", text: latestOutput || `Running ${role}...` }],
+									details: { role, status: "running" },
+								});
+							}
+						} catch {
+							// ignore malformed lines
+						}
+					};
+
+					proc.stdout.on("data", (chunk) => {
+						buffer += chunk.toString();
+						const lines = buffer.split("\n");
+						buffer = lines.pop() ?? "";
+						for (const line of lines) processLine(line);
+					});
+
+					proc.stderr.on("data", (chunk) => {
+						stderr += chunk.toString();
+					});
+
+					proc.on("close", (code) => {
+						if (buffer.trim()) processLine(buffer);
+						resolve(code ?? 0);
+					});
+
+					proc.on("error", () => resolve(1));
+
+					if (signal) {
+						const abort = () => proc.kill("SIGTERM");
+						if (signal.aborted) abort();
+						else signal.addEventListener("abort", abort, { once: true });
+					}
+				});
+
+				const output = latestOutput || stderr.trim() || `${role} finished with no text output.`;
+				const reportFields = parseReportFields(output);
+				const transcription = exitCode === 0 ? await transcribeRoleOutput(role, runCwd, output, reportFields) : undefined;
+				if (transcription?.appended.length) {
+					ctx.ui.notify(`Completion transcription appended: ${transcription.appended.join(", ")}`, "info");
+				}
+				if (transcription?.errors.length) {
+					ctx.ui.notify(`Completion transcription warning: ${transcription.errors.join(" | ")}`, "warning");
+				}
+				return {
+					content: [{ type: "text", text: output }],
+					details: {
+						role,
+						status: exitCode === 0 ? "ok" : "error",
+						exitCode,
+						stderr: stderr.trim(),
+						reportFields,
+						transcription,
+					},
+					isError: exitCode !== 0,
+				};
+			} finally {
+				await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
+			}
+		},
+		renderCall(args, theme) {
+			const role = args.role || "completion-role";
+			const task = typeof args.task === "string" ? args.task.trim() : "";
+			let text = theme.fg("toolTitle", theme.bold("completion_role ")) + theme.fg("accent", role);
+			if (task) {
+				const preview = task.length > 90 ? `${task.slice(0, 87)}...` : task;
+				text += `\n${theme.fg("dim", preview)}`;
+			}
+			return new Text(text, 0, 0);
+		},
+		renderResult(result, { expanded, isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "Running completion role..."), 0, 0);
+			const details = (result.details ?? {}) as {
+				role?: string;
+				status?: string;
+				exitCode?: number;
+				stderr?: string;
+				reportFields?: Record<string, string>;
+				transcription?: TranscriptionResult;
+			};
+			const role = details.role ?? "completion-role";
+			const ok = details.status === "ok" && !result.isError;
+			const icon = ok ? theme.fg("success", "✓") : theme.fg("error", "✗");
+			let text = `${icon} ${theme.fg("toolTitle", theme.bold(role))}`;
+			if (details.transcription?.appended?.length) {
+				text += `\n${theme.fg("success", `transcribed: ${details.transcription.appended.join(", ")}`)}`;
+			}
+			if (details.transcription?.skipped?.length && expanded) {
+				text += `\n${theme.fg("dim", `skipped: ${details.transcription.skipped.join(" | ")}`)}`;
+			}
+			if (details.transcription?.errors?.length) {
+				text += `\n${theme.fg("warning", `warnings: ${details.transcription.errors.join(" | ")}`)}`;
+			}
+			const reportFields = details.reportFields ?? {};
+			const summaryKeys = [
+				"MISSION ANCHOR",
+				"Remaining contract IDs",
+				"Next role to invoke",
+				"Reconciliation decision",
+				"Can the project stop now",
+				"Acceptable as-is",
+			];
+			for (const key of summaryKeys) {
+				const value = reportFields[key];
+				if (!value) continue;
+				text += `\n${theme.fg("dim", `${key}: `)}${value}`;
+			}
+			const body = result.content.find((item) => item.type === "text");
+			if (expanded && body?.type === "text") {
+				text += `\n\n${body.text}`;
+			} else if (!expanded && body?.type === "text") {
+				const preview = body.text.split("\n").slice(0, 4).join("\n");
+				text += `\n${theme.fg("dim", preview)}`;
+			}
+			if (details.stderr && expanded) text += `\n${theme.fg("error", details.stderr)}`;
+			return new Text(text, 0, 0);
+		},
+	});
+
+	pi.registerCommand("complete", {
+		description: "Start or continue the completion workflow for a repo",
+		handler: async (args, ctx) => {
+			const goal = args.trim();
+			if (!goal) {
+				ctx.ui.notify("Usage: /complete <goal>", "error");
+				return;
+			}
+			let snapshot = await loadCompletionSnapshot(ctx.cwd);
+			if (!snapshot) {
+				const root = findRepoRoot(ctx.cwd) ?? ctx.cwd;
+				const missionAnchor = goal;
+				const created = await scaffoldCompletionFiles(root, missionAnchor);
+				ctx.ui.notify(
+					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
+					"info",
+				);
+				snapshot = await loadCompletionSnapshot(root);
+			}
+			pi.setSessionName(`completion: ${goal.slice(0, 60)}`);
+			pi.sendUserMessage(completionKickoff(goal));
+			ctx.ui.notify("Queued completion workflow kickoff", "info");
+		},
+	});
+
+	pi.registerCommand("completion-init", {
+		description: "Scaffold canonical .agent completion control-plane files in the current repo",
+		handler: async (args, ctx) => {
+			const root = findRepoRoot(ctx.cwd) ?? ctx.cwd;
+			const missionAnchor = args.trim() || `Drive ${path.basename(root)} to truthful, verifiable completion.`;
+			const result = await scaffoldCompletionFiles(root, missionAnchor);
+			const summary = [
+				`root=${result.root}`,
+				result.created.length > 0 ? `created=${result.created.join(", ")}` : "created=(none)",
+				result.updated.length > 0 ? `updated=${result.updated.join(", ")}` : "updated=(none)",
+			].join(" | ");
+			ctx.ui.notify(summary, "info");
+			await refreshStatus({ cwd: root, hasUI: ctx.hasUI, ui: ctx.ui });
+		},
+	});
+
+	pi.registerCommand("complete-resume", {
+		description: "Resume the completion workflow from canonical .agent state",
+		handler: async (_args, ctx) => {
+			pi.sendUserMessage(completionResumePrompt());
+			ctx.ui.notify("Queued completion workflow resume", "info");
+		},
+	});
+
+	pi.registerCommand("completion-reground", {
+		description: "Force a canonical re-ground of the completion workflow",
+		handler: async (_args, ctx) => {
+			pi.sendUserMessage(completionRegroundPrompt());
+			ctx.ui.notify("Queued completion re-ground", "info");
+		},
+	});
+
+	pi.registerCommand("completion-status", {
+		description: "Show a concise summary of canonical completion state",
+		handler: async (_args, ctx) => {
+			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			if (!snapshot) {
+				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				return;
+			}
+			await refreshStatus(ctx);
+			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildReadableStatus(snapshot).split("\n"));
+			ctx.ui.notify(buildStatusSummary(snapshot), "info");
+		},
+	});
+
+	pi.registerCommand("completion-history", {
+		description: "Show recent canonical completion history records",
+		handler: async (args, ctx) => {
+			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			if (!snapshot) {
+				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				return;
+			}
+			const count = Math.max(1, Math.min(50, Number.parseInt(args.trim() || "10", 10) || 10));
+			const sliceHistory = await readJsonl(snapshot.files.sliceHistoryPath);
+			const stopHistory = await readJsonl(snapshot.files.stopHistoryPath);
+			const merged = [...sliceHistory, ...stopHistory]
+				.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
+				.slice(-count);
+			if (merged.length === 0) {
+				ctx.ui.notify("No canonical history records yet", "info");
+				return;
+			}
+			const lines = merged.map(formatRecordLine);
+			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
+			ctx.ui.notify(`Showing ${merged.length} completion history record(s)`, "info");
+		},
+	});
+
+	pi.registerCommand("completion-verify", {
+		description: "Run completion control-plane and stop verifiers in the current repo",
+		handler: async (_args, ctx) => {
+			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			if (!snapshot) {
+				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				return;
+			}
+			const control = await runCommand(snapshot.files.root, "bash", [".agent/verify_completion_control_plane.sh"]);
+			const stop = await runCommand(snapshot.files.root, "bash", [".agent/verify_completion_stop.sh"]);
+			const lines = [
+				`control_plane: exit=${control.code}`,
+				control.stdout.trim() || control.stderr.trim() || "(no output)",
+				`stop: exit=${stop.code}`,
+				stop.stdout.trim() || stop.stderr.trim() || "(no output)",
+			];
+			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
+			ctx.ui.notify(
+				control.code === 0 && stop.code === 0
+					? "Completion verification passed"
+					: `Completion verification failed (control=${control.code}, stop=${stop.code})`,
+				control.code === 0 && stop.code === 0 ? "success" : "warning",
+			);
+		},
+	});
+
+	pi.registerCommand("completion-pause", {
+		description: "Pause the completion workflow by updating canonical state",
+		handler: async (_args, ctx) => {
+			const snapshot = await loadCompletionSnapshot(ctx.cwd);
+			if (!snapshot || !snapshot.state) {
+				ctx.ui.notify("No canonical completion state found", "error");
+				return;
+			}
+			const next = {
+				...snapshot.state,
+				current_phase: "awaiting_user",
+				continuation_policy: "paused",
+				continuation_reason: "Paused by user via /completion-pause",
+				next_mandatory_role: null,
+				next_mandatory_action: "Await explicit user resume",
+			};
+			await fsp.writeFile(snapshot.files.statePath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+			await refreshStatus(ctx);
+			ctx.ui.notify("Completion workflow paused", "info");
+		},
+	});
+}
