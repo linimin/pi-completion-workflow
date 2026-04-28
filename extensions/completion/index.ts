@@ -479,6 +479,11 @@ function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
 	return lines.join("\n");
 }
 
+function emitCommandText(ctx: { hasUI: boolean; ui: any }, text: string, level: "info" | "success" | "warning" | "error" = "info") {
+	if (ctx.hasUI) ctx.ui.notify(text, level);
+	else console.log(text);
+}
+
 function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
 	const history = historyCounts(sliceHistory, stopHistory);
 	const acceptance = asStringArray(snapshot.active?.acceptance_criteria).length > 0
@@ -1218,12 +1223,13 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const snapshot = await loadCompletionSnapshot(ctx.cwd);
 			if (!snapshot) {
-				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
 			}
 			await refreshStatus(ctx);
-			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, buildReadableStatus(snapshot).split("\n"));
-			ctx.ui.notify(buildStatusSummary(snapshot), "info");
+			const text = buildReadableStatus(snapshot);
+			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, text.split("\n"));
+			emitCommandText(ctx, text, "info");
 		},
 	});
 
@@ -1232,7 +1238,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const snapshot = await loadCompletionSnapshot(ctx.cwd);
 			if (!snapshot) {
-				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
 			}
 			const count = Math.max(1, Math.min(50, Number.parseInt(args.trim() || "10", 10) || 10));
@@ -1242,12 +1248,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 				.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
 				.slice(-count);
 			if (merged.length === 0) {
-				ctx.ui.notify("No canonical history records yet", "info");
+				emitCommandText(ctx, "No canonical history records yet", "info");
 				return;
 			}
 			const lines = merged.map(formatRecordLine);
 			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
-			ctx.ui.notify(`Showing ${merged.length} completion history record(s)`, "info");
+			emitCommandText(ctx, lines.join("\n"), "info");
 		},
 	});
 
@@ -1256,7 +1262,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const snapshot = await loadCompletionSnapshot(ctx.cwd);
 			if (!snapshot) {
-				ctx.ui.notify("No completion workflow detected in this repo", "info");
+				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 				return;
 			}
 			const control = await runCommand(snapshot.files.root, "bash", [".agent/verify_completion_control_plane.sh"]);
@@ -1268,10 +1274,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 				stop.stdout.trim() || stop.stderr.trim() || "(no output)",
 			];
 			if (ctx.hasUI) ctx.ui.setWidget(COMPLETION_STATUS_KEY, lines);
-			ctx.ui.notify(
-				control.code === 0 && stop.code === 0
-					? "Completion verification passed"
-					: `Completion verification failed (control=${control.code}, stop=${stop.code})`,
+			emitCommandText(
+				ctx,
+				`${control.code === 0 && stop.code === 0 ? "Completion verification passed" : `Completion verification failed (control=${control.code}, stop=${stop.code})`}\n${lines.join("\n")}`,
 				control.code === 0 && stop.code === 0 ? "success" : "warning",
 			);
 		},
@@ -1282,7 +1287,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const snapshot = await loadCompletionSnapshot(ctx.cwd);
 			if (!snapshot || !snapshot.state) {
-				ctx.ui.notify("No canonical completion state found", "error");
+				emitCommandText(ctx, "No canonical completion state found", "error");
 				return;
 			}
 			const next = {
@@ -1295,7 +1300,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			};
 			await fsp.writeFile(snapshot.files.statePath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 			await refreshStatus(ctx);
-			ctx.ui.notify("Completion workflow paused", "info");
+			emitCommandText(ctx, "Completion workflow paused", "info");
 		},
 	});
 }

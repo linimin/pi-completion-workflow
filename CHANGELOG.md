@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+### Improved
+
+- print-mode output for `/completion-status`, `/completion-history`, `/completion-verify`, and `/completion-pause`
+- package-local runtime polish for release workflow
+
 ## 0.1.0
 
 Initial packaged release of `pi-completion-workflow`.
