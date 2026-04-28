@@ -693,6 +693,27 @@ function formatRecordLine(record: JsonRecord): string {
 	return `${when} | ${type}${suffix ? ` | ${suffix}` : ""}`;
 }
 
+function truncateInline(text: string, maxLength = 120): string {
+	const singleLine = text.replace(/\s+/g, " ").trim();
+	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
+}
+
+function formatToolActivity(toolName: string, args: JsonRecord): string {
+	if (toolName === "bash") return `$ ${truncateInline(asString(args.command) ?? "...")}`;
+	if (toolName === "read") return `read ${asString(args.path) ?? "..."}`;
+	if (toolName === "write") return `write ${asString(args.path) ?? "..."}`;
+	if (toolName === "edit") return `edit ${asString(args.path) ?? "..."}`;
+	if (toolName === "grep") return `grep ${asString(args.pattern) ?? "..."}`;
+	if (toolName === "find") return `find ${asString(args.pattern) ?? "..."}`;
+	if (toolName === "ls") return `ls ${asString(args.path) ?? "."}`;
+	return `${toolName} ${truncateInline(JSON.stringify(args))}`;
+}
+
+function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
+	const next = [...items, line];
+	return next.slice(-maxItems);
+}
+
 async function transcribeRoleOutput(role: CompletionRole, cwd: string, output: string, reportFields: Record<string, string>): Promise<TranscriptionResult> {
 	const result: TranscriptionResult = { appended: [], skipped: [], errors: [] };
 	const snapshot = await loadCompletionSnapshot(cwd);
@@ -1066,6 +1087,17 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const role = params.role as CompletionRole;
 			const runCwd = findCompletionRoot(ctx.cwd) ?? findRepoRoot(ctx.cwd) ?? ctx.cwd;
 			const agent = await loadAgentDefinition(runCwd, role);
+			type RunningDetails = {
+				role: string;
+				status: "running" | "ok" | "error";
+				currentAction?: string;
+				recentActivity?: string[];
+				lastAssistantText?: string;
+				stderr?: string;
+				reportFields?: Record<string, string>;
+				transcription?: TranscriptionResult;
+				exitCode?: number;
+			};
 			const systemPromptTemp = await writeTempFile("pi-completion-role-", agent.systemPrompt);
 			const taskLines = [
 				`Completion role: ${role}`,
@@ -1087,7 +1119,22 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }> = [];
 			let stderr = "";
 			let latestOutput = "";
-			onUpdate?.({ content: [{ type: "text", text: `Running ${role}...` }], details: { role, status: "running" } });
+			let currentAction = "Starting role subprocess";
+			let recentActivity: string[] = [currentAction];
+			const emitRunningUpdate = () => {
+				const details: RunningDetails = {
+					role,
+					status: "running",
+					currentAction,
+					recentActivity,
+					lastAssistantText: latestOutput || undefined,
+				};
+				onUpdate?.({
+					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
+					details,
+				});
+			};
+			emitRunningUpdate();
 
 			try {
 				const exitCode = await new Promise<number>((resolve) => {
@@ -1103,14 +1150,42 @@ export default function completionExtension(pi: ExtensionAPI) {
 						if (!line.trim()) return;
 						try {
 							const event = JSON.parse(line) as JsonRecord;
-							if (event.type === "message_end" && isRecord(event.message)) {
+							const eventType = asString(event.type);
+							if (eventType === "tool_execution_start") {
+								const toolName = asString(event.toolName) ?? "tool";
+								const toolArgs = isRecord(event.args) ? event.args : isRecord(event.input) ? event.input : {};
+								currentAction = formatToolActivity(toolName, toolArgs);
+								recentActivity = pushRecentActivity(recentActivity, currentAction);
+								emitRunningUpdate();
+								return;
+							}
+							if (eventType === "tool_execution_end") {
+								const toolName = asString(event.toolName) ?? "tool";
+								const lineText = `done ${toolName}`;
+								currentAction = lineText;
+								recentActivity = pushRecentActivity(recentActivity, lineText);
+								emitRunningUpdate();
+								return;
+							}
+							if (eventType === "message_end" && isRecord(event.message)) {
 								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
 								messages.push(message);
-								latestOutput = lastAssistantText(messages) || latestOutput;
-								onUpdate?.({
-									content: [{ type: "text", text: latestOutput || `Running ${role}...` }],
-									details: { role, status: "running" },
-								});
+								const nextOutput = lastAssistantText(messages);
+								if (nextOutput) {
+									latestOutput = nextOutput;
+									const preview = truncateInline(nextOutput, 140);
+									currentAction = `assistant: ${preview}`;
+									recentActivity = pushRecentActivity(recentActivity, currentAction);
+								}
+								emitRunningUpdate();
+								return;
+							}
+							if (eventType === "tool_result_end" && isRecord(event.message)) {
+								const toolMessage = event.message as JsonRecord;
+								const toolName = asString(toolMessage.toolName) ?? asString(event.toolName) ?? "tool";
+								currentAction = `result ${toolName}`;
+								recentActivity = pushRecentActivity(recentActivity, currentAction);
+								emitRunningUpdate();
 							}
 						} catch {
 							// ignore malformed lines
@@ -1160,6 +1235,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 						stderr: stderr.trim(),
 						reportFields,
 						transcription,
+						currentAction,
+						recentActivity,
+						lastAssistantText: latestOutput || undefined,
 					},
 					isError: exitCode !== 0,
 				};
@@ -1178,7 +1256,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme) {
-			if (isPartial) return new Text(theme.fg("warning", "Running completion role..."), 0, 0);
 			const details = (result.details ?? {}) as {
 				role?: string;
 				status?: string;
@@ -1186,7 +1263,24 @@ export default function completionExtension(pi: ExtensionAPI) {
 				stderr?: string;
 				reportFields?: Record<string, string>;
 				transcription?: TranscriptionResult;
+				currentAction?: string;
+				recentActivity?: string[];
+				lastAssistantText?: string;
 			};
+			if (isPartial) {
+				let text = theme.fg("warning", "⏳ Running completion role");
+				if (details.role) text += ` ${theme.fg("accent", details.role)}`;
+				if (details.currentAction) text += `\n${theme.fg("dim", details.currentAction)}`;
+				if (details.recentActivity && details.recentActivity.length > 0) {
+					const items = expanded ? details.recentActivity : details.recentActivity.slice(-5);
+					for (const item of items) text += `\n${theme.fg("muted", "→ ")}${theme.fg("dim", item)}`;
+				}
+				if (details.lastAssistantText) {
+					const preview = expanded ? details.lastAssistantText : truncateInline(details.lastAssistantText, 160);
+					text += `\n${theme.fg("toolOutput", preview)}`;
+				}
+				return new Text(text, 0, 0);
+			}
 			const role = details.role ?? "completion-role";
 			const ok = details.status === "ok" && !result.isError;
 			const icon = ok ? theme.fg("success", "✓") : theme.fg("error", "✗");

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+### Improved
+
+- richer live progress visibility for `completion_role`
+- current action, recent activity, and assistant-progress previews while roles are running
+- less opaque role execution UX during long-running workflow steps
+
 ## 0.1.2
 
 ### Improved
