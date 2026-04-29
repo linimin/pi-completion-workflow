@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14
+
+### Changed
+
+- removed `/completion-init` and made `/complete <goal>` the single bootstrap-and-run entrypoint
+- smoke test now validates bootstrap through `/complete`
+- docs updated to treat `/complete` as the canonical initialization path
+
 ## 0.1.13
 
 ### Improved

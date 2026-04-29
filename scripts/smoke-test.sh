@@ -8,12 +8,23 @@ trap 'rm -rf "$TMPDIR"' EXIT
 cd "$TMPDIR"
 git init -q
 
-pi -e "$PKG_ROOT" -p "/completion-init smoke-test mission" >/dev/null 2>&1
-
-[[ -f .agent/profile.json ]]
-[[ -f .agent/state.json ]]
-[[ -f .agent/plan.json ]]
-[[ -f .agent/active-slice.json ]]
+pi -e "$PKG_ROOT" -p "/complete smoke-test mission" >/tmp/pi-completion-smoke.out 2>/tmp/pi-completion-smoke.err &
+PI_PID=$!
+for _ in $(seq 1 60); do
+  if [[ -f .agent/profile.json && -f .agent/state.json && -f .agent/plan.json && -f .agent/active-slice.json ]]; then
+    break
+  fi
+  sleep 1
+done
+if [[ ! -f .agent/profile.json || ! -f .agent/state.json || ! -f .agent/plan.json || ! -f .agent/active-slice.json ]]; then
+  echo "completion bootstrap did not materialize canonical files in time" >&2
+  cat /tmp/pi-completion-smoke.err >&2 || true
+  kill "$PI_PID" >/dev/null 2>&1 || true
+  wait "$PI_PID" >/dev/null 2>&1 || true
+  exit 1
+fi
+kill "$PI_PID" >/dev/null 2>&1 || true
+wait "$PI_PID" >/dev/null 2>&1 || true
 
 bash .agent/verify_completion_control_plane.sh >/dev/null
 bash .agent/verify_completion_stop.sh >/dev/null

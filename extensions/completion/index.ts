@@ -258,7 +258,6 @@ async function detectVerifierCommand(root: string): Promise<string | undefined> 
 function normalizeMissionAnchorText(value: string): string {
 	return value
 		.replace(/^\/complete\s+/i, "")
-		.replace(/^\/completion-init\s+/i, "")
 		.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
 		.replace(/^\s*(please|pls|can you|could you|help me|i want to|we need to|let'?s|continue to|continue|resume)\s+/i, "")
 		.replace(/\s+/g, " ")
@@ -1664,28 +1663,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("completion-init", {
-		description: "Scaffold canonical .agent completion control-plane files in the current repo",
-		handler: async (args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const root = findRepoRoot(cwd) ?? cwd;
-			const missionAnchor = args.trim()
-				? await confirmMissionAnchor(ctx, assessMissionAnchor(args.trim(), path.basename(root)))
-				: `Drive ${path.basename(root)} to truthful, verifiable completion.`;
-			if (!missionAnchor) {
-				emitCommandText(ctx, "Cancelled mission anchor confirmation", "info");
-				return;
-			}
-			const result = await scaffoldCompletionFiles(root, missionAnchor);
-			const summary = [
-				`root=${result.root}`,
-				result.created.length > 0 ? `created=${result.created.join(", ")}` : "created=(none)",
-				result.updated.length > 0 ? `updated=${result.updated.join(", ")}` : "updated=(none)",
-			].join(" | ");
-			emitCommandText(ctx, summary, "info");
-			await refreshStatus({ cwd: root, hasUI: getCtxHasUI(ctx), ui: getCtxUi(ctx) });
-		},
-	});
 
 	pi.registerCommand("complete-resume", {
 		description: "Resume the completion workflow from canonical .agent state",

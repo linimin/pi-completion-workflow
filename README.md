@@ -7,7 +7,6 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/complete <goal>` to start or continue the workflow
 - `/complete-resume` to resume from canonical `.agent/**` state
 - no duplicate prompt-template aliases for core workflow commands
-- `/completion-init [mission]` to scaffold control-plane files
 - `/completion-status`, `/completion-history`, `/completion-panel`, and `/completion-verify`
 - role-based isolated subprocess execution via `completion_role`
 - compact persistent footer/widget workflow status with live role/action previews
@@ -80,13 +79,6 @@ After install, run `/reload` in pi.
 ```
 
 This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, optionally ask you to confirm or edit it when the goal is ambiguous, re-ground canonical state, create a slice plan, and drive the workflow.
-
-### Explicit bootstrap first
-
-```text
-/completion-init Build feature X with tests and docs
-/complete-resume
-```
 
 ### Operational commands
 
