@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.18
+
+### Changed
+
+- reduced the public slash-command surface to a single `/complete` entrypoint
+- `/complete` with no goal now resumes from canonical `.agent/**` state when present
+- `/complete <new goal>` now asks whether to continue the current mission or refocus canonical mission state before continuing
+- removed dedicated resume, reground, panel, history, verify, and pause slash commands in favor of the always-visible workflow status
+- pruned helper code that only supported the removed slash commands
+- added a regression test for existing-workflow refocus handling and included it in release checks
+
 ## 0.1.16
 
 ### Improved

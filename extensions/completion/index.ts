@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, Text } from "@mariozechner/pi-tui";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 const PROTOCOL_ID = "completion";
@@ -176,6 +176,10 @@ async function readJsonl(filePath: string): Promise<JsonRecord[]> {
 	}
 }
 
+async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void> {
+	await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
 function candidateSlices(plan: JsonRecord | undefined): JsonRecord[] {
 	const slices = plan?.candidate_slices;
 	return Array.isArray(slices) ? slices.filter(isRecord) : [];
@@ -340,6 +344,89 @@ async function confirmMissionAnchor(
 		return edited?.trim() ? edited.trim() : undefined;
 	}
 	return assessment.derived;
+}
+
+type ExistingWorkflowDecision =
+	| { action: "continue"; currentMissionAnchor: string }
+	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string };
+
+function completionTestWorkflowActionOverride(): "continue" | "refocus" | undefined {
+	const raw = process.env.PI_COMPLETION_EXISTING_WORKFLOW_ACTION?.trim().toLowerCase();
+	return raw === "continue" || raw === "refocus" ? raw : undefined;
+}
+
+function shouldSkipDriverKickoffForTests(): boolean {
+	return process.env.PI_COMPLETION_SKIP_DRIVER_KICKOFF === "1";
+}
+
+function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
+	return (
+		asString(snapshot.state?.mission_anchor) ??
+		asString(snapshot.plan?.mission_anchor) ??
+		asString(snapshot.active?.mission_anchor) ??
+		path.basename(snapshot.files.root)
+	);
+}
+
+async function confirmExistingWorkflowGoal(
+	ctx: { hasUI: boolean; ui: any },
+	snapshot: CompletionStateSnapshot,
+	goal: string,
+): Promise<ExistingWorkflowDecision | undefined> {
+	const currentMission = currentMissionAnchor(snapshot);
+	const assessment = assessMissionAnchor(goal, path.basename(snapshot.files.root));
+	const normalizedCurrent = normalizeMissionAnchorText(currentMission);
+	const normalizedGoal = normalizeMissionAnchorText(goal);
+	const normalizedProposed = normalizeMissionAnchorText(assessment.derived);
+	if (!normalizedGoal || normalizedGoal === normalizedCurrent || normalizedProposed === normalizedCurrent) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	const actionOverride = completionTestWorkflowActionOverride();
+	if (actionOverride === "continue") {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	if (actionOverride === "refocus") {
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
+	}
+	if (!getCtxHasUI(ctx)) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	const ui = getCtxUi(ctx);
+	if (!ui) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	const continueChoice = `Continue current workflow\n\nCurrent mission anchor:\n${currentMission}\n\nTreat the new text as extra direction only.`;
+	const refocusChoice = `Refocus workflow\n\nCurrent mission anchor:\n${currentMission}\n\nProposed mission anchor:\n${assessment.derived}`;
+	const choice = await ui.select("Existing completion workflow found", [continueChoice, refocusChoice, "Cancel"]);
+	if (!choice || choice === "Cancel") return undefined;
+	if (choice === refocusChoice) {
+		const missionAnchor = await confirmMissionAnchor(ctx, assessment);
+		if (!missionAnchor) return undefined;
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor };
+	}
+	return { action: "continue", currentMissionAnchor: currentMission };
+}
+
+async function refocusCompletionMission(snapshot: CompletionStateSnapshot, missionAnchor: string, rawGoal: string): Promise<void> {
+	const requiredStopJudges = asNumber(snapshot.profile?.required_stop_judges) ?? 3;
+	const root = snapshot.files.root;
+	const nextState = {
+		...defaultState(missionAnchor),
+		remaining_stop_judges: requiredStopJudges,
+		continuation_reason: `User refocused workflow via /complete: ${truncateInline(rawGoal, 160)}`,
+		next_mandatory_action: "Reconcile canonical state from current repo truth for the refocused mission",
+	};
+	const nextPlan = {
+		...defaultPlan(missionAnchor),
+		plan_basis: "user_refocus",
+	};
+	const nextActive = defaultActiveSlice(missionAnchor);
+	await Promise.all([
+		fsp.writeFile(path.join(snapshot.files.agentDir, "mission.md"), buildMission(path.basename(root), missionAnchor), "utf8"),
+		writeJsonFile(snapshot.files.statePath, nextState),
+		writeJsonFile(snapshot.files.planPath, nextPlan),
+		writeJsonFile(snapshot.files.activePath, nextActive),
+	]);
 }
 
 function deriveMissionAnchor(rawGoal: string, projectName: string): string {
@@ -641,92 +728,6 @@ function buildStatusLines(snapshot: CompletionStateSnapshot, liveActivity?: Live
 	return lines;
 }
 
-function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
-	const lines = [
-		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
-		`Current phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
-		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
-		`Continuation reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
-		`Next mandatory role: ${asString(snapshot.state?.next_mandatory_role) ?? "none"}`,
-		`Next mandatory action: ${asString(snapshot.state?.next_mandatory_action) ?? "(unknown)"}`,
-		`Active slice id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
-		`Active slice goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)"}`,
-		`Remaining slices: ${remainingSliceCount(snapshot.plan)}`,
-		`Remaining stop judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
-		`Requires reground: ${asBoolean(snapshot.state?.requires_reground) ?? "unknown"}`,
-		`Active slice matches plan: ${activeSliceMatchesPlan(snapshot)}`,
-		`Implementer handoff snapshot: ${handoffSnapshotState(snapshot.active)}`,
-	];
-	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
-	const contracts = asStringArray(snapshot.state?.unsatisfied_contract_ids);
-	if (blockers.length > 0) lines.push(`Release blockers: ${blockers.join(", ")}`);
-	if (contracts.length > 0) lines.push(`Unsatisfied contract IDs: ${contracts.join(", ")}`);
-	return lines.join("\n");
-}
-
-function buildPanelLines(
-	snapshot: CompletionStateSnapshot,
-	sliceHistory: JsonRecord[],
-	stopHistory: JsonRecord[],
-	liveActivity?: LiveRoleActivity,
-): string[] {
-	const lines: string[] = [
-		"Completion Panel",
-		"",
-		`Mission: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
-		`Phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
-		`Policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
-		`Next role: ${asString(snapshot.state?.next_mandatory_role) ?? "none"}`,
-		`Next action: ${asString(snapshot.state?.next_mandatory_action) ?? "(unknown)"}`,
-		"",
-		"Active Slice",
-		`- id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
-		`- goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)"}`,
-		`- handoff: ${handoffSnapshotState(snapshot.active)}`,
-	];
-	const acceptance = asStringArray(snapshot.active?.acceptance_criteria).length > 0
-		? asStringArray(snapshot.active?.acceptance_criteria)
-		: asStringArray(snapshot.activeSlice?.acceptance_criteria);
-	if (acceptance.length > 0) {
-		lines.push("- acceptance:");
-		for (const item of acceptance.slice(0, 6)) lines.push(`  - ${item}`);
-	}
-	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
-	const contracts = asStringArray(snapshot.state?.unsatisfied_contract_ids);
-	lines.push("", "Remaining Work");
-	lines.push(`- slices: ${remainingSliceCount(snapshot.plan)}`);
-	lines.push(`- blockers: ${blockers.length > 0 ? blockers.join(", ") : "(none)"}`);
-	lines.push(`- contracts: ${contracts.length > 0 ? contracts.join(", ") : "(none)"}`);
-	if (liveActivity) {
-		lines.push("", "Live Role Activity");
-		lines.push(`- role: ${liveActivity.role}`);
-		lines.push(`- status: ${liveActivity.status}`);
-		lines.push(`- elapsed: ${formatElapsed(Date.now() - liveActivity.startedAt)}`);
-		if (liveActivity.currentAction) lines.push(`- current: ${liveActivity.currentAction}`);
-		if (liveActivity.progress) lines.push(`- progress: ${liveActivity.progress}`);
-		if (liveActivity.rationale) lines.push(`- rationale: ${liveActivity.rationale}`);
-		if (liveActivity.nextStep) lines.push(`- next: ${liveActivity.nextStep}`);
-		if (liveActivity.verifying) lines.push(`- verifying: ${liveActivity.verifying}`);
-		if (liveActivity.lastAssistantText) lines.push(`- assistant: ${truncateInline(liveActivity.lastAssistantText, 160)}`);
-		if (liveActivity.stateDeltas.length > 0) {
-			lines.push("- state delta:");
-			for (const item of liveActivity.stateDeltas.slice(-6)) lines.push(`  - ${item}`);
-		}
-		if (liveActivity.recentActivity.length > 0) {
-			lines.push("- recent:");
-			for (const item of liveActivity.recentActivity.slice(-6)) lines.push(`  - ${item}`);
-		}
-	}
-	const recent = [...sliceHistory, ...stopHistory]
-		.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
-		.slice(-6)
-		.map(formatRecordLine);
-	lines.push("", "Recent History");
-	if (recent.length === 0) lines.push("- (none)");
-	else lines.push(...recent.map((line) => `- ${line}`));
-	lines.push("", "Keys", "- esc/q: close panel");
-	return lines;
-}
 
 function isStaleContextError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
@@ -944,36 +945,6 @@ async function appendJsonlRecord(filePath: string, record: JsonRecord): Promise<
 	await fsp.appendFile(filePath, `${JSON.stringify(record)}\n`, "utf8");
 }
 
-async function runCommand(
-	cwd: string,
-	command: string,
-	args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-	return await new Promise((resolve) => {
-		const proc = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "";
-		let stderr = "";
-		proc.stdout.on("data", (chunk) => {
-			stdout += chunk.toString();
-		});
-		proc.stderr.on("data", (chunk) => {
-			stderr += chunk.toString();
-		});
-		proc.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-		proc.on("error", (error) => resolve({ code: 1, stdout, stderr: stderr + String(error) }));
-	});
-}
-
-function formatRecordLine(record: JsonRecord): string {
-	const type = asString(record.type) ?? "unknown";
-	const sliceId = asString(record.slice_id);
-	const headSha = asString(record.head_sha);
-	const when = typeof record.recorded_at === "number" ? new Date(record.recorded_at).toLocaleString() : "(unknown time)";
-	const suffix = [sliceId ? `slice=${sliceId}` : undefined, headSha ? `head=${headSha.slice(0, 12)}` : undefined]
-		.filter(Boolean)
-		.join(" ");
-	return `${when} | ${type}${suffix ? ` | ${suffix}` : ""}`;
-}
 
 function formatElapsed(ms: number | undefined): string {
 	if (!ms || ms < 0) return "00:00";
@@ -990,23 +961,6 @@ function truncateInline(text: string, maxLength = 120): string {
 	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
 }
 
-function wrapPlainLine(line: string, width: number): string[] {
-	if (width <= 8) return [line];
-	const out: string[] = [];
-	let remaining = line;
-	while (remaining.length > width) {
-		let breakAt = remaining.lastIndexOf(" ", width);
-		if (breakAt < Math.floor(width * 0.5)) breakAt = width;
-		out.push(remaining.slice(0, breakAt).trimEnd());
-		remaining = remaining.slice(breakAt).trimStart();
-	}
-	out.push(remaining);
-	return out;
-}
-
-function wrapPlainLines(lines: string[], width: number): string[] {
-	return lines.flatMap((line) => wrapPlainLine(line, width));
-}
 
 function formatToolActivity(toolName: string, args: JsonRecord): string {
 	if (toolName === "bash") return `$ ${truncateInline(asString(args.command) ?? "...")}`;
@@ -1328,16 +1282,18 @@ function lastAssistantText(messages: Array<{ role: string; content: Array<{ type
 	return "";
 }
 
-function completionKickoff(goal: string): string {
-	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nUser goal:\n${goal}\n\nDriver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+function completionKickoff(goal: string, intent: "auto" | "continue" | "refocus" = "auto", missionAnchor?: string): string {
+	const intentBlock =
+		intent === "continue" && missionAnchor
+			? `Existing canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- Continue the existing workflow.\n- Treat the new user text as supplemental direction unless canonical reconciliation proves the mission itself must change.\n\n`
+			: intent === "refocus" && missionAnchor
+				? `Updated canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- The user explicitly refocused the workflow before this kickoff.\n- Re-read canonical .agent/** state and continue from the refocused mission.\n\n`
+				: "";
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 function completionResumePrompt(): string {
 	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
-}
-
-function completionRegroundPrompt(): string {
-	return `/skill:completion-protocol Force a canonical re-ground of the completion workflow.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nRe-ground instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json.\n- Invoke completion_role with role completion-regrounder.\n- Reconcile canonical state truthfully before any further implementation.`;
 }
 
 export default function completionExtension(pi: ExtensionAPI) {
@@ -1822,13 +1778,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 		description: "Start or continue the completion workflow for a repo",
 		handler: async (args, ctx) => {
 			const goal = args.trim();
-			if (!goal) {
-				emitCommandText(ctx, "Usage: /complete <goal>", "error");
-				return;
-			}
 			const cwd = getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);
+			const hadSnapshot = Boolean(snapshot);
 			if (!snapshot) {
+				if (!goal) {
+					emitCommandText(ctx, "Usage: /complete <goal> (or rerun /complete after canonical .agent state exists)", "error");
+					return;
+				}
 				const root = findRepoRoot(cwd) ?? cwd;
 				const assessment = assessMissionAnchor(goal, path.basename(root));
 				const missionAnchor = await confirmMissionAnchor(ctx, assessment);
@@ -1844,169 +1801,47 @@ export default function completionExtension(pi: ExtensionAPI) {
 				);
 				snapshot = await loadCompletionSnapshot(root);
 			}
-			pi.setSessionName(`completion: ${goal.slice(0, 60)}`);
-			pi.sendUserMessage(completionKickoff(goal));
-			emitCommandText(ctx, "Queued completion workflow kickoff", "info");
-		},
-	});
-
-
-	pi.registerCommand("complete-resume", {
-		description: "Resume the completion workflow from canonical .agent state",
-		handler: async (_args, ctx) => {
-			pi.sendUserMessage(completionResumePrompt());
-			emitCommandText(ctx, "Queued completion workflow resume", "info");
-		},
-	});
-
-	pi.registerCommand("completion-reground", {
-		description: "Force a canonical re-ground of the completion workflow",
-		handler: async (_args, ctx) => {
-			pi.sendUserMessage(completionRegroundPrompt());
-			emitCommandText(ctx, "Queued completion re-ground", "info");
-		},
-	});
-
-	pi.registerCommand("completion-panel", {
-		description: "Open a right-side completion workflow panel",
-		handler: async (_args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
-				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
+				emitCommandText(ctx, "Failed to load completion workflow state", "error");
 				return;
 			}
-			if (!getCtxHasUI(ctx)) {
-				const loaded = await loadCompletionDataForReminder(cwd);
-				if (!loaded) {
-					emitCommandText(ctx, "No completion workflow detected in this repo", "info");
+			if (!goal) {
+				const mission = currentMissionAnchor(snapshot);
+				pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
+				if (shouldSkipDriverKickoffForTests()) {
+					emitCommandText(ctx, "Skipped completion workflow resume kickoff (test mode)", "info");
 					return;
 				}
-				const liveActivity = liveRoleActivityByRoot.get(loaded.snapshot.files.root);
-				emitCommandText(ctx, buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory, liveActivity).join("\n"), "info");
+				pi.sendUserMessage(completionResumePrompt());
+				emitCommandText(ctx, "Queued completion workflow resume", "info");
 				return;
 			}
-			await ctx.ui.custom<void>(
-				(tui, theme, _kb, done) => {
-					let lines = [theme.fg("accent", "Loading completion panel...")];
-					let closed = false;
-					const refresh = async () => {
-						const loaded = await loadCompletionDataForReminder(cwd);
-						if (!loaded || closed) return;
-						const liveActivity = liveRoleActivityByRoot.get(loaded.snapshot.files.root);
-						lines = buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory, liveActivity);
-						tui.requestRender();
-					};
-					void refresh();
-					const timer = setInterval(() => {
-						void refresh();
-					}, 1500);
-					return {
-						render(width: number) {
-							return wrapPlainLines(lines, Math.max(20, width));
-						},
-						handleInput(data: string) {
-							if (matchesKey(data, Key.escape) || data === "q") {
-								closed = true;
-								clearInterval(timer);
-								done(undefined);
-							}
-						},
-						invalidate() {},
-					};
-				},
-				{
-					overlay: true,
-					overlayOptions: {
-						anchor: "right-center",
-						width: "52%",
-						minWidth: 44,
-						maxHeight: "90%",
-						margin: 1,
-						visible: (termWidth) => termWidth >= 100,
-					},
-				},
-			);
-		},
-	});
-
-	pi.registerCommand("completion-history", {
-		description: "Show recent canonical completion history records",
-		handler: async (args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const snapshot = await loadCompletionSnapshot(cwd);
-			if (!snapshot) {
-				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
+			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
+			let kickoffMissionAnchor = currentMissionAnchor(snapshot);
+			if (hadSnapshot) {
+				const decision = await confirmExistingWorkflowGoal(ctx, snapshot, goal);
+				if (!decision) {
+					emitCommandText(ctx, "Cancelled existing workflow confirmation", "info");
+					return;
+				}
+				kickoffIntent = decision.action;
+				kickoffMissionAnchor = decision.currentMissionAnchor;
+				if (decision.action === "refocus") {
+					await refocusCompletionMission(snapshot, decision.missionAnchor, goal);
+					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+					kickoffMissionAnchor = decision.missionAnchor;
+					emitCommandText(ctx, `Refocused completion mission to: ${decision.missionAnchor}`, "info");
+				} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
+					emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
+				}
+			}
+			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
+			if (shouldSkipDriverKickoffForTests()) {
+				emitCommandText(ctx, "Skipped completion workflow kickoff (test mode)", "info");
 				return;
 			}
-			const count = Math.max(1, Math.min(50, Number.parseInt(args.trim() || "10", 10) || 10));
-			const sliceHistory = await readJsonl(snapshot.files.sliceHistoryPath);
-			const stopHistory = await readJsonl(snapshot.files.stopHistoryPath);
-			const merged = [...sliceHistory, ...stopHistory]
-				.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
-				.slice(-count);
-			if (merged.length === 0) {
-				emitCommandText(ctx, "No canonical history records yet", "info");
-				return;
-			}
-			const lines = merged.map(formatRecordLine);
-			if (getCtxHasUI(ctx)) {
-				const ui = getCtxUi(ctx);
-				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, lines));
-			}
-			emitCommandText(ctx, lines.join("\n"), "info");
-		},
-	});
-
-	pi.registerCommand("completion-verify", {
-		description: "Run completion control-plane and stop verifiers in the current repo",
-		handler: async (_args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const snapshot = await loadCompletionSnapshot(cwd);
-			if (!snapshot) {
-				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
-				return;
-			}
-			const control = await runCommand(snapshot.files.root, "bash", [".agent/verify_completion_control_plane.sh"]);
-			const stop = await runCommand(snapshot.files.root, "bash", [".agent/verify_completion_stop.sh"]);
-			const lines = [
-				`control_plane: exit=${control.code}`,
-				control.stdout.trim() || control.stderr.trim() || "(no output)",
-				`stop: exit=${stop.code}`,
-				stop.stdout.trim() || stop.stderr.trim() || "(no output)",
-			];
-			if (getCtxHasUI(ctx)) {
-				const ui = getCtxUi(ctx);
-				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, lines));
-			}
-			emitCommandText(
-				ctx,
-				`${control.code === 0 && stop.code === 0 ? "Completion verification passed" : `Completion verification failed (control=${control.code}, stop=${stop.code})`}\n${lines.join("\n")}`,
-				control.code === 0 && stop.code === 0 ? "success" : "warning",
-			);
-		},
-	});
-
-	pi.registerCommand("completion-pause", {
-		description: "Pause the completion workflow by updating canonical state",
-		handler: async (_args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const snapshot = await loadCompletionSnapshot(cwd);
-			if (!snapshot || !snapshot.state) {
-				emitCommandText(ctx, "No canonical completion state found", "error");
-				return;
-			}
-			const next = {
-				...snapshot.state,
-				current_phase: "awaiting_user",
-				continuation_policy: "paused",
-				continuation_reason: "Paused by user via /completion-pause",
-				next_mandatory_role: null,
-				next_mandatory_action: "Await explicit user resume",
-			};
-			await fsp.writeFile(snapshot.files.statePath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-			await refreshStatus(ctx);
-			emitCommandText(ctx, "Completion workflow paused", "info");
+			pi.sendUserMessage(completionKickoff(goal, kickoffIntent, kickoffMissionAnchor));
+			emitCommandText(ctx, "Queued completion workflow kickoff", "info");
 		},
 	});
 }

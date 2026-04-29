@@ -4,10 +4,11 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 
 ## What it gives you
 
-- `/complete <goal>` to start or continue the workflow
-- `/complete-resume` to resume from canonical `.agent/**` state
+- `/complete` as the single workflow command
+- `/complete <goal>` to bootstrap or continue with an explicit goal
+- `/complete` with no goal to resume from canonical `.agent/**` state
+- `/complete <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
 - no duplicate prompt-template aliases for core workflow commands
-- `/completion-history`, `/completion-panel`, and `/completion-verify`
 - role-based isolated subprocess execution via `completion_role`
 - compact persistent footer/widget workflow status with live role/action previews
 - custom compaction continuity capsule
@@ -22,18 +23,10 @@ In a git repo, after installing the package:
 /complete build feature X end-to-end with tests and docs
 ```
 
-Useful follow-up commands:
-
-```text
-/completion-history 20
-/completion-panel
-/completion-verify
-```
-
 If you stop and come back later:
 
 ```text
-/complete-resume
+/complete
 ```
 
 ## Install
@@ -80,13 +73,13 @@ After install, run `/reload` in pi.
 
 This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, optionally ask you to confirm or edit it when the goal is ambiguous, re-ground canonical state, create a slice plan, and drive the workflow.
 
-### Operational commands
+### Resume later
 
-- `/completion-history [count]` — show recent canonical records
-- `/completion-panel` — open a right-side workflow panel, or print panel text in non-interactive mode; now also follows live running-role activity
-- `/completion-verify` — run control-plane and stop verifiers
-- `/completion-reground` — force canonical re-ground
-- `/completion-pause` — mark the workflow paused in canonical state
+```text
+/complete
+```
+
+If canonical `.agent/**` state already exists, `/complete` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing. Day-to-day inspection relies on the persistent footer/widget status rather than extra slash commands.
 
 ## Canonical repo files
 
@@ -122,6 +115,7 @@ Run validation from the package root:
 
 ```bash
 npm run smoke-test
+npm run refocus-test
 npm run release-check
 ```
 
