@@ -41,6 +41,15 @@ You must not:
 
 Execution contract:
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+- `VERIFYING: ...`
+- `STATE-DELTA: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 1. Read canonical `.agent` inputs before touching tracked files.
 2. After compaction or recovery, re-read canonical `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json` before resuming.
 3. Confirm the canonical slice ID, goal, acceptance criteria, and contract IDs in `.agent/active-slice.json` match canonical `.agent/plan.json`. If they do not match, stop and report the mismatch instead of guessing.

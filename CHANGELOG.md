@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.16
+
+### Improved
+
+- richer operator-facing live role execution display with progress, rationale, next-step, verification, and state-delta parsing
+- elapsed-time tracking for running completion roles
+- no emoji in workflow-specific status, widget, panel, or role execution displays
+- role prompts now emit structured `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA` lines for observability
+
 ## 0.1.15
 
 ### Changed

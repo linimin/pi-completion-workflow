@@ -17,6 +17,13 @@ You must not:
 
 Audit current HEAD truth after a committed slice. Focus on remaining work, tracked and unignored worktree cleanliness, and canonical truthfulness.
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 Answer only:
 
 - `MISSION ANCHOR: ...`

@@ -27,6 +27,14 @@ You must not:
 
 On onboarding or repair:
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+- `STATE-DELTA: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 1. Scan the repo for the strongest intent and validation surfaces.
 2. Infer project goal, operator-visible docs surfaces, and strongest validation entrypoint.
 3. If repo intent or validation entrypoint is ambiguous, ask one short clarifying question.

@@ -71,6 +71,12 @@ type LiveRoleActivity = {
 	currentAction?: string;
 	recentActivity: string[];
 	lastAssistantText?: string;
+	progress?: string;
+	rationale?: string;
+	nextStep?: string;
+	verifying?: string;
+	stateDeltas: string[];
+	startedAt: number;
 	updatedAt: number;
 };
 
@@ -599,8 +605,8 @@ function buildStatusSummary(snapshot: CompletionStateSnapshot, liveActivity?: Li
 	const phase = asString(snapshot.state?.current_phase) ?? "unknown";
 	const nextRole = asString(snapshot.state?.next_mandatory_role) ?? "none";
 	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "none";
-	const base = `completion ${phase} • slice=${sliceId} • next=${nextRole}`;
-	if (liveActivity?.currentAction) return `${base} • ${truncateInline(liveActivity.currentAction, 48)}`;
+	const base = `completion | phase=${phase} | slice=${sliceId} | next=${nextRole}`;
+	if (liveActivity?.currentAction) return `${base} | action=${truncateInline(liveActivity.currentAction, 48)}`;
 	return base;
 }
 
@@ -618,8 +624,10 @@ function buildStatusLines(snapshot: CompletionStateSnapshot, liveActivity?: Live
 		`remaining: slices=${remainingSliceCount(snapshot.plan)} | blockers=${blockers.length} | contracts=${contractIds.length}`,
 	];
 	if (liveActivity) {
-		lines.push(`live: ${liveActivity.role} (${liveActivity.status})`);
-		if (liveActivity.currentAction) lines.push(`now: ${truncateInline(liveActivity.currentAction, 120)}`);
+		lines.push(`live: role=${liveActivity.role} status=${liveActivity.status} elapsed=${formatElapsed(Date.now() - liveActivity.startedAt)}`);
+		if (liveActivity.currentAction) lines.push(`action: ${truncateInline(liveActivity.currentAction, 120)}`);
+		if (liveActivity.progress) lines.push(`progress: ${truncateInline(liveActivity.progress, 120)}`);
+		if (liveActivity.nextStep) lines.push(`next: ${truncateInline(liveActivity.nextStep, 120)}`);
 		if (liveActivity.recentActivity.length > 0) {
 			const recent = liveActivity.recentActivity.slice(-2).map((item) => truncateInline(item, 56)).join(" | ");
 			lines.push(`recent: ${recent}`);
@@ -681,7 +689,7 @@ function buildPanelLines(
 		: asStringArray(snapshot.activeSlice?.acceptance_criteria);
 	if (acceptance.length > 0) {
 		lines.push("- acceptance:");
-		for (const item of acceptance.slice(0, 6)) lines.push(`  • ${item}`);
+		for (const item of acceptance.slice(0, 6)) lines.push(`  - ${item}`);
 	}
 	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
 	const contracts = asStringArray(snapshot.state?.unsatisfied_contract_ids);
@@ -693,11 +701,20 @@ function buildPanelLines(
 		lines.push("", "Live Role Activity");
 		lines.push(`- role: ${liveActivity.role}`);
 		lines.push(`- status: ${liveActivity.status}`);
+		lines.push(`- elapsed: ${formatElapsed(Date.now() - liveActivity.startedAt)}`);
 		if (liveActivity.currentAction) lines.push(`- current: ${liveActivity.currentAction}`);
+		if (liveActivity.progress) lines.push(`- progress: ${liveActivity.progress}`);
+		if (liveActivity.rationale) lines.push(`- rationale: ${liveActivity.rationale}`);
+		if (liveActivity.nextStep) lines.push(`- next: ${liveActivity.nextStep}`);
+		if (liveActivity.verifying) lines.push(`- verifying: ${liveActivity.verifying}`);
 		if (liveActivity.lastAssistantText) lines.push(`- assistant: ${truncateInline(liveActivity.lastAssistantText, 160)}`);
+		if (liveActivity.stateDeltas.length > 0) {
+			lines.push("- state delta:");
+			for (const item of liveActivity.stateDeltas.slice(-6)) lines.push(`  - ${item}`);
+		}
 		if (liveActivity.recentActivity.length > 0) {
 			lines.push("- recent:");
-			for (const item of liveActivity.recentActivity.slice(-6)) lines.push(`  • ${item}`);
+			for (const item of liveActivity.recentActivity.slice(-6)) lines.push(`  - ${item}`);
 		}
 	}
 	const recent = [...sliceHistory, ...stopHistory]
@@ -859,12 +876,12 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 	const policy = asString(snapshot.state?.continuation_policy);
 	const prefix =
 		policy === "done"
-			? theme.fg("success", "✓ ")
+			? theme.fg("success", "done ")
 			: policy === "blocked"
-				? theme.fg("error", "! ")
+				? theme.fg("error", "blocked ")
 				: policy === "paused"
-					? theme.fg("warning", "‖ ")
-					: theme.fg("accent", "● ");
+					? theme.fg("warning", "paused ")
+					: theme.fg("accent", "active ");
 	const liveActivity = liveRoleActivityByRoot.get(snapshot.files.root);
 	safeUiCall(() => {
 		ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot, liveActivity)));
@@ -958,6 +975,16 @@ function formatRecordLine(record: JsonRecord): string {
 	return `${when} | ${type}${suffix ? ` | ${suffix}` : ""}`;
 }
 
+function formatElapsed(ms: number | undefined): string {
+	if (!ms || ms < 0) return "00:00";
+	const totalSeconds = Math.floor(ms / 1000);
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+	if (hours > 0) return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function truncateInline(text: string, maxLength = 120): string {
 	const singleLine = text.replace(/\s+/g, " ").trim();
 	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
@@ -977,6 +1004,35 @@ function formatToolActivity(toolName: string, args: JsonRecord): string {
 function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
 	const next = [...items, line];
 	return next.slice(-maxItems);
+}
+
+function parseStructuredProgress(text: string): {
+	progress?: string;
+	rationale?: string;
+	nextStep?: string;
+	verifying?: string;
+	stateDeltas: string[];
+} {
+	const result: { progress?: string; rationale?: string; nextStep?: string; verifying?: string; stateDeltas: string[] } = {
+		stateDeltas: [],
+	};
+	for (const rawLine of text.split("\n")) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const match = line.match(/^(PROGRESS|RATIONALE|NEXT|VERIFYING|STATE-DELTA):\s*(.+)$/i);
+		if (!match) continue;
+		const [, rawKey, rawValue] = match;
+		const key = rawKey.toUpperCase();
+		const value = rawValue.trim();
+		if (!value) continue;
+		if (key === "PROGRESS") result.progress = value;
+		else if (key === "RATIONALE") result.rationale = value;
+		else if (key === "NEXT") result.nextStep = value;
+		else if (key === "VERIFYING") result.verifying = value;
+		else if (key === "STATE-DELTA") result.stateDeltas.push(value);
+	}
+	if (result.stateDeltas.length > 6) result.stateDeltas = result.stateDeltas.slice(-6);
+	return result;
 }
 
 async function transcribeRoleOutput(role: CompletionRole, cwd: string, output: string, reportFields: Record<string, string>): Promise<TranscriptionResult> {
@@ -1363,6 +1419,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 				currentAction?: string;
 				recentActivity?: string[];
 				lastAssistantText?: string;
+				progress?: string;
+				rationale?: string;
+				nextStep?: string;
+				verifying?: string;
+				stateDeltas?: string[];
+				startedAt?: number;
 				stderr?: string;
 				reportFields?: Record<string, string>;
 				transcription?: TranscriptionResult;
@@ -1391,6 +1453,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 			let latestOutput = "";
 			let currentAction = "Starting role subprocess";
 			let recentActivity: string[] = [currentAction];
+			let progress: string | undefined;
+			let rationale: string | undefined;
+			let nextStep: string | undefined;
+			let verifying: string | undefined;
+			let stateDeltas: string[] = [];
+			const startedAt = Date.now();
 			const emitRunningUpdate = () => {
 				const details: RunningDetails = {
 					role,
@@ -1398,6 +1466,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					currentAction,
 					recentActivity,
 					lastAssistantText: latestOutput || undefined,
+					progress,
+					rationale,
+					nextStep,
+					verifying,
+					stateDeltas,
+					startedAt,
 				};
 				liveRoleActivityByRoot.set(rootKey, {
 					role,
@@ -1405,6 +1479,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					currentAction,
 					recentActivity,
 					lastAssistantText: latestOutput || undefined,
+					progress,
+					rationale,
+					nextStep,
+					verifying,
+					stateDeltas,
+					startedAt,
 					updatedAt: Date.now(),
 				});
 				if (getCtxHasUI(ctx)) {
@@ -1420,7 +1500,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 								throw error;
 							}
 							safeUiCall(() => {
-								ui.setStatus(COMPLETION_STATUS_KEY, theme.fg("accent", `● ${role}`) + theme.fg("dim", ` ${truncateInline(currentAction, 70)}`));
+								ui.setStatus(COMPLETION_STATUS_KEY, theme.fg("accent", `active ${role}`) + theme.fg("dim", ` ${truncateInline(currentAction, 70)}`));
 								ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot, liveRoleActivityByRoot.get(rootKey)));
 							});
 						});
@@ -1443,6 +1523,20 @@ export default function completionExtension(pi: ExtensionAPI) {
 					});
 					let buffer = "";
 
+					const processAssistantText = (text: string) => {
+						if (!text) return;
+						latestOutput = text;
+						const parsed = parseStructuredProgress(text);
+						if (parsed.progress) progress = parsed.progress;
+						if (parsed.rationale) rationale = parsed.rationale;
+						if (parsed.nextStep) nextStep = parsed.nextStep;
+						if (parsed.verifying) verifying = parsed.verifying;
+						if (parsed.stateDeltas.length > 0) stateDeltas = parsed.stateDeltas;
+						const preview = truncateInline(text, 140);
+						currentAction = progress ?? verifying ?? `assistant: ${preview}`;
+						recentActivity = pushRecentActivity(recentActivity, currentAction);
+					};
+
 					const processLine = (line: string) => {
 						if (!line.trim()) return;
 						try {
@@ -1464,16 +1558,18 @@ export default function completionExtension(pi: ExtensionAPI) {
 								emitRunningUpdate();
 								return;
 							}
+							if (eventType === "message_update" && isRecord(event.message)) {
+								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
+								const nextOutput = lastAssistantText([message]);
+								if (nextOutput) processAssistantText(nextOutput);
+								emitRunningUpdate();
+								return;
+							}
 							if (eventType === "message_end" && isRecord(event.message)) {
 								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
 								messages.push(message);
 								const nextOutput = lastAssistantText(messages);
-								if (nextOutput) {
-									latestOutput = nextOutput;
-									const preview = truncateInline(nextOutput, 140);
-									currentAction = `assistant: ${preview}`;
-									recentActivity = pushRecentActivity(recentActivity, currentAction);
-								}
+								if (nextOutput) processAssistantText(nextOutput);
 								emitRunningUpdate();
 								return;
 							}
@@ -1529,6 +1625,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					currentAction,
 					recentActivity,
 					lastAssistantText: latestOutput || undefined,
+					progress,
+					rationale,
+					nextStep,
+					verifying,
+					stateDeltas,
+					startedAt,
 					updatedAt: Date.now(),
 				});
 				return {
@@ -1543,6 +1645,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 						currentAction,
 						recentActivity,
 						lastAssistantText: latestOutput || undefined,
+						progress,
+						rationale,
+						nextStep,
+						verifying,
+						stateDeltas,
+						startedAt,
 					},
 					isError: exitCode !== 0,
 				};
@@ -1577,14 +1685,25 @@ export default function completionExtension(pi: ExtensionAPI) {
 				currentAction?: string;
 				recentActivity?: string[];
 				lastAssistantText?: string;
+				progress?: string;
+				rationale?: string;
+				nextStep?: string;
+				verifying?: string;
+				stateDeltas?: string[];
+				startedAt?: number;
 			};
 			if (isPartial) {
-				let text = theme.fg("warning", "⏳ Running completion role");
+				let text = theme.fg("warning", "running completion role");
 				if (details.role) text += ` ${theme.fg("accent", details.role)}`;
-				if (details.currentAction) text += `\n${theme.fg("dim", details.currentAction)}`;
+				if (details.startedAt) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(Date.now() - details.startedAt)}`)}`;
+				if (details.currentAction) text += `\n${theme.fg("dim", `action: ${details.currentAction}`)}`;
+				if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
+				if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
+				if (details.nextStep) text += `\n${theme.fg("dim", `next: ${details.nextStep}`)}`;
+				if (details.verifying) text += `\n${theme.fg("dim", `verifying: ${details.verifying}`)}`;
 				if (details.recentActivity && details.recentActivity.length > 0) {
 					const items = expanded ? details.recentActivity : details.recentActivity.slice(-5);
-					for (const item of items) text += `\n${theme.fg("muted", "→ ")}${theme.fg("dim", item)}`;
+					for (const item of items) text += `\n${theme.fg("muted", "- ")}${theme.fg("dim", item)}`;
 				}
 				if (details.lastAssistantText) {
 					const preview = expanded ? details.lastAssistantText : truncateInline(details.lastAssistantText, 160);
@@ -1594,8 +1713,15 @@ export default function completionExtension(pi: ExtensionAPI) {
 			}
 			const role = details.role ?? "completion-role";
 			const ok = details.status === "ok" && !result.isError;
-			const icon = ok ? theme.fg("success", "✓") : theme.fg("error", "✗");
-			let text = `${icon} ${theme.fg("toolTitle", theme.bold(role))}`;
+			let text = `${theme.fg(ok ? "success" : "error", ok ? "done" : "error")} ${theme.fg("toolTitle", theme.bold(role))}`;
+			if (details.startedAt) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(Date.now() - details.startedAt)}`)}`;
+			if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
+			if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
+			if (details.nextStep) text += `\n${theme.fg("dim", `next: ${details.nextStep}`)}`;
+			if (details.verifying) text += `\n${theme.fg("dim", `verifying: ${details.verifying}`)}`;
+			if (details.stateDeltas?.length) {
+				for (const delta of details.stateDeltas.slice(-4)) text += `\n${theme.fg("dim", `state-delta: ${delta}`)}`;
+			}
 			if (details.transcription?.appended?.length) {
 				text += `\n${theme.fg("success", `transcribed: ${details.transcription.appended.join(", ")}`)}`;
 			}
@@ -1613,6 +1739,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				"Reconciliation decision",
 				"Can the project stop now",
 				"Acceptable as-is",
+				"Plan adjustment required",
 			];
 			for (const key of summaryKeys) {
 				const value = reportFields[key];

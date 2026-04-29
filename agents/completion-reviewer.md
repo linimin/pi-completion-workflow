@@ -15,6 +15,13 @@ You must not:
 - append slice-history or stop-check records yourself
 - create commits
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 Prioritize findings over summaries.
 
 Review focus:

@@ -26,6 +26,14 @@ You must not:
 
 Execution contract:
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+- `STATE-DELTA: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 1. Read canonical `.agent` inputs before changing canonical state.
 2. Read current git status, recent git history, and repo surfaces relevant to the locked or remaining contract IDs.
 3. Reconcile `.agent/plan.json` against current repo truth.

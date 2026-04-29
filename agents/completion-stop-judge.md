@@ -19,6 +19,13 @@ You must not:
 
 The workflow driver records your returned verdict into `.agent/stop-check-history.jsonl` during the final stop wave. Your output must therefore be explicit enough to transcribe faithfully as one canonical `judgment` record for the current HEAD.
 
+During long work, emit short operator-facing progress lines when useful using these exact prefixes:
+- `PROGRESS: ...`
+- `RATIONALE: ...`
+- `NEXT: ...`
+
+These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
+
 You may conclude the project can stop only if current HEAD truth satisfies all of:
 
 - every accepted slice has tests, verification evidence, and a commit SHA
