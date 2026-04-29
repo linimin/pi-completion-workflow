@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 const PROTOCOL_ID = "completion";
@@ -630,6 +630,45 @@ function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
 	if (blockers.length > 0) lines.push(`Release blockers: ${blockers.join(", ")}`);
 	if (contracts.length > 0) lines.push(`Unsatisfied contract IDs: ${contracts.join(", ")}`);
 	return lines.join("\n");
+}
+
+function buildPanelLines(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string[] {
+	const lines: string[] = [
+		"Completion Panel",
+		"",
+		`Mission: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`Phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
+		`Policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
+		`Next role: ${asString(snapshot.state?.next_mandatory_role) ?? "none"}`,
+		`Next action: ${asString(snapshot.state?.next_mandatory_action) ?? "(unknown)"}`,
+		"",
+		"Active Slice",
+		`- id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
+		`- goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)"}`,
+		`- handoff: ${handoffSnapshotState(snapshot.active)}`,
+	];
+	const acceptance = asStringArray(snapshot.active?.acceptance_criteria).length > 0
+		? asStringArray(snapshot.active?.acceptance_criteria)
+		: asStringArray(snapshot.activeSlice?.acceptance_criteria);
+	if (acceptance.length > 0) {
+		lines.push("- acceptance:");
+		for (const item of acceptance.slice(0, 6)) lines.push(`  • ${item}`);
+	}
+	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
+	const contracts = asStringArray(snapshot.state?.unsatisfied_contract_ids);
+	lines.push("", "Remaining Work");
+	lines.push(`- slices: ${remainingSliceCount(snapshot.plan)}`);
+	lines.push(`- blockers: ${blockers.length > 0 ? blockers.join(", ") : "(none)"}`);
+	lines.push(`- contracts: ${contracts.length > 0 ? contracts.join(", ") : "(none)"}`);
+	const recent = [...sliceHistory, ...stopHistory]
+		.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
+		.slice(-6)
+		.map(formatRecordLine);
+	lines.push("", "Recent History");
+	if (recent.length === 0) lines.push("- (none)");
+	else lines.push(...recent.map((line) => `- ${line}`));
+	lines.push("", "Keys", "- esc/q: close panel");
+	return lines;
 }
 
 function isStaleContextError(error: unknown): boolean {
@@ -1596,6 +1635,67 @@ export default function completionExtension(pi: ExtensionAPI) {
 				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, text.split("\n")));
 			}
 			emitCommandText(ctx, text, "info");
+		},
+	});
+
+	pi.registerCommand("completion-panel", {
+		description: "Open a right-side completion workflow panel",
+		handler: async (_args, ctx) => {
+			const cwd = getCtxCwd(ctx);
+			const snapshot = await loadCompletionSnapshot(cwd);
+			if (!snapshot) {
+				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
+				return;
+			}
+			if (!getCtxHasUI(ctx)) {
+				const loaded = await loadCompletionDataForReminder(cwd);
+				if (!loaded) {
+					emitCommandText(ctx, "No completion workflow detected in this repo", "info");
+					return;
+				}
+				emitCommandText(ctx, buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory).join("\n"), "info");
+				return;
+			}
+			await ctx.ui.custom<void>(
+				(tui, theme, _kb, done) => {
+					let lines = [theme.fg("accent", "Loading completion panel...")];
+					let closed = false;
+					const refresh = async () => {
+						const loaded = await loadCompletionDataForReminder(cwd);
+						if (!loaded || closed) return;
+						lines = buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
+						tui.requestRender();
+					};
+					void refresh();
+					const timer = setInterval(() => {
+						void refresh();
+					}, 1500);
+					return {
+						render(width: number) {
+							return lines.map((line) => truncateToWidth(line, width));
+						},
+						handleInput(data: string) {
+							if (matchesKey(data, Key.escape) || data === "q") {
+								closed = true;
+								clearInterval(timer);
+								done(undefined);
+							}
+						},
+						invalidate() {},
+					};
+				},
+				{
+					overlay: true,
+					overlayOptions: {
+						anchor: "right-center",
+						width: "42%",
+						minWidth: 44,
+						maxHeight: "90%",
+						margin: 1,
+						visible: (termWidth) => termWidth >= 100,
+					},
+				},
+			);
 		},
 	});
 

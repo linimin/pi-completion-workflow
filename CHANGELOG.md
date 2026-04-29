@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.11
+
+### Added
+
+- `/completion-panel` command for an on-demand right-side completion workflow panel
+- live panel view for canonical mission, current phase, active slice, remaining work, and recent history
+- print-mode fallback that renders panel contents as plain text when interactive UI is unavailable
+
 ## 0.1.10
 
 ### Improved
