@@ -91,7 +91,7 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 
 - `/completion-status` — show canonical workflow state
 - `/completion-history [count]` — show recent canonical records
-- `/completion-panel` — open a right-side workflow panel, or print panel text in non-interactive mode
+- `/completion-panel` — open a right-side workflow panel, or print panel text in non-interactive mode; now also follows live running-role activity
 - `/completion-verify` — run control-plane and stop verifiers
 - `/completion-reground` — force canonical re-ground
 - `/completion-pause` — mark the workflow paused in canonical state

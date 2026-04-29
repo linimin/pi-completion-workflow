@@ -65,6 +65,17 @@ type AgentDefinition = {
 	filePath: string;
 };
 
+type LiveRoleActivity = {
+	role: string;
+	status: "running" | "ok" | "error";
+	currentAction?: string;
+	recentActivity: string[];
+	lastAssistantText?: string;
+	updatedAt: number;
+};
+
+const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
+
 function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -632,7 +643,12 @@ function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
 	return lines.join("\n");
 }
 
-function buildPanelLines(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string[] {
+function buildPanelLines(
+	snapshot: CompletionStateSnapshot,
+	sliceHistory: JsonRecord[],
+	stopHistory: JsonRecord[],
+	liveActivity?: LiveRoleActivity,
+): string[] {
 	const lines: string[] = [
 		"Completion Panel",
 		"",
@@ -660,6 +676,17 @@ function buildPanelLines(snapshot: CompletionStateSnapshot, sliceHistory: JsonRe
 	lines.push(`- slices: ${remainingSliceCount(snapshot.plan)}`);
 	lines.push(`- blockers: ${blockers.length > 0 ? blockers.join(", ") : "(none)"}`);
 	lines.push(`- contracts: ${contracts.length > 0 ? contracts.join(", ") : "(none)"}`);
+	if (liveActivity) {
+		lines.push("", "Live Role Activity");
+		lines.push(`- role: ${liveActivity.role}`);
+		lines.push(`- status: ${liveActivity.status}`);
+		if (liveActivity.currentAction) lines.push(`- current: ${liveActivity.currentAction}`);
+		if (liveActivity.lastAssistantText) lines.push(`- assistant: ${truncateInline(liveActivity.lastAssistantText, 160)}`);
+		if (liveActivity.recentActivity.length > 0) {
+			lines.push("- recent:");
+			for (const item of liveActivity.recentActivity.slice(-6)) lines.push(`  • ${item}`);
+		}
+	}
 	const recent = [...sliceHistory, ...stopHistory]
 		.sort((a, b) => (asNumber(a.recorded_at) ?? 0) - (asNumber(b.recorded_at) ?? 0))
 		.slice(-6)
@@ -1314,6 +1341,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const role = params.role as CompletionRole;
 			const cwd = getCtxCwd(ctx);
 			const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
+			const rootKey = runCwd;
 			const agent = await loadAgentDefinition(runCwd, role);
 			type RunningDetails = {
 				role: string;
@@ -1357,6 +1385,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 					recentActivity,
 					lastAssistantText: latestOutput || undefined,
 				};
+				liveRoleActivityByRoot.set(rootKey, {
+					role,
+					status: "running",
+					currentAction,
+					recentActivity,
+					lastAssistantText: latestOutput || undefined,
+					updatedAt: Date.now(),
+				});
 				onUpdate?.({
 					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
 					details,
@@ -1454,6 +1490,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 				if (transcription?.errors.length) {
 					emitCommandText(ctx, `Completion transcription warning: ${transcription.errors.join(" | ")}`, "warning");
 				}
+				liveRoleActivityByRoot.set(rootKey, {
+					role,
+					status: exitCode === 0 ? "ok" : "error",
+					currentAction,
+					recentActivity,
+					lastAssistantText: latestOutput || undefined,
+					updatedAt: Date.now(),
+				});
 				return {
 					content: [{ type: "text", text: output }],
 					details: {
@@ -1470,6 +1514,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					isError: exitCode !== 0,
 				};
 			} finally {
+				setTimeout(() => {
+					const current = liveRoleActivityByRoot.get(rootKey);
+					if (current && current.role === role && current.status !== "running") {
+						liveRoleActivityByRoot.delete(rootKey);
+					}
+				}, 10_000);
 				await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
 			}
 		},
@@ -1653,7 +1703,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 					emitCommandText(ctx, "No completion workflow detected in this repo", "info");
 					return;
 				}
-				emitCommandText(ctx, buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory).join("\n"), "info");
+				const liveActivity = liveRoleActivityByRoot.get(loaded.snapshot.files.root);
+				emitCommandText(ctx, buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory, liveActivity).join("\n"), "info");
 				return;
 			}
 			await ctx.ui.custom<void>(
@@ -1663,7 +1714,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 					const refresh = async () => {
 						const loaded = await loadCompletionDataForReminder(cwd);
 						if (!loaded || closed) return;
-						lines = buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
+						const liveActivity = liveRoleActivityByRoot.get(loaded.snapshot.files.root);
+						lines = buildPanelLines(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory, liveActivity);
 						tui.requestRender();
 					};
 					void refresh();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.12
+
+### Improved
+
+- `/completion-panel` now live-follows current running role activity
+- side panel and print-mode panel output now include current role, current action, recent activity, and assistant-progress previews while a completion role is running
+
 ## 0.1.11
 
 ### Added
