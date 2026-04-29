@@ -688,47 +688,6 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	].join(" ");
 }
 
-function buildStatusSummary(snapshot: CompletionStateSnapshot, liveActivity?: LiveRoleActivity): string {
-	const phase = asString(snapshot.state?.current_phase) ?? "unknown";
-	const nextRole = asString(snapshot.state?.next_mandatory_role) ?? "none";
-	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "none";
-	const base = `completion | phase=${phase} | slice=${sliceId} | next=${nextRole}`;
-	if (liveActivity?.currentAction) return `${base} | action=${truncateInline(liveActivity.currentAction, 48)}`;
-	return base;
-}
-
-function buildStatusLines(snapshot: CompletionStateSnapshot, liveActivity?: LiveRoleActivity): string[] {
-	const mission = truncateInline(asString(snapshot.state?.mission_anchor) ?? "(unknown mission)", 120);
-	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
-	const contractIds = asStringArray(snapshot.state?.unsatisfied_contract_ids);
-	const selectedGoal = truncateInline(asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)", 120);
-	const continuationReason = truncateInline(asString(snapshot.state?.continuation_reason) ?? "(unknown)", 120);
-	const lines = [
-		buildStatusSummary(snapshot, liveActivity),
-		`mission: ${mission}`,
-		`goal: ${selectedGoal}`,
-		`reason: ${continuationReason}`,
-		`remaining: slices=${remainingSliceCount(snapshot.plan)} | blockers=${blockers.length} | contracts=${contractIds.length}`,
-	];
-	if (liveActivity) {
-		lines.push(`live: role=${liveActivity.role} status=${liveActivity.status} elapsed=${formatElapsed(Date.now() - liveActivity.startedAt)}`);
-		if (liveActivity.currentAction) lines.push(`action: ${truncateInline(liveActivity.currentAction, 120)}`);
-		if (liveActivity.progress) lines.push(`progress: ${truncateInline(liveActivity.progress, 120)}`);
-		if (liveActivity.nextStep) lines.push(`next: ${truncateInline(liveActivity.nextStep, 120)}`);
-		if (liveActivity.recentActivity.length > 0) {
-			const recent = liveActivity.recentActivity.slice(-2).map((item) => truncateInline(item, 56)).join(" | ");
-			lines.push(`recent: ${recent}`);
-		}
-	} else if (blockers.length > 0 || contractIds.length > 0) {
-		const blockerPreview = blockers.length > 0 ? blockers.slice(0, 3).join(", ") : "none";
-		const contractPreview = contractIds.length > 0 ? contractIds.slice(0, 3).join(", ") : "none";
-		lines.push(`blockers: ${truncateInline(blockerPreview, 100)}`);
-		lines.push(`contracts: ${truncateInline(contractPreview, 100)}`);
-	}
-	return lines;
-}
-
-
 function isStaleContextError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return message.includes("This extension ctx is stale after session replacement or reload");
@@ -856,37 +815,11 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 
 async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 	if (!getCtxHasUI(ctx)) return;
-	const cwd = getCtxCwd(ctx);
 	const ui = getCtxUi(ctx);
 	if (!ui) return;
-	const snapshot = await loadCompletionSnapshot(cwd);
-	if (!snapshot) {
-		safeUiCall(() => {
-			ui.setStatus(COMPLETION_STATUS_KEY, "");
-			ui.setWidget(COMPLETION_STATUS_KEY, []);
-		});
-		return;
-	}
-	let theme: any;
-	try {
-		theme = ui.theme;
-	} catch (error) {
-		if (isStaleContextError(error)) return;
-		throw error;
-	}
-	const policy = asString(snapshot.state?.continuation_policy);
-	const prefix =
-		policy === "done"
-			? theme.fg("success", "done ")
-			: policy === "blocked"
-				? theme.fg("error", "blocked ")
-				: policy === "paused"
-					? theme.fg("warning", "paused ")
-					: theme.fg("accent", "active ");
-	const liveActivity = liveRoleActivityByRoot.get(snapshot.files.root);
 	safeUiCall(() => {
-		ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot, liveActivity)));
-		ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot, liveActivity));
+		ui.setStatus(COMPLETION_STATUS_KEY, "");
+		ui.setWidget(COMPLETION_STATUS_KEY, []);
 	});
 }
 
@@ -1504,25 +1437,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 					startedAt,
 					updatedAt: Date.now(),
 				});
-				if (getCtxHasUI(ctx)) {
-					const ui = getCtxUi(ctx);
-					if (ui) {
-						void loadCompletionSnapshot(runCwd).then((snapshot) => {
-							if (!snapshot) return;
-							let theme: any;
-							try {
-								theme = ui.theme;
-							} catch (error) {
-								if (isStaleContextError(error)) return;
-								throw error;
-							}
-							safeUiCall(() => {
-								ui.setStatus(COMPLETION_STATUS_KEY, theme.fg("accent", `active ${role}`) + theme.fg("dim", ` ${truncateInline(currentAction, 70)}`));
-								ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot, liveRoleActivityByRoot.get(rootKey)));
-							});
-						});
-					}
-				}
 				onUpdate?.({
 					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
 					details,

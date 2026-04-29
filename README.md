@@ -10,7 +10,6 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/complete <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
-- compact persistent footer/widget workflow status with live role/action previews
 - custom compaction continuity capsule
 - canonical transcription of reviewer, auditor, regrounder, and stop-judge outputs
 - repo-local verifier scripts and `.gitignore` wiring
@@ -79,7 +78,7 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 /complete
 ```
 
-If canonical `.agent/**` state already exists, `/complete` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing. Day-to-day inspection relies on the persistent footer/widget status rather than extra slash commands.
+If canonical `.agent/**` state already exists, `/complete` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing.
 
 ## Canonical repo files
 

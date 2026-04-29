@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.19
+
+### Changed
+
+- removed the remaining completion UI status surfaces, including the compact status line
+
 ## 0.1.18
 
 ### Changed
