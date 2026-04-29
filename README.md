@@ -6,6 +6,7 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 
 - `/complete <goal>` to start or continue the workflow
 - `/complete-resume` to resume from canonical `.agent/**` state
+- no duplicate prompt-template aliases for core workflow commands
 - `/completion-init [mission]` to scaffold control-plane files
 - `/completion-status`, `/completion-history`, and `/completion-verify`
 - role-based isolated subprocess execution via `completion_role`
@@ -120,7 +121,6 @@ Canonical truth lives in these files plus current repo truth.
 - `extensions/completion/index.ts` — workflow extension
 - `skills/completion-protocol/` — shared protocol docs
 - `agents/completion-*.md` — package-local completion roles used by the extension
-- `prompts/` — optional kickoff prompt templates
 - `scripts/` — smoke and release checks
 
 ## Development and release

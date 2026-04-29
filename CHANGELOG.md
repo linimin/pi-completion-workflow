@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8
+
+### Fixed
+
+- removed duplicate prompt-template aliases for `/complete`, `/complete-resume`, and `/completion-status`
+- package now exposes those names only as extension commands, avoiding duplicate command entries in pi
+
 ## 0.1.7
 
 ### Fixed
