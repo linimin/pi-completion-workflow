@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15
+
+### Changed
+
+- removed `/completion-status`; rely on the persistent widget/footer and `/completion-panel` for state inspection
+
 ## 0.1.14
 
 ### Changed

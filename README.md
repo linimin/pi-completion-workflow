@@ -7,7 +7,7 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/complete <goal>` to start or continue the workflow
 - `/complete-resume` to resume from canonical `.agent/**` state
 - no duplicate prompt-template aliases for core workflow commands
-- `/completion-status`, `/completion-history`, `/completion-panel`, and `/completion-verify`
+- `/completion-history`, `/completion-panel`, and `/completion-verify`
 - role-based isolated subprocess execution via `completion_role`
 - compact persistent footer/widget workflow status with live role/action previews
 - custom compaction continuity capsule
@@ -25,8 +25,8 @@ In a git repo, after installing the package:
 Useful follow-up commands:
 
 ```text
-/completion-status
 /completion-history 20
+/completion-panel
 /completion-verify
 ```
 
@@ -82,7 +82,6 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 
 ### Operational commands
 
-- `/completion-status` — show canonical workflow state
 - `/completion-history [count]` — show recent canonical records
 - `/completion-panel` — open a right-side workflow panel, or print panel text in non-interactive mode; now also follows live running-role activity
 - `/completion-verify` — run control-plane and stop verifiers

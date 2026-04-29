@@ -1680,25 +1680,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("completion-status", {
-		description: "Show a concise summary of canonical completion state",
-		handler: async (_args, ctx) => {
-			const cwd = getCtxCwd(ctx);
-			const snapshot = await loadCompletionSnapshot(cwd);
-			if (!snapshot) {
-				emitCommandText(ctx, "No completion workflow detected in this repo", "info");
-				return;
-			}
-			await refreshStatus(ctx);
-			const text = buildReadableStatus(snapshot);
-			if (getCtxHasUI(ctx)) {
-				const ui = getCtxUi(ctx);
-				if (ui) safeUiCall(() => ui.setWidget(COMPLETION_STATUS_KEY, text.split("\n")));
-			}
-			emitCommandText(ctx, text, "info");
-		},
-	});
-
 	pi.registerCommand("completion-panel", {
 		description: "Open a right-side completion workflow panel",
 		handler: async (_args, ctx) => {
