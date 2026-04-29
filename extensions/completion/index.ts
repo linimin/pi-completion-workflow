@@ -244,6 +244,50 @@ async function detectVerifierCommand(root: string): Promise<string | undefined> 
 	return undefined;
 }
 
+function normalizeMissionAnchorText(value: string): string {
+	return value
+		.replace(/^\/complete\s+/i, "")
+		.replace(/^\/completion-init\s+/i, "")
+		.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+		.replace(/^\s*(please|pls|can you|could you|help me|i want to|we need to|let'?s|continue to|continue|resume)\s+/i, "")
+		.replace(/\s+/g, " ")
+		.replace(/[。！？.!?]+$/u, "")
+		.trim();
+}
+
+function isWeakMissionAnchor(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	if (normalized.length < 8) return true;
+	if (["continue", "resume", "fix", "fix it", "work on this", "help", "do it", "try again"].includes(normalized)) return true;
+	if (/^(continue|resume|fix|help|work on)(\s+.*)?$/i.test(normalized) && normalized.split(/\s+/).length <= 3) return true;
+	return false;
+}
+
+function deriveMissionAnchor(rawGoal: string, projectName: string): string {
+	const normalized = normalizeMissionAnchorText(rawGoal);
+	if (!normalized || isWeakMissionAnchor(normalized)) {
+		return `Drive ${projectName} to truthful, verifiable completion.`;
+	}
+
+	let mission = normalized
+		.replace(/\b(end[- ]to[- ]end|for me|thanks|thank you)\b/gi, "")
+		.replace(/\s+/g, " ")
+		.trim();
+
+	mission = mission
+		.replace(/\bwith tests and docs\b/gi, "with tests and docs parity")
+		.replace(/\bwith tests and documentation\b/gi, "with tests and docs parity")
+		.replace(/\bwith docs\b/gi, "with docs parity")
+		.trim();
+
+	if (mission.length > 120) {
+		mission = `${mission.slice(0, 117).trimEnd()}...`;
+	}
+
+	if (!/[.!?。！？]$/u.test(mission)) mission += ".";
+	return mission;
+}
+
 function defaultState(missionAnchor: string): JsonRecord {
 	return {
 		schema_version: 1,
@@ -1414,7 +1458,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			let snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
-				const missionAnchor = goal;
+				const missionAnchor = deriveMissionAnchor(goal, path.basename(root));
 				const created = await scaffoldCompletionFiles(root, missionAnchor);
 				emitCommandText(
 					ctx,
@@ -1434,7 +1478,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const cwd = getCtxCwd(ctx);
 			const root = findRepoRoot(cwd) ?? cwd;
-			const missionAnchor = args.trim() || `Drive ${path.basename(root)} to truthful, verifiable completion.`;
+			const missionAnchor = args.trim()
+				? deriveMissionAnchor(args.trim(), path.basename(root))
+				: `Drive ${path.basename(root)} to truthful, verifiable completion.`;
 			const result = await scaffoldCompletionFiles(root, missionAnchor);
 			const summary = [
 				`root=${result.root}`,

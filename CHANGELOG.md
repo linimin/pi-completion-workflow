@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.9
+
+### Improved
+
+- bootstrap now derives a cleaner `MISSION ANCHOR` from vague `/complete` and `/completion-init` goals
+- weak or underspecified goals now fall back to a stable repo-based mission anchor instead of using raw ambiguous text
+- common phrasing noise like `/complete`, `please`, and `end-to-end` is normalized before seeding canonical mission state
+
 ## 0.1.8
 
 ### Fixed
