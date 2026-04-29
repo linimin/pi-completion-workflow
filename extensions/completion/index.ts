@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, Text, truncateToWidth } from "@mariozechner/pi-tui";
+import { Key, matchesKey, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 const PROTOCOL_ID = "completion";
@@ -990,11 +990,29 @@ function truncateInline(text: string, maxLength = 120): string {
 	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
 }
 
+function wrapPlainLine(line: string, width: number): string[] {
+	if (width <= 8) return [line];
+	const out: string[] = [];
+	let remaining = line;
+	while (remaining.length > width) {
+		let breakAt = remaining.lastIndexOf(" ", width);
+		if (breakAt < Math.floor(width * 0.5)) breakAt = width;
+		out.push(remaining.slice(0, breakAt).trimEnd());
+		remaining = remaining.slice(breakAt).trimStart();
+	}
+	out.push(remaining);
+	return out;
+}
+
+function wrapPlainLines(lines: string[], width: number): string[] {
+	return lines.flatMap((line) => wrapPlainLine(line, width));
+}
+
 function formatToolActivity(toolName: string, args: JsonRecord): string {
 	if (toolName === "bash") return `$ ${truncateInline(asString(args.command) ?? "...")}`;
-	if (toolName === "read") return `read ${asString(args.path) ?? "..."}`;
-	if (toolName === "write") return `write ${asString(args.path) ?? "..."}`;
-	if (toolName === "edit") return `edit ${asString(args.path) ?? "..."}`;
+	if (toolName === "read") return `read ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
+	if (toolName === "write") return `write ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
+	if (toolName === "edit") return `edit ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
 	if (toolName === "grep") return `grep ${asString(args.pattern) ?? "..."}`;
 	if (toolName === "find") return `find ${asString(args.pattern) ?? "..."}`;
 	if (toolName === "ls") return `ls ${asString(args.path) ?? "."}`;
@@ -1002,8 +1020,51 @@ function formatToolActivity(toolName: string, args: JsonRecord): string {
 }
 
 function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
-	const next = [...items, line];
+	const normalized = truncateInline(line, 160);
+	if (!normalized) return items;
+	if (items[items.length - 1] === normalized) return items;
+	const next = [...items, normalized];
 	return next.slice(-maxItems);
+}
+
+function collapseRecentActivity(items: string[], maxItems = 4): string[] {
+	const collapsed: string[] = [];
+	for (const rawItem of items) {
+		const item = truncateInline(rawItem, 120);
+		if (!item || item.startsWith("done ") || item.startsWith("result ")) continue;
+		if (item.startsWith("assistant:")) continue;
+		if (collapsed[collapsed.length - 1] === item) continue;
+		collapsed.push(item);
+	}
+	return collapsed.slice(-maxItems);
+}
+
+function buildInlineRunningLines(details: {
+	role?: string;
+	startedAt?: number;
+	currentAction?: string;
+	progress?: string;
+	rationale?: string;
+	nextStep?: string;
+	verifying?: string;
+	recentActivity?: string[];
+}): string[] {
+	const lines: string[] = [];
+	let header = "running completion role";
+	if (details.role) header += ` ${details.role}`;
+	lines.push(header);
+	if (details.startedAt) lines.push(`elapsed: ${formatElapsed(Date.now() - details.startedAt)}`);
+	if (details.progress) lines.push(`progress: ${details.progress}`);
+	else if (details.currentAction) lines.push(`progress: ${details.currentAction}`);
+	if (details.rationale) lines.push(`rationale: ${details.rationale}`);
+	if (details.nextStep) lines.push(`next: ${details.nextStep}`);
+	if (details.verifying) lines.push(`verifying: ${details.verifying}`);
+	const recent = collapseRecentActivity(details.recentActivity ?? []);
+	if (recent.length > 0) {
+		lines.push("recent:");
+		for (const item of recent) lines.push(`- ${item}`);
+	}
+	return lines;
 }
 
 function parseStructuredProgress(text: string): {
@@ -1551,10 +1612,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 								return;
 							}
 							if (eventType === "tool_execution_end") {
-								const toolName = asString(event.toolName) ?? "tool";
-								const lineText = `done ${toolName}`;
-								currentAction = lineText;
-								recentActivity = pushRecentActivity(recentActivity, lineText);
 								emitRunningUpdate();
 								return;
 							}
@@ -1574,10 +1631,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 								return;
 							}
 							if (eventType === "tool_result_end" && isRecord(event.message)) {
-								const toolMessage = event.message as JsonRecord;
-								const toolName = asString(toolMessage.toolName) ?? asString(event.toolName) ?? "tool";
-								currentAction = `result ${toolName}`;
-								recentActivity = pushRecentActivity(recentActivity, currentAction);
 								emitRunningUpdate();
 							}
 						} catch {
@@ -1669,8 +1722,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const task = typeof args.task === "string" ? args.task.trim() : "";
 			let text = theme.fg("toolTitle", theme.bold("completion_role ")) + theme.fg("accent", role);
 			if (task) {
-				const preview = task.length > 90 ? `${task.slice(0, 87)}...` : task;
-				text += `\n${theme.fg("dim", preview)}`;
+				text += `\n${theme.fg("dim", task)}`;
 			}
 			return new Text(text, 0, 0);
 		},
@@ -1693,21 +1745,29 @@ export default function completionExtension(pi: ExtensionAPI) {
 				startedAt?: number;
 			};
 			if (isPartial) {
-				let text = theme.fg("warning", "running completion role");
-				if (details.role) text += ` ${theme.fg("accent", details.role)}`;
-				if (details.startedAt) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(Date.now() - details.startedAt)}`)}`;
-				if (details.currentAction) text += `\n${theme.fg("dim", `action: ${details.currentAction}`)}`;
-				if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
-				if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
-				if (details.nextStep) text += `\n${theme.fg("dim", `next: ${details.nextStep}`)}`;
-				if (details.verifying) text += `\n${theme.fg("dim", `verifying: ${details.verifying}`)}`;
-				if (details.recentActivity && details.recentActivity.length > 0) {
-					const items = expanded ? details.recentActivity : details.recentActivity.slice(-5);
-					for (const item of items) text += `\n${theme.fg("muted", "- ")}${theme.fg("dim", item)}`;
-				}
-				if (details.lastAssistantText) {
-					const preview = expanded ? details.lastAssistantText : truncateInline(details.lastAssistantText, 160);
-					text += `\n${theme.fg("toolOutput", preview)}`;
+				const lines = buildInlineRunningLines(details);
+				let text = "";
+				for (const [index, line] of lines.entries()) {
+					if (index > 0) text += "\n";
+					if (index === 0) {
+						const [prefix, ...rest] = line.split(" ");
+						text += theme.fg("warning", prefix);
+						if (rest.length > 0) text += ` ${theme.fg("accent", rest.join(" "))}`;
+						continue;
+					}
+					if (line.startsWith("progress:")) {
+						text += theme.fg("toolOutput", line);
+						continue;
+					}
+					if (line === "recent:") {
+						text += theme.fg("dim", line);
+						continue;
+					}
+					if (line.startsWith("- ")) {
+						text += `${theme.fg("muted", "- ")}${theme.fg("dim", line.slice(2))}`;
+						continue;
+					}
+					text += theme.fg("dim", line);
 				}
 				return new Text(text, 0, 0);
 			}
@@ -1843,7 +1903,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					}, 1500);
 					return {
 						render(width: number) {
-							return lines.map((line) => truncateToWidth(line, width));
+							return wrapPlainLines(lines, Math.max(20, width));
 						},
 						handleInput(data: string) {
 							if (matchesKey(data, Key.escape) || data === "q") {
@@ -1859,7 +1919,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					overlay: true,
 					overlayOptions: {
 						anchor: "right-center",
-						width: "42%",
+						width: "52%",
 						minWidth: 44,
 						maxHeight: "90%",
 						margin: 1,
