@@ -263,6 +263,69 @@ function isWeakMissionAnchor(value: string): boolean {
 	return false;
 }
 
+type MissionAnchorAssessment = {
+	derived: string;
+	needsConfirmation: boolean;
+	reason?: string;
+};
+
+function assessMissionAnchor(rawGoal: string, projectName: string): MissionAnchorAssessment {
+	const normalized = normalizeMissionAnchorText(rawGoal);
+	const derived = deriveMissionAnchor(rawGoal, projectName);
+	if (!normalized) {
+		return {
+			derived,
+			needsConfirmation: true,
+			reason: "No meaningful goal text was provided.",
+		};
+	}
+	if (isWeakMissionAnchor(normalized)) {
+		return {
+			derived,
+			needsConfirmation: true,
+			reason: "The goal is too short or vague for stable canonical workflow state.",
+		};
+	}
+	const vaguePronouns = /\b(this|that|it|things|stuff|something)\b/i.test(normalized);
+	const fallback = derived === `Drive ${projectName} to truthful, verifiable completion.`;
+	if (fallback || vaguePronouns) {
+		return {
+			derived,
+			needsConfirmation: true,
+			reason: fallback
+				? "The initial goal was too ambiguous, so the workflow fell back to a generic repo-based mission."
+				: "The goal still contains ambiguous references that are better confirmed before writing canonical state.",
+		};
+	}
+	return { derived, needsConfirmation: false };
+}
+
+async function confirmMissionAnchor(
+	ctx: { hasUI: boolean; ui: any },
+	assessment: MissionAnchorAssessment,
+): Promise<string | undefined> {
+	if (!getCtxHasUI(ctx)) return assessment.derived;
+	const ui = getCtxUi(ctx);
+	if (!ui) return assessment.derived;
+	if (!assessment.needsConfirmation) return assessment.derived;
+	const title = "Confirm mission anchor";
+	const reason = assessment.reason ? `${assessment.reason}\n\n` : "";
+	const choice = await ui.select(
+		title,
+		[
+			`${reason}Proposed mission anchor:\n${assessment.derived}\n\nUse proposed mission anchor`,
+			"Edit mission anchor",
+			"Cancel",
+		],
+	);
+	if (!choice || choice === "Cancel") return undefined;
+	if (choice === "Edit mission anchor") {
+		const edited = await ui.editor(title, assessment.derived);
+		return edited?.trim() ? edited.trim() : undefined;
+	}
+	return assessment.derived;
+}
+
 function deriveMissionAnchor(rawGoal: string, projectName: string): string {
 	const normalized = normalizeMissionAnchorText(rawGoal);
 	if (!normalized || isWeakMissionAnchor(normalized)) {
@@ -1458,7 +1521,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 			let snapshot = await loadCompletionSnapshot(cwd);
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
-				const missionAnchor = deriveMissionAnchor(goal, path.basename(root));
+				const assessment = assessMissionAnchor(goal, path.basename(root));
+				const missionAnchor = await confirmMissionAnchor(ctx, assessment);
+				if (!missionAnchor) {
+					emitCommandText(ctx, "Cancelled mission anchor confirmation", "info");
+					return;
+				}
 				const created = await scaffoldCompletionFiles(root, missionAnchor);
 				emitCommandText(
 					ctx,
@@ -1479,8 +1547,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const cwd = getCtxCwd(ctx);
 			const root = findRepoRoot(cwd) ?? cwd;
 			const missionAnchor = args.trim()
-				? deriveMissionAnchor(args.trim(), path.basename(root))
+				? await confirmMissionAnchor(ctx, assessMissionAnchor(args.trim(), path.basename(root)))
 				: `Drive ${path.basename(root)} to truthful, verifiable completion.`;
+			if (!missionAnchor) {
+				emitCommandText(ctx, "Cancelled mission anchor confirmation", "info");
+				return;
+			}
 			const result = await scaffoldCompletionFiles(root, missionAnchor);
 			const summary = [
 				`root=${result.root}`,

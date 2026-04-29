@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10
+
+### Improved
+
+- ambiguous bootstrap goals can now trigger developer confirmation or editing of the proposed `MISSION ANCHOR`
+- `/complete` and `/completion-init` keep auto-bootstrap for clear goals but ask before writing weak or underspecified anchors into canonical state
+- mission-anchor confirmation uses extension UI instead of relying on model-side clarification later in the workflow
+
 ## 0.1.9
 
 ### Improved

@@ -78,7 +78,7 @@ After install, run `/reload` in pi.
 /complete Build feature X with tests and docs
 ```
 
-This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, re-ground canonical state, create a slice plan, and drive the workflow.
+This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, optionally ask you to confirm or edit it when the goal is ambiguous, re-ground canonical state, create a slice plan, and drive the workflow.
 
 ### Explicit bootstrap first
 
