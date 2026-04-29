@@ -10,6 +10,7 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/completion-init [mission]` to scaffold control-plane files
 - `/completion-status`, `/completion-history`, `/completion-panel`, and `/completion-verify`
 - role-based isolated subprocess execution via `completion_role`
+- compact persistent footer/widget workflow status with live role/action previews
 - custom compaction continuity capsule
 - canonical transcription of reviewer, auditor, regrounder, and stop-judge outputs
 - repo-local verifier scripts and `.gitignore` wiring

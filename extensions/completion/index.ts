@@ -596,28 +596,42 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	].join(" ");
 }
 
-function buildStatusSummary(snapshot: CompletionStateSnapshot): string {
+function buildStatusSummary(snapshot: CompletionStateSnapshot, liveActivity?: LiveRoleActivity): string {
 	const phase = asString(snapshot.state?.current_phase) ?? "unknown";
-	const policy = asString(snapshot.state?.continuation_policy) ?? "unknown";
 	const nextRole = asString(snapshot.state?.next_mandatory_role) ?? "none";
 	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "none";
-	return `completion ${phase} | policy=${policy} | slice=${sliceId} | next=${nextRole}`;
+	const base = `completion ${phase} • slice=${sliceId} • next=${nextRole}`;
+	if (liveActivity?.currentAction) return `${base} • ${truncateInline(liveActivity.currentAction, 48)}`;
+	return base;
 }
 
-function buildStatusLines(snapshot: CompletionStateSnapshot): string[] {
-	const mission = asString(snapshot.state?.mission_anchor) ?? "(unknown mission)";
+function buildStatusLines(snapshot: CompletionStateSnapshot, liveActivity?: LiveRoleActivity): string[] {
+	const mission = truncateInline(asString(snapshot.state?.mission_anchor) ?? "(unknown mission)", 120);
 	const blockers = asStringArray(snapshot.state?.release_blocker_ids);
 	const contractIds = asStringArray(snapshot.state?.unsatisfied_contract_ids);
-	const selectedGoal = asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)";
-	const continuationReason = asString(snapshot.state?.continuation_reason) ?? "(unknown)";
-	return [
-		buildStatusSummary(snapshot),
-		`mission=${mission}`,
-		`goal=${selectedGoal}`,
-		`reason=${continuationReason}`,
-		`remaining_slices=${remainingSliceCount(snapshot.plan)}${blockers.length > 0 ? ` | blockers=${blockers.join(",")}` : ""}`,
-		contractIds.length > 0 ? `contracts=${contractIds.join(", ")}` : "contracts=(none)",
+	const selectedGoal = truncateInline(asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(none)", 120);
+	const continuationReason = truncateInline(asString(snapshot.state?.continuation_reason) ?? "(unknown)", 120);
+	const lines = [
+		buildStatusSummary(snapshot, liveActivity),
+		`mission: ${mission}`,
+		`goal: ${selectedGoal}`,
+		`reason: ${continuationReason}`,
+		`remaining: slices=${remainingSliceCount(snapshot.plan)} | blockers=${blockers.length} | contracts=${contractIds.length}`,
 	];
+	if (liveActivity) {
+		lines.push(`live: ${liveActivity.role} (${liveActivity.status})`);
+		if (liveActivity.currentAction) lines.push(`now: ${truncateInline(liveActivity.currentAction, 120)}`);
+		if (liveActivity.recentActivity.length > 0) {
+			const recent = liveActivity.recentActivity.slice(-2).map((item) => truncateInline(item, 56)).join(" | ");
+			lines.push(`recent: ${recent}`);
+		}
+	} else if (blockers.length > 0 || contractIds.length > 0) {
+		const blockerPreview = blockers.length > 0 ? blockers.slice(0, 3).join(", ") : "none";
+		const contractPreview = contractIds.length > 0 ? contractIds.slice(0, 3).join(", ") : "none";
+		lines.push(`blockers: ${truncateInline(blockerPreview, 100)}`);
+		lines.push(`contracts: ${truncateInline(contractPreview, 100)}`);
+	}
+	return lines;
 }
 
 function buildReadableStatus(snapshot: CompletionStateSnapshot): string {
@@ -852,9 +866,10 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 				: policy === "paused"
 					? theme.fg("warning", "‖ ")
 					: theme.fg("accent", "● ");
+	const liveActivity = liveRoleActivityByRoot.get(snapshot.files.root);
 	safeUiCall(() => {
-		ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot)));
-		ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot));
+		ui.setStatus(COMPLETION_STATUS_KEY, prefix + theme.fg("dim", buildStatusSummary(snapshot, liveActivity)));
+		ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot, liveActivity));
 	});
 }
 
@@ -1393,6 +1408,25 @@ export default function completionExtension(pi: ExtensionAPI) {
 					lastAssistantText: latestOutput || undefined,
 					updatedAt: Date.now(),
 				});
+				if (getCtxHasUI(ctx)) {
+					const ui = getCtxUi(ctx);
+					if (ui) {
+						void loadCompletionSnapshot(runCwd).then((snapshot) => {
+							if (!snapshot) return;
+							let theme: any;
+							try {
+								theme = ui.theme;
+							} catch (error) {
+								if (isStaleContextError(error)) return;
+								throw error;
+							}
+							safeUiCall(() => {
+								ui.setStatus(COMPLETION_STATUS_KEY, theme.fg("accent", `● ${role}`) + theme.fg("dim", ` ${truncateInline(currentAction, 70)}`));
+								ui.setWidget(COMPLETION_STATUS_KEY, buildStatusLines(snapshot, liveRoleActivityByRoot.get(rootKey)));
+							});
+						});
+					}
+				}
 				onUpdate?.({
 					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
 					details,

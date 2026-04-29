@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13
+
+### Improved
+
+- persistent footer/widget status is now more compact and useful for day-to-day workflow use
+- always-visible status now surfaces live role/action summaries without requiring the panel to be open
+- widget lines now favor concise mission, goal, reason, and live activity previews over verbose raw fields
+
 ## 0.1.12
 
 ### Improved
