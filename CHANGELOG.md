@@ -5,7 +5,9 @@
 ### Changed
 
 - restored the persistent completion status line/widget from canonical `.agent/**` state and live role activity
+- separated live running-role observability into distinct tool activity, role judgment, verification, and state-delta lanes with waiting/stalled signaling
 - added deterministic observability status regression coverage to the release-check path
+- refreshed README and release-verifier guidance so the shipped observability surfaces and verification flow are documented truthfully
 
 ## 0.1.18
 
