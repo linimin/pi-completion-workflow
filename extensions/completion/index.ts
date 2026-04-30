@@ -426,10 +426,22 @@ async function confirmExistingWorkflowGoal(
 	if (!ui) {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
-	const continueChoice = `Continue current workflow\n\nCurrent mission anchor:\n${currentMission}\n\nTreat the new text as extra direction only.`;
-	const refocusChoice = `Refocus workflow\n\nCurrent mission anchor:\n${currentMission}\n\nProposed mission anchor:\n${assessment.derived}`;
-	const choice = await ui.select("Existing completion workflow found", [continueChoice, refocusChoice, "Cancel"]);
-	if (!choice || choice === "Cancel") return undefined;
+	const title = [
+		"Existing completion workflow found",
+		"",
+		"A workflow is already in progress. Select one option:",
+		"",
+		"Current mission",
+		currentMission,
+		"",
+		"New proposed mission",
+		assessment.derived,
+	].join("\n");
+	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new text as extra direction only.";
+	const refocusChoice = "Refocus workflow\n\nReplace the current mission with the proposed mission anchor.";
+	const cancelChoice = "Cancel\n\nExit without changing the current workflow.";
+	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
+	if (!choice || choice === cancelChoice) return undefined;
 	if (choice === refocusChoice) {
 		const missionAnchor = await confirmMissionAnchor(ctx, assessment);
 		if (!missionAnchor) return undefined;

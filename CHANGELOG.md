@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.22
+
+### Changed
+
+- clarified the existing-workflow continue/refocus selection UI with a clearer prompt, current-vs-proposed mission summary, and shorter option descriptions
+
 ## 0.1.21
 
 ### Changed
