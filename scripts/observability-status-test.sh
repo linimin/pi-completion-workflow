@@ -47,6 +47,7 @@ elif mode == 'live':
     assert data['livePreview'] == 'Loading canonical completion state', data
     assert data['liveState'] == 'active', data
     assert data['liveToolActivity'] == 'read .agent/state.json', data
+    assert data['liveAssistantSummary'] == 'Loading canonical completion state', data
     assert data['liveProgress'] == 'Loading canonical completion state', data
     assert data['liveRationale'] == 'verifying selected slice handoff', data
     assert data['liveNextStep'] == 'inspect extensions/completion/index.ts', data
@@ -197,13 +198,40 @@ PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STATIC_JSON" \
 pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-static.out" 2>"$TMPDIR/pi-completion-status-static.err"
 assert_status_json "$STATIC_JSON" static
 
-LIVE_ACTIVITY_JSON='{"role":"completion-implementer","status":"running","progress":"Loading canonical completion state","toolActivity":"read .agent/state.json","toolRecentActivity":["Starting role subprocess","read .agent/state.json"],"recentActivity":["Starting role subprocess","read .agent/state.json","assistant: Loading canonical completion state"],"assistantSummary":"Loading canonical completion state","rationale":"verifying selected slice handoff","nextStep":"inspect extensions/completion/index.ts","verifying":"canonical slice handoff matches plan","stateDeltas":["tool activity separated from role judgment","waiting threshold uses updatedAt timestamps"],"startedAt":1000,"updatedAt":2000}'
+LIVE_ROLE_EVENT_STREAM_JSON="$(cat <<'JSON'
+{
+  "role": "completion-implementer",
+  "startedAt": 1000,
+  "events": [
+    {
+      "type": "tool_execution_start",
+      "toolName": "read",
+      "args": {"path": ".agent/state.json"},
+      "at": 2000
+    },
+    {
+      "type": "message_update",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "PROGRESS: Loading canonical completion state\nRATIONALE: verifying selected slice handoff\nNEXT: inspect extensions/completion/index.ts\nVERIFYING: canonical slice handoff matches plan\nSTATE-DELTA: tool activity separated from role judgment\nSTATE-DELTA: waiting threshold uses updatedAt timestamps"
+          }
+        ]
+      },
+      "at": 2000
+    }
+  ]
+}
+JSON
+)"
 
 LIVE_JSON="$TMPDIR/live-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$LIVE_JSON" \
 PI_COMPLETION_TEST_NOW=2500 \
-PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
 pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-live.out" 2>"$TMPDIR/pi-completion-status-live.err"
 assert_status_json "$LIVE_JSON" live
 
@@ -211,7 +239,7 @@ WAITING_JSON="$TMPDIR/waiting-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$WAITING_JSON" \
 PI_COMPLETION_TEST_NOW=22000 \
-PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
 pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-waiting.out" 2>"$TMPDIR/pi-completion-status-waiting.err"
 assert_status_json "$WAITING_JSON" waiting
 
@@ -219,7 +247,7 @@ STALLED_JSON="$TMPDIR/stalled-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STALLED_JSON" \
 PI_COMPLETION_TEST_NOW=48000 \
-PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
 pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-stalled.out" 2>"$TMPDIR/pi-completion-status-stalled.err"
 assert_status_json "$STALLED_JSON" stalled
 

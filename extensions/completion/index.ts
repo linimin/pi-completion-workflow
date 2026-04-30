@@ -907,6 +907,101 @@ function completionRootKey(snapshot: CompletionStateSnapshot | undefined, cwd: s
 	return snapshot?.files.root ?? findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? path.resolve(cwd);
 }
 
+function cloneLiveRoleActivity(activity: LiveRoleActivity, overrides: Partial<LiveRoleActivity> = {}): LiveRoleActivity {
+	return {
+		...activity,
+		...overrides,
+		toolRecentActivity: [...(overrides.toolRecentActivity ?? activity.toolRecentActivity)],
+		recentActivity: [...(overrides.recentActivity ?? activity.recentActivity)],
+		stateDeltas: [...(overrides.stateDeltas ?? activity.stateDeltas)],
+	};
+}
+
+function createLiveRoleActivity(role: string, startedAt = nowMs()): LiveRoleActivity {
+	const currentAction = "Starting role subprocess";
+	return {
+		role,
+		status: "running",
+		currentAction,
+		toolActivity: currentAction,
+		toolRecentActivity: [currentAction],
+		recentActivity: [currentAction],
+		stateDeltas: [],
+		startedAt,
+		updatedAt: startedAt,
+	};
+}
+
+type RoleMessage = {
+	role: string;
+	content: Array<{ type: string; text?: string }>;
+};
+
+function activityTimestampMs(event: JsonRecord | undefined): number | undefined {
+	return asNumber(event?.updatedAt) ?? asNumber(event?.timestampMs) ?? asNumber(event?.timestamp) ?? asNumber(event?.at);
+}
+
+function asRoleMessage(value: unknown): RoleMessage | undefined {
+	if (!isRecord(value)) return undefined;
+	const role = asString(value.role);
+	const content = Array.isArray(value.content)
+		? value.content.flatMap((item) => {
+				if (!isRecord(item)) return [];
+				const type = asString(item.type);
+				if (!type) return [];
+				return [{ type, text: asString(item.text) }];
+		  })
+		: [];
+	if (!role) return undefined;
+	return { role, content };
+}
+
+function applyAssistantTextToLiveRoleActivity(activity: LiveRoleActivity, text: string, activityAt = nowMs()): boolean {
+	if (!text) return false;
+	activity.lastAssistantText = text;
+	const parsed = parseStructuredProgress(text);
+	if (parsed.progress) activity.progress = parsed.progress;
+	if (parsed.rationale) activity.rationale = parsed.rationale;
+	if (parsed.nextStep) activity.nextStep = parsed.nextStep;
+	if (parsed.verifying) activity.verifying = parsed.verifying;
+	if (parsed.stateDeltas.length > 0) activity.stateDeltas = parsed.stateDeltas;
+	const preview = truncateInline(text, 140);
+	activity.assistantSummary = activity.progress ?? activity.verifying ?? preview;
+	activity.currentAction = activity.assistantSummary;
+	if (activity.assistantSummary) activity.recentActivity = pushRecentActivity(activity.recentActivity, `assistant: ${activity.assistantSummary}`);
+	activity.updatedAt = activityAt;
+	return true;
+}
+
+function applyLiveRoleEvent(activity: LiveRoleActivity, event: JsonRecord, messages: RoleMessage[]): boolean {
+	const eventType = asString(event.type);
+	if (!eventType) return false;
+	const activityAt = activityTimestampMs(event) ?? nowMs();
+	if (eventType === "tool_execution_start") {
+		const toolName = asString(event.toolName) ?? "tool";
+		const toolArgs = isRecord(event.args) ? event.args : isRecord(event.input) ? event.input : {};
+		activity.toolActivity = formatToolActivity(toolName, toolArgs);
+		activity.currentAction = activity.toolActivity;
+		activity.toolRecentActivity = pushRecentActivity(activity.toolRecentActivity, activity.toolActivity, 6);
+		activity.recentActivity = pushRecentActivity(activity.recentActivity, activity.toolActivity);
+		activity.updatedAt = activityAt;
+		return true;
+	}
+	if (eventType === "tool_execution_end" || eventType === "tool_result_end") {
+		activity.updatedAt = activityAt;
+		return true;
+	}
+	if ((eventType === "message_update" || eventType === "message_end") && isRecord(event.message)) {
+		const message = asRoleMessage(event.message);
+		if (message && eventType === "message_end") messages.push(message);
+		const nextOutput = message ? lastAssistantText(eventType === "message_end" ? messages : [message]) : "";
+		if (nextOutput) return applyAssistantTextToLiveRoleActivity(activity, nextOutput, activityAt);
+		activity.updatedAt = activityAt;
+		return true;
+	}
+	return false;
+}
+
 function maybeInjectTestLiveRoleActivity(rootKey: string): void {
 	const raw = asString(process.env.PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON);
 	if (!raw) return;
@@ -940,6 +1035,34 @@ function maybeInjectTestLiveRoleActivity(rootKey: string): void {
 		});
 	} catch {
 		// ignore malformed test override
+	}
+}
+
+function maybeReplayTestLiveRoleEvents(rootKey: string): void {
+	const raw = asString(process.env.PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON);
+	if (!raw) return;
+	try {
+		const parsed = JSON.parse(raw);
+		let role = "completion-implementer";
+		let status: LiveRoleActivity["status"] = "running";
+		let startedAt = nowMs();
+		let events: JsonRecord[] = [];
+		if (Array.isArray(parsed)) {
+			events = parsed.filter(isRecord);
+		} else if (isRecord(parsed)) {
+			role = asString(parsed.role) ?? role;
+			status = asString(parsed.status) === "ok" ? "ok" : asString(parsed.status) === "error" ? "error" : "running";
+			startedAt = asNumber(parsed.startedAt) ?? asNumber(parsed.started_at) ?? startedAt;
+			events = Array.isArray(parsed.events) ? parsed.events.filter(isRecord) : [];
+		} else {
+			return;
+		}
+		const activity = createLiveRoleActivity(role, startedAt);
+		const messages: RoleMessage[] = [];
+		for (const event of events) applyLiveRoleEvent(activity, event, messages);
+		liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(activity, { status }));
+	} catch {
+		// ignore malformed event stream override
 	}
 }
 
@@ -1043,6 +1166,7 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
 	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
 	maybeInjectTestLiveRoleActivity(rootKey);
+	maybeReplayTestLiveRoleEvents(rootKey);
 	const surface = buildCompletionStatusSurface(snapshot, liveRoleActivityByRoot.get(rootKey));
 	await writeCompletionStatusProbe(surface);
 	if (!getCtxHasUI(ctx)) return;
@@ -1649,60 +1773,32 @@ export default function completionExtension(pi: ExtensionAPI) {
 			args.push(prompt);
 
 			const invocation = getPiInvocation(args);
-			const messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }> = [];
 			let stderr = "";
-			let latestOutput = "";
-			let currentAction = "Starting role subprocess";
-			let toolActivity = currentAction;
-			let toolRecentActivity: string[] = [toolActivity];
-			let recentActivity: string[] = [currentAction];
-			let assistantSummary: string | undefined;
-			let progress: string | undefined;
-			let rationale: string | undefined;
-			let nextStep: string | undefined;
-			let verifying: string | undefined;
-			let stateDeltas: string[] = [];
-			const startedAt = nowMs();
-			let updatedAt = startedAt;
+			const messages: RoleMessage[] = [];
+			const liveActivity = createLiveRoleActivity(role);
 			const emitRunningUpdate = (freshActivity = false) => {
-				if (freshActivity) updatedAt = nowMs();
+				if (freshActivity) liveActivity.updatedAt = nowMs();
 				const details: RunningDetails = {
 					role,
 					status: "running",
-					currentAction,
-					toolActivity,
-					toolRecentActivity,
-					recentActivity,
-					assistantSummary,
-					lastAssistantText: latestOutput || undefined,
-					progress,
-					rationale,
-					nextStep,
-					verifying,
-					stateDeltas,
-					startedAt,
-					updatedAt,
+					currentAction: liveActivity.currentAction,
+					toolActivity: liveActivity.toolActivity,
+					toolRecentActivity: liveActivity.toolRecentActivity,
+					recentActivity: liveActivity.recentActivity,
+					assistantSummary: liveActivity.assistantSummary,
+					lastAssistantText: liveActivity.lastAssistantText,
+					progress: liveActivity.progress,
+					rationale: liveActivity.rationale,
+					nextStep: liveActivity.nextStep,
+					verifying: liveActivity.verifying,
+					stateDeltas: liveActivity.stateDeltas,
+					startedAt: liveActivity.startedAt,
+					updatedAt: liveActivity.updatedAt,
 				};
-				liveRoleActivityByRoot.set(rootKey, {
-					role,
-					status: "running",
-					currentAction,
-					toolActivity,
-					toolRecentActivity,
-					recentActivity,
-					assistantSummary,
-					lastAssistantText: latestOutput || undefined,
-					progress,
-					rationale,
-					nextStep,
-					verifying,
-					stateDeltas,
-					startedAt,
-					updatedAt,
-				});
+				liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: "running" }));
 				void refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				onUpdate?.({
-					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
+					content: [{ type: "text", text: liveActivity.lastAssistantText || liveActivity.currentAction || `Running ${role}...` }],
 					details,
 				});
 			};
@@ -1719,58 +1815,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 					});
 					let buffer = "";
 
-					const processAssistantText = (text: string) => {
-						if (!text) return;
-						latestOutput = text;
-						const parsed = parseStructuredProgress(text);
-						if (parsed.progress) progress = parsed.progress;
-						if (parsed.rationale) rationale = parsed.rationale;
-						if (parsed.nextStep) nextStep = parsed.nextStep;
-						if (parsed.verifying) verifying = parsed.verifying;
-						if (parsed.stateDeltas.length > 0) stateDeltas = parsed.stateDeltas;
-						const preview = truncateInline(text, 140);
-						assistantSummary = progress ?? verifying ?? preview;
-						currentAction = assistantSummary;
-						recentActivity = pushRecentActivity(recentActivity, `assistant: ${assistantSummary}`);
-					};
-
 					const processLine = (line: string) => {
 						if (!line.trim()) return;
 						try {
 							const event = JSON.parse(line) as JsonRecord;
-							const eventType = asString(event.type);
-							if (eventType === "tool_execution_start") {
-								const toolName = asString(event.toolName) ?? "tool";
-								const toolArgs = isRecord(event.args) ? event.args : isRecord(event.input) ? event.input : {};
-								toolActivity = formatToolActivity(toolName, toolArgs);
-								currentAction = toolActivity;
-								toolRecentActivity = pushRecentActivity(toolRecentActivity, toolActivity, 6);
-								recentActivity = pushRecentActivity(recentActivity, toolActivity);
-								emitRunningUpdate(true);
-								return;
-							}
-							if (eventType === "tool_execution_end") {
-								emitRunningUpdate(true);
-								return;
-							}
-							if (eventType === "message_update" && isRecord(event.message)) {
-								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
-								const nextOutput = lastAssistantText([message]);
-								if (nextOutput) processAssistantText(nextOutput);
-								emitRunningUpdate(true);
-								return;
-							}
-							if (eventType === "message_end" && isRecord(event.message)) {
-								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
-								messages.push(message);
-								const nextOutput = lastAssistantText(messages);
-								if (nextOutput) processAssistantText(nextOutput);
-								emitRunningUpdate(true);
-								return;
-							}
-							if (eventType === "tool_result_end" && isRecord(event.message)) {
-								emitRunningUpdate(true);
-							}
+							if (applyLiveRoleEvent(liveActivity, event, messages)) emitRunningUpdate(true);
 						} catch {
 							// ignore malformed lines
 						}
@@ -1801,7 +1850,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					}
 				});
 
-				const output = latestOutput || stderr.trim() || `${role} finished with no text output.`;
+				const output = liveActivity.lastAssistantText || stderr.trim() || `${role} finished with no text output.`;
 				const reportFields = parseReportFields(output);
 				const transcription = exitCode === 0 ? await transcribeRoleOutput(role, runCwd, output, reportFields) : undefined;
 				if (transcription?.appended.length) {
@@ -1810,23 +1859,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				if (transcription?.errors.length) {
 					emitCommandText(ctx, `Completion transcription warning: ${transcription.errors.join(" | ")}`, "warning");
 				}
-				liveRoleActivityByRoot.set(rootKey, {
-					role,
-					status: exitCode === 0 ? "ok" : "error",
-					currentAction,
-					toolActivity,
-					toolRecentActivity,
-					recentActivity,
-					assistantSummary,
-					lastAssistantText: latestOutput || undefined,
-					progress,
-					rationale,
-					nextStep,
-					verifying,
-					stateDeltas,
-					startedAt,
-					updatedAt,
-				});
+				liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: exitCode === 0 ? "ok" : "error" }));
 				await refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				return {
 					content: [{ type: "text", text: output }],
@@ -1837,19 +1870,19 @@ export default function completionExtension(pi: ExtensionAPI) {
 						stderr: stderr.trim(),
 						reportFields,
 						transcription,
-						currentAction,
-						toolActivity,
-						toolRecentActivity,
-						recentActivity,
-						assistantSummary,
-						lastAssistantText: latestOutput || undefined,
-						progress,
-						rationale,
-						nextStep,
-						verifying,
-						stateDeltas,
-						startedAt,
-						updatedAt,
+						currentAction: liveActivity.currentAction,
+						toolActivity: liveActivity.toolActivity,
+						toolRecentActivity: liveActivity.toolRecentActivity,
+						recentActivity: liveActivity.recentActivity,
+						assistantSummary: liveActivity.assistantSummary,
+						lastAssistantText: liveActivity.lastAssistantText,
+						progress: liveActivity.progress,
+						rationale: liveActivity.rationale,
+						nextStep: liveActivity.nextStep,
+						verifying: liveActivity.verifying,
+						stateDeltas: liveActivity.stateDeltas,
+						startedAt: liveActivity.startedAt,
+						updatedAt: liveActivity.updatedAt,
 					},
 					isError: exitCode !== 0,
 				};
