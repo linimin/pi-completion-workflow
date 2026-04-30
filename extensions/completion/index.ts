@@ -69,7 +69,10 @@ type LiveRoleActivity = {
 	role: string;
 	status: "running" | "ok" | "error";
 	currentAction?: string;
+	toolActivity?: string;
+	toolRecentActivity: string[];
 	recentActivity: string[];
+	assistantSummary?: string;
 	lastAssistantText?: string;
 	progress?: string;
 	rationale?: string;
@@ -93,9 +96,22 @@ type CompletionStatusSurface = {
 	remainingStopJudgeCount?: number;
 	activeRole?: string;
 	livePreview?: string;
+	liveState?: "active" | "waiting" | "stalled";
+	liveIdleMs?: number;
+	liveToolActivity?: string;
+	liveAssistantSummary?: string;
+	liveProgress?: string;
+	liveRationale?: string;
+	liveNextStep?: string;
+	liveVerifying?: string;
+	liveStateDeltas?: string[];
+	liveDetailsLines?: string[];
 };
 
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
+const LIVE_ROLE_WAITING_MS = 15_000;
+const LIVE_ROLE_STALLED_MS = 45_000;
+const LIVE_ROLE_HEARTBEAT_MS = 5_000;
 
 function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -846,9 +862,45 @@ function completionRemainingSummary(surface: {
 	].join(" · ");
 }
 
+function envNumber(name: string): number | undefined {
+	const raw = asString(process.env[name]);
+	if (!raw) return undefined;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function nowMs(): number {
+	return envNumber("PI_COMPLETION_TEST_NOW") ?? Date.now();
+}
+
+type LiveActivitySignal = {
+	state: "active" | "waiting" | "stalled";
+	idleMs: number;
+};
+
+function liveActivitySignal(activity: { status?: string; startedAt?: number; updatedAt?: number } | undefined): LiveActivitySignal | undefined {
+	if (!activity || activity.status !== "running") return undefined;
+	const anchor = activity.updatedAt ?? activity.startedAt;
+	if (anchor === undefined) return undefined;
+	const idleMs = Math.max(0, nowMs() - anchor);
+	return {
+		state: idleMs >= LIVE_ROLE_STALLED_MS ? "stalled" : idleMs >= LIVE_ROLE_WAITING_MS ? "waiting" : "active",
+		idleMs,
+	};
+}
+
+function formatLiveActivitySignal(signal: LiveActivitySignal | undefined): string | undefined {
+	if (!signal) return undefined;
+	if (signal.state === "active") return "activity: active";
+	return `activity: ${signal.state} (${formatElapsed(signal.idleMs)} since update)`;
+}
+
 function livePreviewForStatus(activity: LiveRoleActivity | undefined): string | undefined {
 	if (!activity || activity.status !== "running") return undefined;
-	return truncateInline(activity.progress ?? activity.verifying ?? activity.currentAction ?? activity.lastAssistantText ?? "", 120) || undefined;
+	return truncateInline(
+		activity.progress ?? activity.verifying ?? activity.toolActivity ?? activity.assistantSummary ?? activity.currentAction ?? activity.lastAssistantText ?? "",
+		120,
+	) || undefined;
 }
 
 function completionRootKey(snapshot: CompletionStateSnapshot | undefined, cwd: string): string {
@@ -862,19 +914,29 @@ function maybeInjectTestLiveRoleActivity(rootKey: string): void {
 		const parsed = JSON.parse(raw);
 		if (!isRecord(parsed)) return;
 		const currentAction = asString(parsed.currentAction);
+		const recentActivity = asStringArray(parsed.recentActivity).length > 0 ? asStringArray(parsed.recentActivity) : currentAction ? [currentAction] : [];
+		const toolActivity =
+			asString(parsed.toolActivity) ??
+			(currentAction && !currentAction.startsWith("assistant:") && !currentAction.startsWith("progress:") ? currentAction : undefined);
+		const assistantSummary =
+			asString(parsed.assistantSummary) ??
+			(currentAction?.startsWith("assistant:") ? currentAction.slice("assistant:".length).trim() : undefined);
 		liveRoleActivityByRoot.set(rootKey, {
 			role: asString(parsed.role) ?? "completion-implementer",
 			status: asString(parsed.status) === "ok" ? "ok" : asString(parsed.status) === "error" ? "error" : "running",
 			currentAction,
-			recentActivity: asStringArray(parsed.recentActivity).length > 0 ? asStringArray(parsed.recentActivity) : currentAction ? [currentAction] : [],
+			toolActivity,
+			toolRecentActivity: asStringArray(parsed.toolRecentActivity).length > 0 ? asStringArray(parsed.toolRecentActivity) : toolActivity ? [toolActivity] : [],
+			recentActivity,
+			assistantSummary,
 			lastAssistantText: asString(parsed.lastAssistantText),
 			progress: asString(parsed.progress),
 			rationale: asString(parsed.rationale),
 			nextStep: asString(parsed.nextStep),
 			verifying: asString(parsed.verifying),
 			stateDeltas: asStringArray(parsed.stateDeltas),
-			startedAt: asNumber(parsed.startedAt) ?? Date.now(),
-			updatedAt: asNumber(parsed.updatedAt) ?? Date.now(),
+			startedAt: asNumber(parsed.startedAt) ?? nowMs(),
+			updatedAt: asNumber(parsed.updatedAt) ?? nowMs(),
 		});
 	} catch {
 		// ignore malformed test override
@@ -895,7 +957,25 @@ function buildCompletionStatusSurface(
 	const highValueGapCount = asNumber(snapshot.state?.remaining_high_value_gaps) ?? 0;
 	const remainingStopJudgeCount = asNumber(snapshot.state?.remaining_stop_judges) ?? 0;
 	const activeRole = liveActivity?.status === "running" ? liveActivity.role : undefined;
+	const liveSignal = liveActivitySignal(liveActivity);
 	const livePreview = livePreviewForStatus(liveActivity);
+	const liveDetailsLines = activeRole
+		? buildInlineRunningLines({
+				role: activeRole,
+				currentAction: liveActivity?.currentAction,
+				toolActivity: liveActivity?.toolActivity,
+				toolRecentActivity: liveActivity?.toolRecentActivity,
+				recentActivity: liveActivity?.recentActivity,
+				assistantSummary: liveActivity?.assistantSummary,
+				progress: liveActivity?.progress,
+				rationale: liveActivity?.rationale,
+				nextStep: liveActivity?.nextStep,
+				verifying: liveActivity?.verifying,
+				stateDeltas: liveActivity?.stateDeltas,
+				startedAt: liveActivity?.startedAt,
+				updatedAt: liveActivity?.updatedAt,
+		  })
+		: [];
 	const remainingSummary = completionRemainingSummary({
 		remainingContractCount,
 		releaseBlockerCount,
@@ -909,7 +989,10 @@ function buildCompletionStatusSurface(
 		`remaining ${remainingContractCount}c/${releaseBlockerCount}b/${highValueGapCount}g/${remainingStopJudgeCount}j`,
 	];
 	if (activeRole) {
-		statusSegments.splice(2, 0, `running ${activeRole}${livePreview ? ` — ${livePreview}` : ""}`);
+		const runningSegment = [`running ${activeRole}`];
+		if (liveSignal && liveSignal.state !== "active") runningSegment.push(`(${liveSignal.state})`);
+		if (livePreview) runningSegment.push(`— ${livePreview}`);
+		statusSegments.splice(2, 0, runningSegment.join(" "));
 	}
 	const widgetLines = [
 		"completion workflow",
@@ -921,7 +1004,7 @@ function buildCompletionStatusSurface(
 	];
 	if (activeRole) {
 		widgetLines.push(`active role: ${activeRole}`);
-		if (livePreview) widgetLines.push(`live: ${livePreview}`);
+		for (const line of liveDetailsLines.slice(1)) widgetLines.push(line);
 	}
 	return {
 		snapshotPresent: true,
@@ -936,6 +1019,16 @@ function buildCompletionStatusSurface(
 		remainingStopJudgeCount,
 		activeRole,
 		livePreview,
+		liveState: liveSignal?.state,
+		liveIdleMs: liveSignal?.idleMs,
+		liveToolActivity: liveActivity?.toolActivity,
+		liveAssistantSummary: liveActivity?.assistantSummary,
+		liveProgress: liveActivity?.progress,
+		liveRationale: liveActivity?.rationale,
+		liveNextStep: liveActivity?.nextStep,
+		liveVerifying: liveActivity?.verifying,
+		liveStateDeltas: liveActivity?.stateDeltas ?? [],
+		liveDetailsLines,
 	};
 }
 
@@ -1067,27 +1160,43 @@ function collapseRecentActivity(items: string[], maxItems = 4): string[] {
 function buildInlineRunningLines(details: {
 	role?: string;
 	startedAt?: number;
+	updatedAt?: number;
 	currentAction?: string;
+	toolActivity?: string;
+	toolRecentActivity?: string[];
+	recentActivity?: string[];
+	assistantSummary?: string;
 	progress?: string;
 	rationale?: string;
 	nextStep?: string;
 	verifying?: string;
-	recentActivity?: string[];
+	stateDeltas?: string[];
 }): string[] {
 	const lines: string[] = [];
 	let header = "running completion role";
 	if (details.role) header += ` ${details.role}`;
 	lines.push(header);
-	if (details.startedAt) lines.push(`elapsed: ${formatElapsed(Date.now() - details.startedAt)}`);
+	if (details.startedAt !== undefined) lines.push(`elapsed: ${formatElapsed(nowMs() - details.startedAt)}`);
+	const signalLine = formatLiveActivitySignal(
+		liveActivitySignal({ status: "running", startedAt: details.startedAt, updatedAt: details.updatedAt }),
+	);
+	if (signalLine) lines.push(signalLine);
+	const toolLine = details.toolActivity;
+	if (toolLine) lines.push(`tool: ${toolLine}`);
 	if (details.progress) lines.push(`progress: ${details.progress}`);
-	else if (details.currentAction) lines.push(`progress: ${details.currentAction}`);
+	else if (details.assistantSummary) lines.push(`assistant: ${details.assistantSummary}`);
+	else if (details.currentAction && details.currentAction !== toolLine) {
+		lines.push(`assistant: ${details.currentAction.replace(/^assistant:\s*/, "")}`);
+	}
 	if (details.rationale) lines.push(`rationale: ${details.rationale}`);
 	if (details.nextStep) lines.push(`next: ${details.nextStep}`);
 	if (details.verifying) lines.push(`verifying: ${details.verifying}`);
-	const recent = collapseRecentActivity(details.recentActivity ?? []);
-	if (recent.length > 0) {
-		lines.push("recent:");
-		for (const item of recent) lines.push(`- ${item}`);
+	for (const delta of (details.stateDeltas ?? []).slice(-4)) lines.push(`state-delta: ${delta}`);
+	const recentTools = collapseRecentActivity(details.toolRecentActivity ?? details.recentActivity ?? []);
+	const recentWithoutCurrent = recentTools.filter((item) => item !== toolLine);
+	if (recentWithoutCurrent.length > 0) {
+		lines.push("recent tools:");
+		for (const item of recentWithoutCurrent) lines.push(`- ${item}`);
 	}
 	return lines;
 }
@@ -1505,7 +1614,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 				role: string;
 				status: "running" | "ok" | "error";
 				currentAction?: string;
+				toolActivity?: string;
+				toolRecentActivity?: string[];
 				recentActivity?: string[];
+				assistantSummary?: string;
 				lastAssistantText?: string;
 				progress?: string;
 				rationale?: string;
@@ -1513,6 +1625,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				verifying?: string;
 				stateDeltas?: string[];
 				startedAt?: number;
+				updatedAt?: number;
 				stderr?: string;
 				reportFields?: Record<string, string>;
 				transcription?: TranscriptionResult;
@@ -1540,19 +1653,27 @@ export default function completionExtension(pi: ExtensionAPI) {
 			let stderr = "";
 			let latestOutput = "";
 			let currentAction = "Starting role subprocess";
+			let toolActivity = currentAction;
+			let toolRecentActivity: string[] = [toolActivity];
 			let recentActivity: string[] = [currentAction];
+			let assistantSummary: string | undefined;
 			let progress: string | undefined;
 			let rationale: string | undefined;
 			let nextStep: string | undefined;
 			let verifying: string | undefined;
 			let stateDeltas: string[] = [];
-			const startedAt = Date.now();
-			const emitRunningUpdate = () => {
+			const startedAt = nowMs();
+			let updatedAt = startedAt;
+			const emitRunningUpdate = (freshActivity = false) => {
+				if (freshActivity) updatedAt = nowMs();
 				const details: RunningDetails = {
 					role,
 					status: "running",
 					currentAction,
+					toolActivity,
+					toolRecentActivity,
 					recentActivity,
+					assistantSummary,
 					lastAssistantText: latestOutput || undefined,
 					progress,
 					rationale,
@@ -1560,12 +1681,16 @@ export default function completionExtension(pi: ExtensionAPI) {
 					verifying,
 					stateDeltas,
 					startedAt,
+					updatedAt,
 				};
 				liveRoleActivityByRoot.set(rootKey, {
 					role,
 					status: "running",
 					currentAction,
+					toolActivity,
+					toolRecentActivity,
 					recentActivity,
+					assistantSummary,
 					lastAssistantText: latestOutput || undefined,
 					progress,
 					rationale,
@@ -1573,7 +1698,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					verifying,
 					stateDeltas,
 					startedAt,
-					updatedAt: Date.now(),
+					updatedAt,
 				});
 				void refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				onUpdate?.({
@@ -1581,7 +1706,8 @@ export default function completionExtension(pi: ExtensionAPI) {
 					details,
 				});
 			};
-			emitRunningUpdate();
+			emitRunningUpdate(true);
+			const heartbeat = setInterval(() => emitRunningUpdate(false), LIVE_ROLE_HEARTBEAT_MS);
 
 			try {
 				const exitCode = await new Promise<number>((resolve) => {
@@ -1603,8 +1729,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 						if (parsed.verifying) verifying = parsed.verifying;
 						if (parsed.stateDeltas.length > 0) stateDeltas = parsed.stateDeltas;
 						const preview = truncateInline(text, 140);
-						currentAction = progress ?? verifying ?? `assistant: ${preview}`;
-						recentActivity = pushRecentActivity(recentActivity, currentAction);
+						assistantSummary = progress ?? verifying ?? preview;
+						currentAction = assistantSummary;
+						recentActivity = pushRecentActivity(recentActivity, `assistant: ${assistantSummary}`);
 					};
 
 					const processLine = (line: string) => {
@@ -1615,20 +1742,22 @@ export default function completionExtension(pi: ExtensionAPI) {
 							if (eventType === "tool_execution_start") {
 								const toolName = asString(event.toolName) ?? "tool";
 								const toolArgs = isRecord(event.args) ? event.args : isRecord(event.input) ? event.input : {};
-								currentAction = formatToolActivity(toolName, toolArgs);
-								recentActivity = pushRecentActivity(recentActivity, currentAction);
-								emitRunningUpdate();
+								toolActivity = formatToolActivity(toolName, toolArgs);
+								currentAction = toolActivity;
+								toolRecentActivity = pushRecentActivity(toolRecentActivity, toolActivity, 6);
+								recentActivity = pushRecentActivity(recentActivity, toolActivity);
+								emitRunningUpdate(true);
 								return;
 							}
 							if (eventType === "tool_execution_end") {
-								emitRunningUpdate();
+								emitRunningUpdate(true);
 								return;
 							}
 							if (eventType === "message_update" && isRecord(event.message)) {
 								const message = event.message as unknown as { role: string; content: Array<{ type: string; text?: string }> };
 								const nextOutput = lastAssistantText([message]);
 								if (nextOutput) processAssistantText(nextOutput);
-								emitRunningUpdate();
+								emitRunningUpdate(true);
 								return;
 							}
 							if (eventType === "message_end" && isRecord(event.message)) {
@@ -1636,11 +1765,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 								messages.push(message);
 								const nextOutput = lastAssistantText(messages);
 								if (nextOutput) processAssistantText(nextOutput);
-								emitRunningUpdate();
+								emitRunningUpdate(true);
 								return;
 							}
 							if (eventType === "tool_result_end" && isRecord(event.message)) {
-								emitRunningUpdate();
+								emitRunningUpdate(true);
 							}
 						} catch {
 							// ignore malformed lines
@@ -1685,7 +1814,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 					role,
 					status: exitCode === 0 ? "ok" : "error",
 					currentAction,
+					toolActivity,
+					toolRecentActivity,
 					recentActivity,
+					assistantSummary,
 					lastAssistantText: latestOutput || undefined,
 					progress,
 					rationale,
@@ -1693,7 +1825,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					verifying,
 					stateDeltas,
 					startedAt,
-					updatedAt: Date.now(),
+					updatedAt,
 				});
 				await refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				return {
@@ -1706,7 +1838,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 						reportFields,
 						transcription,
 						currentAction,
+						toolActivity,
+						toolRecentActivity,
 						recentActivity,
+						assistantSummary,
 						lastAssistantText: latestOutput || undefined,
 						progress,
 						rationale,
@@ -1714,10 +1849,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 						verifying,
 						stateDeltas,
 						startedAt,
+						updatedAt,
 					},
 					isError: exitCode !== 0,
 				};
 			} finally {
+				clearInterval(heartbeat);
 				setTimeout(() => {
 					const current = liveRoleActivityByRoot.get(rootKey);
 					if (current && current.role === role && current.status !== "running") {
@@ -1745,7 +1882,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 				reportFields?: Record<string, string>;
 				transcription?: TranscriptionResult;
 				currentAction?: string;
+				toolActivity?: string;
+				toolRecentActivity?: string[];
 				recentActivity?: string[];
+				assistantSummary?: string;
 				lastAssistantText?: string;
 				progress?: string;
 				rationale?: string;
@@ -1753,6 +1893,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				verifying?: string;
 				stateDeltas?: string[];
 				startedAt?: number;
+				updatedAt?: number;
 			};
 			if (isPartial) {
 				const lines = buildInlineRunningLines(details);
@@ -1765,11 +1906,15 @@ export default function completionExtension(pi: ExtensionAPI) {
 						if (rest.length > 0) text += ` ${theme.fg("accent", rest.join(" "))}`;
 						continue;
 					}
-					if (line.startsWith("progress:")) {
+					if (line.startsWith("tool:") || line.startsWith("progress:")) {
 						text += theme.fg("toolOutput", line);
 						continue;
 					}
-					if (line === "recent:") {
+					if (line.startsWith("activity:")) {
+						text += theme.fg(line.includes("stalled") ? "warning" : "dim", line);
+						continue;
+					}
+					if (line === "recent tools:") {
 						text += theme.fg("dim", line);
 						continue;
 					}
@@ -1784,8 +1929,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const role = details.role ?? "completion-role";
 			const ok = details.status === "ok" && !result.isError;
 			let text = `${theme.fg(ok ? "success" : "error", ok ? "done" : "error")} ${theme.fg("toolTitle", theme.bold(role))}`;
-			if (details.startedAt) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(Date.now() - details.startedAt)}`)}`;
+			if (details.startedAt !== undefined) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(nowMs() - details.startedAt)}`)}`;
+			if (details.toolActivity) text += `\n${theme.fg("toolOutput", `tool: ${details.toolActivity}`)}`;
 			if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
+			else if (details.assistantSummary) text += `\n${theme.fg("dim", `assistant: ${details.assistantSummary}`)}`;
 			if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
 			if (details.nextStep) text += `\n${theme.fg("dim", `next: ${details.nextStep}`)}`;
 			if (details.verifying) text += `\n${theme.fg("dim", `verifying: ${details.verifying}`)}`;

@@ -45,12 +45,47 @@ elif mode == 'live':
     assert data['snapshotPresent'] is True, data
     assert data['activeRole'] == 'completion-implementer', data
     assert data['livePreview'] == 'Loading canonical completion state', data
+    assert data['liveState'] == 'active', data
+    assert data['liveToolActivity'] == 'read .agent/state.json', data
+    assert data['liveProgress'] == 'Loading canonical completion state', data
+    assert data['liveRationale'] == 'verifying selected slice handoff', data
+    assert data['liveNextStep'] == 'inspect extensions/completion/index.ts', data
+    assert data['liveVerifying'] == 'canonical slice handoff matches plan', data
+    assert data['liveStateDeltas'] == [
+        'tool activity separated from role judgment',
+        'waiting threshold uses updatedAt timestamps',
+    ], data
     status = data.get('statusText') or ''
     assert 'running completion-implementer' in status, status
     assert 'Loading canonical completion state' in status, status
     widget = data['widgetLines']
     assert 'active role: completion-implementer' in widget, widget
-    assert 'live: Loading canonical completion state' in widget, widget
+    assert 'elapsed: 00:01' in widget, widget
+    assert 'activity: active' in widget, widget
+    assert 'tool: read .agent/state.json' in widget, widget
+    assert 'progress: Loading canonical completion state' in widget, widget
+    assert 'rationale: verifying selected slice handoff' in widget, widget
+    assert 'next: inspect extensions/completion/index.ts' in widget, widget
+    assert 'verifying: canonical slice handoff matches plan' in widget, widget
+    assert 'state-delta: tool activity separated from role judgment' in widget, widget
+    assert 'state-delta: waiting threshold uses updatedAt timestamps' in widget, widget
+    live_details = data['liveDetailsLines']
+    assert live_details[0] == 'running completion role completion-implementer', live_details
+    assert 'tool: read .agent/state.json' in live_details, live_details
+elif mode == 'waiting':
+    assert data['liveState'] == 'waiting', data
+    assert data['liveIdleMs'] == 20000, data
+    status = data.get('statusText') or ''
+    assert '(waiting)' in status, status
+    widget = data['widgetLines']
+    assert 'activity: waiting (00:20 since update)' in widget, widget
+elif mode == 'stalled':
+    assert data['liveState'] == 'stalled', data
+    assert data['liveIdleMs'] == 46000, data
+    status = data.get('statusText') or ''
+    assert '(stalled)' in status, status
+    widget = data['widgetLines']
+    assert 'activity: stalled (00:46 since update)' in widget, widget
 else:
     raise AssertionError(f'unknown assertion mode: {mode}')
 PY
@@ -63,7 +98,7 @@ git init -q
 NO_SNAPSHOT_JSON="$TMPDIR/no-snapshot-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$NO_SNAPSHOT_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >/tmp/pi-completion-status-none.out 2>/tmp/pi-completion-status-none.err || true
+pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-none.out" 2>"$TMPDIR/pi-completion-status-none.err" || true
 assert_status_json "$NO_SNAPSHOT_JSON" none
 
 FIXTURE_ROOT="$TMPDIR/fixture"
@@ -159,14 +194,33 @@ JSON
 STATIC_JSON="$TMPDIR/static-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STATIC_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >/tmp/pi-completion-status-static.out 2>/tmp/pi-completion-status-static.err
+pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-static.out" 2>"$TMPDIR/pi-completion-status-static.err"
 assert_status_json "$STATIC_JSON" static
+
+LIVE_ACTIVITY_JSON='{"role":"completion-implementer","status":"running","progress":"Loading canonical completion state","toolActivity":"read .agent/state.json","toolRecentActivity":["Starting role subprocess","read .agent/state.json"],"recentActivity":["Starting role subprocess","read .agent/state.json","assistant: Loading canonical completion state"],"assistantSummary":"Loading canonical completion state","rationale":"verifying selected slice handoff","nextStep":"inspect extensions/completion/index.ts","verifying":"canonical slice handoff matches plan","stateDeltas":["tool activity separated from role judgment","waiting threshold uses updatedAt timestamps"],"startedAt":1000,"updatedAt":2000}'
 
 LIVE_JSON="$TMPDIR/live-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$LIVE_JSON" \
-PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON='{"role":"completion-implementer","status":"running","progress":"Loading canonical completion state","currentAction":"read .agent/state.json","recentActivity":["Starting role subprocess","read .agent/state.json"],"startedAt":1000,"updatedAt":2000}' \
-pi -e "$PKG_ROOT" -p "/complete" >/tmp/pi-completion-status-live.out 2>/tmp/pi-completion-status-live.err
+PI_COMPLETION_TEST_NOW=2500 \
+PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-live.out" 2>"$TMPDIR/pi-completion-status-live.err"
 assert_status_json "$LIVE_JSON" live
+
+WAITING_JSON="$TMPDIR/waiting-status.json"
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_STATUS_SNAPSHOT_FILE="$WAITING_JSON" \
+PI_COMPLETION_TEST_NOW=22000 \
+PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-waiting.out" 2>"$TMPDIR/pi-completion-status-waiting.err"
+assert_status_json "$WAITING_JSON" waiting
+
+STALLED_JSON="$TMPDIR/stalled-status.json"
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STALLED_JSON" \
+PI_COMPLETION_TEST_NOW=48000 \
+PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON="$LIVE_ACTIVITY_JSON" \
+pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-stalled.out" 2>"$TMPDIR/pi-completion-status-stalled.err"
+assert_status_json "$STALLED_JSON" stalled
 
 echo "observability status test passed: $TMPDIR"
