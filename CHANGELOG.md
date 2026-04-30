@@ -4,7 +4,8 @@
 
 ### Changed
 
-- removed the remaining completion UI status surfaces, including the compact status line
+- restored the persistent completion status line/widget from canonical `.agent/**` state and live role activity
+- added deterministic observability status regression coverage to the release-check path
 
 ## 0.1.18
 
