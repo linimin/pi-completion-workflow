@@ -80,6 +80,21 @@ type LiveRoleActivity = {
 	updatedAt: number;
 };
 
+type CompletionStatusSurface = {
+	snapshotPresent: boolean;
+	statusText?: string;
+	widgetLines: string[];
+	currentPhase?: string;
+	sliceId?: string;
+	nextMandatoryRole?: string;
+	remainingContractCount?: number;
+	releaseBlockerCount?: number;
+	highValueGapCount?: number;
+	remainingStopJudgeCount?: number;
+	activeRole?: string;
+	livePreview?: string;
+};
+
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -813,13 +828,136 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 	return lines.join("\n");
 }
 
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+	return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function completionRemainingSummary(surface: {
+	remainingContractCount: number;
+	releaseBlockerCount: number;
+	highValueGapCount: number;
+	remainingStopJudgeCount: number;
+}): string {
+	return [
+		formatCount(surface.remainingContractCount, "contract"),
+		formatCount(surface.releaseBlockerCount, "blocker"),
+		formatCount(surface.highValueGapCount, "gap"),
+		formatCount(surface.remainingStopJudgeCount, "stop judge", "stop judges"),
+	].join(" · ");
+}
+
+function livePreviewForStatus(activity: LiveRoleActivity | undefined): string | undefined {
+	if (!activity || activity.status !== "running") return undefined;
+	return truncateInline(activity.progress ?? activity.verifying ?? activity.currentAction ?? activity.lastAssistantText ?? "", 120) || undefined;
+}
+
+function completionRootKey(snapshot: CompletionStateSnapshot | undefined, cwd: string): string {
+	return snapshot?.files.root ?? findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? path.resolve(cwd);
+}
+
+function maybeInjectTestLiveRoleActivity(rootKey: string): void {
+	const raw = asString(process.env.PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON);
+	if (!raw) return;
+	try {
+		const parsed = JSON.parse(raw);
+		if (!isRecord(parsed)) return;
+		const currentAction = asString(parsed.currentAction);
+		liveRoleActivityByRoot.set(rootKey, {
+			role: asString(parsed.role) ?? "completion-implementer",
+			status: asString(parsed.status) === "ok" ? "ok" : asString(parsed.status) === "error" ? "error" : "running",
+			currentAction,
+			recentActivity: asStringArray(parsed.recentActivity).length > 0 ? asStringArray(parsed.recentActivity) : currentAction ? [currentAction] : [],
+			lastAssistantText: asString(parsed.lastAssistantText),
+			progress: asString(parsed.progress),
+			rationale: asString(parsed.rationale),
+			nextStep: asString(parsed.nextStep),
+			verifying: asString(parsed.verifying),
+			stateDeltas: asStringArray(parsed.stateDeltas),
+			startedAt: asNumber(parsed.startedAt) ?? Date.now(),
+			updatedAt: asNumber(parsed.updatedAt) ?? Date.now(),
+		});
+	} catch {
+		// ignore malformed test override
+	}
+}
+
+function buildCompletionStatusSurface(
+	snapshot: CompletionStateSnapshot | undefined,
+	liveActivity: LiveRoleActivity | undefined,
+): CompletionStatusSurface {
+	if (!snapshot) return { snapshotPresent: false, widgetLines: [] };
+	const currentPhase = asString(snapshot.state?.current_phase) ?? "unknown";
+	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)";
+	const sliceGoal = truncateInline(asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(unknown)", 140);
+	const nextMandatoryRole = asString(snapshot.state?.next_mandatory_role) ?? "unknown";
+	const remainingContractCount = asStringArray(snapshot.state?.unsatisfied_contract_ids).length;
+	const releaseBlockerCount = asNumber(snapshot.state?.remaining_release_blockers) ?? 0;
+	const highValueGapCount = asNumber(snapshot.state?.remaining_high_value_gaps) ?? 0;
+	const remainingStopJudgeCount = asNumber(snapshot.state?.remaining_stop_judges) ?? 0;
+	const activeRole = liveActivity?.status === "running" ? liveActivity.role : undefined;
+	const livePreview = livePreviewForStatus(liveActivity);
+	const remainingSummary = completionRemainingSummary({
+		remainingContractCount,
+		releaseBlockerCount,
+		highValueGapCount,
+		remainingStopJudgeCount,
+	});
+	const statusSegments = [
+		`completion: ${currentPhase}`,
+		`slice ${sliceId}`,
+		`next ${nextMandatoryRole}`,
+		`remaining ${remainingContractCount}c/${releaseBlockerCount}b/${highValueGapCount}g/${remainingStopJudgeCount}j`,
+	];
+	if (activeRole) {
+		statusSegments.splice(2, 0, `running ${activeRole}${livePreview ? ` — ${livePreview}` : ""}`);
+	}
+	const widgetLines = [
+		"completion workflow",
+		`phase: ${currentPhase}`,
+		`slice: ${sliceId}`,
+		`goal: ${sliceGoal}`,
+		`next: ${nextMandatoryRole}`,
+		`remaining: ${remainingSummary}`,
+	];
+	if (activeRole) {
+		widgetLines.push(`active role: ${activeRole}`);
+		if (livePreview) widgetLines.push(`live: ${livePreview}`);
+	}
+	return {
+		snapshotPresent: true,
+		statusText: statusSegments.join(" · "),
+		widgetLines,
+		currentPhase,
+		sliceId,
+		nextMandatoryRole,
+		remainingContractCount,
+		releaseBlockerCount,
+		highValueGapCount,
+		remainingStopJudgeCount,
+		activeRole,
+		livePreview,
+	};
+}
+
+async function writeCompletionStatusProbe(surface: CompletionStatusSurface): Promise<void> {
+	const outputPath = asString(process.env.PI_COMPLETION_STATUS_SNAPSHOT_FILE);
+	if (!outputPath) return;
+	await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+	await fsp.writeFile(outputPath, `${JSON.stringify(surface, null, 2)}\n`, "utf8");
+}
+
 async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
+	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
+	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
+	maybeInjectTestLiveRoleActivity(rootKey);
+	const surface = buildCompletionStatusSurface(snapshot, liveRoleActivityByRoot.get(rootKey));
+	await writeCompletionStatusProbe(surface);
 	if (!getCtxHasUI(ctx)) return;
 	const ui = getCtxUi(ctx);
 	if (!ui) return;
 	safeUiCall(() => {
-		ui.setStatus(COMPLETION_STATUS_KEY, "");
-		ui.setWidget(COMPLETION_STATUS_KEY, []);
+		ui.setStatus(COMPLETION_STATUS_KEY, surface.statusText);
+		ui.setWidget(COMPLETION_STATUS_KEY, surface.widgetLines.length > 0 ? surface.widgetLines : undefined);
 	});
 }
 
@@ -1437,6 +1575,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					startedAt,
 					updatedAt: Date.now(),
 				});
+				void refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				onUpdate?.({
 					content: [{ type: "text", text: latestOutput || currentAction || `Running ${role}...` }],
 					details,
@@ -1556,6 +1695,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					startedAt,
 					updatedAt: Date.now(),
 				});
+				await refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
 				return {
 					content: [{ type: "text", text: output }],
 					details: {

@@ -6,6 +6,7 @@ cd "$ROOT"
 
 npm run smoke-test
 npm run refocus-test
+npm run observability-status-test
 npm pack --dry-run >/dev/null
 
 echo "release check passed"

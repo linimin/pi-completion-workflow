@@ -18,6 +18,7 @@
   "scripts": {
     "smoke-test": "bash ./scripts/smoke-test.sh",
     "refocus-test": "bash ./scripts/refocus-test.sh",
+    "observability-status-test": "bash ./scripts/observability-status-test.sh",
     "release-check": "bash ./scripts/release-check.sh"
   },
   "engines": {

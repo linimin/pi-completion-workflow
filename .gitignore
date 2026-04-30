@@ -3,3 +3,12 @@ node_modules/
 npm-debug.log*
 .DS_Store
 .env
+
+# completion protocol
+.agent/*
+!.agent/README.md
+!.agent/mission.md
+!.agent/profile.json
+!.agent/verify_completion_stop.sh
+!.agent/verify_completion_control_plane.sh
+.agent/tmp/

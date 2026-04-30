@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "protocol_id": "completion",
+  "project_name": "pi-completion-workflow",
+  "required_stop_judges": 3,
+  "priority_policy_id": "completion-default",
+  "docs_surfaces": [
+    "README.md",
+    "CHANGELOG.md"
+  ]
+}
