@@ -90,7 +90,7 @@ git init -q
 NO_SNAPSHOT_JSON="$TMPDIR/no-snapshot-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$NO_SNAPSHOT_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-none.out" 2>"$TMPDIR/pi-completion-status-none.err" || true
+pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-none.out" 2>"$TMPDIR/pi-completion-status-none.err" || true
 assert_status_json "$NO_SNAPSHOT_JSON" none
 
 FIXTURE_ROOT="$TMPDIR/fixture"
@@ -186,7 +186,7 @@ JSON
 STATIC_JSON="$TMPDIR/static-status.json"
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STATIC_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-static.out" 2>"$TMPDIR/pi-completion-status-static.err"
+pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-static.out" 2>"$TMPDIR/pi-completion-status-static.err"
 assert_status_json "$STATIC_JSON" static
 
 LIVE_ROLE_EVENT_STREAM_JSON="$(cat <<'JSON'
@@ -223,7 +223,7 @@ PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$LIVE_JSON" \
 PI_COMPLETION_TEST_NOW=2500 \
 PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-live.out" 2>"$TMPDIR/pi-completion-status-live.err"
+pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-live.out" 2>"$TMPDIR/pi-completion-status-live.err"
 assert_status_json "$LIVE_JSON" live
 
 WAITING_JSON="$TMPDIR/waiting-status.json"
@@ -231,7 +231,7 @@ PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$WAITING_JSON" \
 PI_COMPLETION_TEST_NOW=22000 \
 PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-waiting.out" 2>"$TMPDIR/pi-completion-status-waiting.err"
+pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-waiting.out" 2>"$TMPDIR/pi-completion-status-waiting.err"
 assert_status_json "$WAITING_JSON" waiting
 
 STALLED_JSON="$TMPDIR/stalled-status.json"
@@ -239,7 +239,7 @@ PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_STATUS_SNAPSHOT_FILE="$STALLED_JSON" \
 PI_COMPLETION_TEST_NOW=48000 \
 PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
-pi -e "$PKG_ROOT" -p "/complete" >"$TMPDIR/pi-completion-status-stalled.out" 2>"$TMPDIR/pi-completion-status-stalled.err"
+pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-stalled.out" 2>"$TMPDIR/pi-completion-status-stalled.err"
 assert_status_json "$STALLED_JSON" stalled
 
 echo "observability status test passed: $TMPDIR"

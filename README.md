@@ -1,13 +1,13 @@
-# pi-completion-workflow
+# @linimin/pi-letscook
 
 Pi package for long-running coding workflows with canonical repo-local `.agent/**` state.
 
 ## What it gives you
 
-- `/complete` as the single workflow command
-- `/complete <goal>` to bootstrap or continue with an explicit goal
-- `/complete` with no goal to resume from canonical `.agent/**` state
-- `/complete <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
+- `/cook` as the single workflow command
+- `/cook <goal>` to bootstrap or continue with an explicit goal
+- `/cook` with no goal to resume from canonical `.agent/**` state
+- `/cook <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
 - always-visible completion status line plus a non-running widget sourced from canonical `.agent/**` state
@@ -22,13 +22,13 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 In a git repo, after installing the package:
 
 ```text
-/complete build feature X end-to-end with tests and docs
+/cook build feature X end-to-end with tests and docs
 ```
 
 If you stop and come back later:
 
 ```text
-/complete
+/cook
 ```
 
 ## Install
@@ -36,31 +36,31 @@ If you stop and come back later:
 ### Try temporarily from a local checkout
 
 ```bash
-pi -e /absolute/path/to/pi-completion-workflow
+pi -e /absolute/path/to/pi-letscook
 ```
 
 ### Install globally from a local checkout
 
 ```bash
-pi install /absolute/path/to/pi-completion-workflow
+pi install /absolute/path/to/pi-letscook
 ```
 
 ### Install into a project from a local checkout
 
 ```bash
-pi install -l /absolute/path/to/pi-completion-workflow
+pi install -l /absolute/path/to/pi-letscook
 ```
 
 ### Install from git after publishing
 
 ```bash
-pi install git:github.com/<YOUR-USER>/pi-completion-workflow@v0.1.0
+pi install git:github.com/<YOUR-USER>/pi-letscook@v0.1.0
 ```
 
 ### Install from npm after publishing
 
 ```bash
-pi install npm:pi-completion-workflow
+pi install npm:@linimin/pi-letscook
 ```
 
 After install, run `/reload` in pi.
@@ -70,7 +70,7 @@ After install, run `/reload` in pi.
 ### One-step start
 
 ```text
-/complete Build feature X with tests and docs
+/cook Build feature X with tests and docs
 ```
 
 This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, optionally ask you to confirm or edit it when the goal is ambiguous, re-ground canonical state, create a slice plan, and drive the workflow.
@@ -78,10 +78,10 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 ### Resume later
 
 ```text
-/complete
+/cook
 ```
 
-If canonical `.agent/**` state already exists, `/complete` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing.
+If canonical `.agent/**` state already exists, `/cook` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing.
 
 ## Canonical repo files
 

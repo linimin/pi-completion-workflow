@@ -8,7 +8,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 cd "$TMPDIR"
 git init -q
 
-pi -e "$PKG_ROOT" -p "/complete smoke-test mission" >/tmp/pi-completion-refocus-bootstrap.out 2>/tmp/pi-completion-refocus-bootstrap.err &
+pi -e "$PKG_ROOT" -p "/cook smoke-test mission" >/tmp/pi-completion-refocus-bootstrap.out 2>/tmp/pi-completion-refocus-bootstrap.err &
 PI_PID=$!
 for _ in $(seq 1 60); do
   if [[ -f .agent/profile.json && -f .agent/state.json && -f .agent/plan.json && -f .agent/active-slice.json ]]; then
@@ -36,7 +36,7 @@ PY
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/complete refocused smoke-test mission with tests and docs" \
+pi -e "$PKG_ROOT" -p "/cook refocused smoke-test mission with tests and docs" \
   >/tmp/pi-completion-refocus.out 2>/tmp/pi-completion-refocus.err
 
 python3 - <<'PY'
@@ -56,7 +56,7 @@ assert active['mission_anchor'] == new_anchor, 'active-slice.json mission_anchor
 assert state['current_phase'] == 'reground', 'state.json current_phase should reset to reground after refocus'
 assert state['requires_reground'] is True, 'state.json requires_reground should be true after refocus'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should reset to completion-regrounder'
-assert state['continuation_reason'].startswith('User refocused workflow via /complete:'), 'continuation_reason should record the refocus'
+assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the refocus'
 assert plan['plan_basis'] == 'user_refocus', 'plan.json plan_basis should be user_refocus after refocus'
 assert active['status'] == 'idle', 'active-slice.json status should reset to idle after refocus'
 PY

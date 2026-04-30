@@ -8,7 +8,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 cd "$TMPDIR"
 git init -q
 
-pi -e "$PKG_ROOT" -p "/complete smoke-test mission" >/tmp/pi-completion-smoke.out 2>/tmp/pi-completion-smoke.err &
+pi -e "$PKG_ROOT" -p "/cook smoke-test mission" >/tmp/pi-completion-smoke.out 2>/tmp/pi-completion-smoke.err &
 PI_PID=$!
 for _ in $(seq 1 60); do
   if [[ -f .agent/profile.json && -f .agent/state.json && -f .agent/plan.json && -f .agent/active-slice.json ]]; then

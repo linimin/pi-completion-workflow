@@ -298,7 +298,7 @@ async function detectVerifierCommand(root: string): Promise<string | undefined> 
 
 function normalizeMissionAnchorText(value: string): string {
 	return value
-		.replace(/^\/complete\s+/i, "")
+		.replace(/^\/(?:cook|complete)\s+/i, "")
 		.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
 		.replace(/^\s*(please|pls|can you|could you|help me|i want to|we need to|let'?s|continue to|continue|resume)\s+/i, "")
 		.replace(/\s+/g, " ")
@@ -456,7 +456,7 @@ async function refocusCompletionMission(snapshot: CompletionStateSnapshot, missi
 	const nextState = {
 		...defaultState(missionAnchor),
 		remaining_stop_judges: requiredStopJudges,
-		continuation_reason: `User refocused workflow via /complete: ${truncateInline(rawGoal, 160)}`,
+		continuation_reason: `User refocused workflow via /cook: ${truncateInline(rawGoal, 160)}`,
 		next_mandatory_action: "Reconcile canonical state from current repo truth for the refocused mission",
 	};
 	const nextPlan = {
@@ -2018,7 +2018,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("complete", {
+	pi.registerCommand("cook", {
 		description: "Start or continue the completion workflow for a repo",
 		handler: async (args, ctx) => {
 			const goal = args.trim();
@@ -2027,7 +2027,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const hadSnapshot = Boolean(snapshot);
 			if (!snapshot) {
 				if (!goal) {
-					emitCommandText(ctx, "Usage: /complete <goal> (or rerun /complete after canonical .agent state exists)", "error");
+					emitCommandText(ctx, "Usage: /cook <goal> (or rerun /cook after canonical .agent state exists)", "error");
 					return;
 				}
 				const root = findRepoRoot(cwd) ?? cwd;
