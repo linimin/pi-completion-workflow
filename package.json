@@ -1,6 +1,6 @@
 {
   "name": "@linimin/pi-letscook",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "Pi package for long-running completion workflows with canonical .agent state, role-based subagents, continuity, and verification helpers.",
   "license": "MIT",
   "private": false,

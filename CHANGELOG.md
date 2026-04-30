@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.23
+
+### Changed
+
+- renamed the public workflow command from `/complete` to `/cook`
+- aligned the published package/install identity around `@linimin/pi-letscook` and `pi-letscook`
+- added this current release entry so the shipped `/cook` and package rename are documented without rewriting older `/complete` history
+
 ## 0.1.22
 
 ### Changed
