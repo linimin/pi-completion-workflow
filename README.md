@@ -10,7 +10,7 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/complete <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
-- always-visible completion status line/widget sourced from canonical `.agent/**` state
+- always-visible completion status line plus a non-running widget sourced from canonical `.agent/**` state
 - richer live role observability that keeps tool activity separate from role progress, rationale, next-step, verification, and state-delta output
 - deterministic waiting/stalled signaling for running completion roles
 - custom compaction continuity capsule
@@ -106,9 +106,9 @@ Canonical truth lives in these files plus current repo truth.
 
 ## Live observability surfaces
 
-When canonical `.agent/**` state exists, the extension keeps a persistent completion status line/widget visible from that state. The surface summarizes the current phase, selected slice, next mandatory role, and remaining work counts even when no role is actively running.
+When canonical `.agent/**` state exists, the extension keeps a persistent completion status line visible from that state and shows the completion widget when no role is actively running. The non-running surface summarizes the current phase, selected slice, next mandatory role, and remaining work counts.
 
-While a `completion_role` subprocess is running, the same status/widget overlays live activity from the current role. Tool execution is rendered separately from assistant-provided `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA` lines so operators can tell the difference between tool work, role judgment, and verification. The running-role display also emits deterministic active/waiting/stalled signaling from the role timestamps instead of silently looking idle.
+While a `completion_role` subprocess is running, the status line overlays live activity from the current role and the widget is intentionally suppressed. Tool execution is rendered separately from assistant-provided `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA` lines so operators can tell the difference between tool work, role judgment, and verification. The running-role display also emits deterministic active/waiting/stalled signaling from the role timestamps instead of silently looking idle.
 
 ## Package layout
 

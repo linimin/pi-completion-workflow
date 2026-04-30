@@ -1117,18 +1117,16 @@ function buildCompletionStatusSurface(
 		if (livePreview) runningSegment.push(`— ${livePreview}`);
 		statusSegments.splice(2, 0, runningSegment.join(" "));
 	}
-	const widgetLines = [
-		"completion workflow",
-		`phase: ${currentPhase}`,
-		`slice: ${sliceId}`,
-		`goal: ${sliceGoal}`,
-		`next: ${nextMandatoryRole}`,
-		`remaining: ${remainingSummary}`,
-	];
-	if (activeRole) {
-		widgetLines.push(`active role: ${activeRole}`);
-		for (const line of liveDetailsLines.slice(1)) widgetLines.push(line);
-	}
+	const widgetLines = activeRole
+		? []
+		: [
+				"completion workflow",
+				`phase: ${currentPhase}`,
+				`slice: ${sliceId}`,
+				`goal: ${sliceGoal}`,
+				`next: ${nextMandatoryRole}`,
+				`remaining: ${remainingSummary}`,
+			];
 	return {
 		snapshotPresent: true,
 		statusText: statusSegments.join(" · "),

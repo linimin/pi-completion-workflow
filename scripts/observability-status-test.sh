@@ -60,16 +60,7 @@ elif mode == 'live':
     assert 'running completion-implementer' in status, status
     assert 'Loading canonical completion state' in status, status
     widget = data['widgetLines']
-    assert 'active role: completion-implementer' in widget, widget
-    assert 'elapsed: 00:01' in widget, widget
-    assert 'activity: active' in widget, widget
-    assert 'tool: read .agent/state.json' in widget, widget
-    assert 'progress: Loading canonical completion state' in widget, widget
-    assert 'rationale: verifying selected slice handoff' in widget, widget
-    assert 'next: inspect extensions/completion/index.ts' in widget, widget
-    assert 'verifying: canonical slice handoff matches plan' in widget, widget
-    assert 'state-delta: tool activity separated from role judgment' in widget, widget
-    assert 'state-delta: waiting threshold uses updatedAt timestamps' in widget, widget
+    assert widget == [], widget
     live_details = data['liveDetailsLines']
     assert live_details[0] == 'running completion role completion-implementer', live_details
     assert 'tool: read .agent/state.json' in live_details, live_details
@@ -79,14 +70,14 @@ elif mode == 'waiting':
     status = data.get('statusText') or ''
     assert '(waiting)' in status, status
     widget = data['widgetLines']
-    assert 'activity: waiting (00:20 since update)' in widget, widget
+    assert widget == [], widget
 elif mode == 'stalled':
     assert data['liveState'] == 'stalled', data
     assert data['liveIdleMs'] == 46000, data
     status = data.get('statusText') or ''
     assert '(stalled)' in status, status
     widget = data['widgetLines']
-    assert 'activity: stalled (00:46 since update)' in widget, widget
+    assert widget == [], widget
 else:
     raise AssertionError(f'unknown assertion mode: {mode}')
 PY
