@@ -1117,18 +1117,6 @@ function buildCompletionStatusSurface(
 		highValueGapCount,
 		remainingStopJudgeCount,
 	});
-	const statusSegments = [
-		`completion: ${currentPhase}`,
-		`slice ${sliceId}`,
-		`next ${nextMandatoryRole}`,
-		`remaining ${remainingContractCount}c/${releaseBlockerCount}b/${highValueGapCount}g/${remainingStopJudgeCount}j`,
-	];
-	if (activeRole) {
-		const runningSegment = [`running ${activeRole}`];
-		if (liveSignal && liveSignal.state !== "active") runningSegment.push(`(${liveSignal.state})`);
-		if (livePreview) runningSegment.push(`— ${livePreview}`);
-		statusSegments.splice(2, 0, runningSegment.join(" "));
-	}
 	const widgetLines = activeRole
 		? []
 		: [
@@ -1141,7 +1129,6 @@ function buildCompletionStatusSurface(
 			];
 	return {
 		snapshotPresent: true,
-		statusText: statusSegments.join(" · "),
 		widgetLines,
 		currentPhase,
 		sliceId,
@@ -1183,7 +1170,6 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 	const ui = getCtxUi(ctx);
 	if (!ui) return;
 	safeUiCall(() => {
-		ui.setStatus(COMPLETION_STATUS_KEY, surface.statusText);
 		ui.setWidget(COMPLETION_STATUS_KEY, surface.widgetLines.length > 0 ? surface.widgetLines : undefined);
 	});
 }

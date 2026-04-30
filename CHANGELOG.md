@@ -1,12 +1,20 @@
 # Changelog
 
+## 0.1.24
+
+### Changed
+
+- removed the completion status line entirely; the remaining completion widget appears only when no role is actively running
+
 ## 0.1.23
 
 ### Changed
 
 - renamed the public workflow command from `/complete` to `/cook`
 - aligned the published package/install identity around `@linimin/pi-letscook` and `pi-letscook`
-- added this current release entry so the shipped `/cook` and package rename are documented without rewriting older `/complete` history
+- removed the completion status line entirely; the remaining completion widget now appears only when no role is actively running
+- kept the richer live role observability lanes and waiting/stalled signaling without reintroducing a status-line surface
+- added this current release entry so the shipped `/cook`, package rename, and current completion UI behavior are documented without rewriting older `/complete` history
 
 ## 0.1.22
 

@@ -31,11 +31,7 @@ elif mode == 'static':
     assert data['releaseBlockerCount'] == 1, data
     assert data['highValueGapCount'] == 4, data
     assert data['remainingStopJudgeCount'] == 2, data
-    status = data.get('statusText') or ''
-    assert 'completion: implement' in status, status
-    assert 'slice fixture-status-surface' in status, status
-    assert 'next completion-implementer' in status, status
-    assert 'remaining 2c/1b/4g/2j' in status, status
+    assert not data.get('statusText'), data
     widget = data['widgetLines']
     assert 'phase: implement' in widget, widget
     assert 'slice: fixture-status-surface' in widget, widget
@@ -56,9 +52,7 @@ elif mode == 'live':
         'tool activity separated from role judgment',
         'waiting threshold uses updatedAt timestamps',
     ], data
-    status = data.get('statusText') or ''
-    assert 'running completion-implementer' in status, status
-    assert 'Loading canonical completion state' in status, status
+    assert not data.get('statusText'), data
     widget = data['widgetLines']
     assert widget == [], widget
     live_details = data['liveDetailsLines']
@@ -67,15 +61,13 @@ elif mode == 'live':
 elif mode == 'waiting':
     assert data['liveState'] == 'waiting', data
     assert data['liveIdleMs'] == 20000, data
-    status = data.get('statusText') or ''
-    assert '(waiting)' in status, status
+    assert not data.get('statusText'), data
     widget = data['widgetLines']
     assert widget == [], widget
 elif mode == 'stalled':
     assert data['liveState'] == 'stalled', data
     assert data['liveIdleMs'] == 46000, data
-    status = data.get('statusText') or ''
-    assert '(stalled)' in status, status
+    assert not data.get('statusText'), data
     widget = data['widgetLines']
     assert widget == [], widget
 else:
@@ -143,10 +135,10 @@ cat > .agent/plan.json <<'JSON'
   "candidate_slices": [
     {
       "slice_id": "fixture-status-surface",
-      "goal": "Render a persistent completion status surface from canonical state.",
+      "goal": "Render the remaining completion widget surface from canonical state.",
       "acceptance_criteria": [
-        "Persistent status text is rendered.",
-        "Persistent widget lines are rendered."
+        "No completion status text is rendered.",
+        "Persistent widget lines are rendered when no role is running."
       ],
       "contract_ids": ["OBS-STATUS-SURFACE"],
       "priority": 100,
@@ -165,11 +157,11 @@ cat > .agent/active-slice.json <<'JSON'
   "mission_anchor": "Verify persistent completion observability status surfaces.",
   "status": "selected",
   "slice_id": "fixture-status-surface",
-  "goal": "Render a persistent completion status surface from canonical state.",
+  "goal": "Render the remaining completion widget surface from canonical state.",
   "contract_ids": ["OBS-STATUS-SURFACE"],
   "acceptance_criteria": [
-    "Persistent status text is rendered.",
-    "Persistent widget lines are rendered."
+    "No completion status text is rendered.",
+    "Persistent widget lines are rendered when no role is running."
   ],
   "blocked_on": [],
   "locked_notes": [],
