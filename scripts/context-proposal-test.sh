@@ -167,6 +167,10 @@ assert 'Critique:' not in proposal['goalText'], 'goalText should keep critique s
 assert 'Task type:' not in proposal['goalText'], 'goalText should keep task_type hints separate from the mission body'
 assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after analyst-derived bootstrap'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after analyst-derived bootstrap'
+assert state['continuation_reason'].startswith('User started workflow via /cook:'), 'initial startup should record the accepted startup routing in continuation_reason'
+assert 'task_type=completion-workflow' in state['continuation_reason'], 'initial startup should persist the selected task_type in continuation_reason'
+assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason'], 'initial startup should persist the selected evaluation_profile in continuation_reason'
+assert 'Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal.' in state['continuation_reason'], 'initial startup should persist the accepted critique outcome in continuation_reason'
 PY
 
 # Completed workflow: /cook with no goal should infer the next round from recent discussion through analyst output.
@@ -213,6 +217,9 @@ assert state['requires_reground'] is True, 'requires_reground should reset to tr
 assert state['project_done'] is False, 'project_done should reset to false for the next workflow round'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should reset to completion-regrounder for the next workflow round'
 assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the next-round refocus'
+assert 'task_type=completion-workflow' in state['continuation_reason'], 'next-round refocus should persist the selected task_type'
+assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason'], 'next-round refocus should persist the selected evaluation_profile'
+assert 'critique outcome=accepted critique=none' in state['continuation_reason'], 'next-round refocus should persist that no critique notes were accepted'
 assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_refocus for the next workflow round'
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
@@ -258,6 +265,9 @@ assert state['current_phase'] == 'reground', 'current_phase should reset to regr
 assert state['continuation_policy'] == 'continue', 'continuation_policy should stay continue after explicit-goal replacement'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal replacement'
 assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal replacement'
+assert 'task_type=completion-workflow' in state['continuation_reason'], 'explicit-goal replacement should persist the selected task_type'
+assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason'], 'explicit-goal replacement should persist the selected evaluation_profile'
+assert 'critique outcome=accepted critique=none' in state['continuation_reason'], 'explicit-goal replacement should persist the accepted critique outcome even when no critique was derived'
 assert 'Preserve the richer proposal structure from discussion.' not in state['continuation_reason'], 'session scope should not be merged when analyst output is unavailable'
 assert 'Keep explicit goals as the mission anchor when they conflict with earlier text.' not in state['continuation_reason'], 'session constraints should not be merged when analyst output is unavailable'
 assert 'Refresh canonical state from the replacement mission.' not in state['continuation_reason'], 'session acceptance should not be merged when analyst output is unavailable'
@@ -322,6 +332,9 @@ assert state['project_done'] is False, 'project_done should reset to false after
 assert state['requires_reground'] is True, 'requires_reground should reset to true after explicit-goal next-round start'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal next-round start'
 assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal next-round start'
+assert 'task_type=completion-workflow' in continuation_reason, 'explicit-goal next-round start should persist the selected task_type'
+assert 'evaluation_profile=completion-rubric-v1' in continuation_reason, 'explicit-goal next-round start should persist the selected evaluation_profile'
+assert 'Keep critique notes separate from the mission anchor.' in continuation_reason, 'explicit-goal next-round start should persist the accepted critique outcome'
 assert 'Keep explicit scope.' in continuation_reason, 'explicit scope should remain in the explicit-goal proposal'
 assert 'Add session-only scope.' not in continuation_reason, 'session-derived scope should not be merged when analyst output is unavailable'
 assert 'Restyle widget.' not in continuation_reason, 'unrelated session-derived scope should not be merged when analyst output is unavailable'
@@ -374,6 +387,9 @@ assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after analyst-derived bootstrap'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after analyst-derived bootstrap'
 assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the analyst-derived restart'
+assert 'task_type=completion-workflow' in continuation_reason, 'analyst-derived restart should persist the selected task_type'
+assert 'evaluation_profile=completion-rubric-v1' in continuation_reason, 'analyst-derived restart should persist the selected evaluation_profile'
+assert 'critique outcome=accepted critique=none' in continuation_reason, 'analyst-derived restart should persist that no critique notes were accepted'
 assert 'Keep explicit goals anchored.' in continuation_reason, 'analyst-derived scope should be preserved'
 PY
 
@@ -385,7 +401,7 @@ git init -q
 
 UI_SESSION_START="$TMPDIR/ui-session-start.jsonl"
 UI_DISCUSSION_START=$'Mission: Replace the crowded selector with a clearer action layout.\nScope:\n- Separate proposal text from actions.\nConstraints:\n- Preserve Start/Edit/Cancel behavior.\nAcceptance:\n- Add regression coverage.'
-UI_ANALYST_OUTPUT_START='{"mission":"Replace the crowded selector with a clearer action layout.","scope":["Separate proposal text from actions."],"constraints":["Preserve Start/Edit/Cancel behavior."],"acceptance":["Add regression coverage."],"confidence":0.95}'
+UI_ANALYST_OUTPUT_START='{"mission":"Replace the crowded selector with a clearer action layout.","scope":["Separate proposal text from actions."],"constraints":["Preserve Start/Edit/Cancel behavior."],"acceptance":["Add regression coverage."],"critique":["Keep critique details separate from the editable proposal body."],"risks":["Bundling critique into the action list would make the confirmation harder to scan."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","possible_noise":["old selector wording"],"confidence":0.95}'
 UI_SNAPSHOT_START="$TMPDIR/context-proposal-ui-start.json"
 write_session "$UI_SESSION_START" "$UI_ROOT_START" "$UI_DISCUSSION_START"
 
@@ -404,15 +420,25 @@ snapshot = json.loads(Path(sys.argv[1]).read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 
 assert snapshot['proposalHeading'] == 'Proposed workflow', 'custom confirmation snapshot should expose a dedicated proposal section'
+assert snapshot['critiqueHeading'] == 'Critique and risks', 'custom confirmation snapshot should expose critique separately from the proposal body'
+assert snapshot['routingHeading'] == 'Routing recommendations', 'custom confirmation snapshot should expose routing recommendations separately from the proposal body'
 assert state['task_type'] == 'completion-workflow', 'start action should preserve canonical task_type'
 assert state['evaluation_profile'] == 'completion-rubric-v1', 'start action should preserve canonical evaluation_profile'
 assert 'Mission\nReplace the crowded selector with a clearer action layout.' in snapshot['proposalBody'], 'proposal body should be captured separately from the action list'
+assert 'Keep critique details separate from the editable proposal body.' not in snapshot['proposalBody'], 'critique notes should not be embedded in the proposal body'
+assert 'Critique\n- Keep critique details separate from the editable proposal body.' in snapshot['critiqueBody'], 'critique section should render accepted critique notes separately'
+assert 'Risks\n- Bundling critique into the action list would make the confirmation harder to scan.' in snapshot['critiqueBody'], 'critique section should render risk notes separately'
+assert 'Possible noise\n- old selector wording' in snapshot['critiqueBody'], 'critique section should render possible-noise notes separately'
+assert '- task_type: completion-workflow' in snapshot['routingBody'], 'routing section should render the recommended task_type'
+assert '- evaluation_profile: completion-rubric-v1' in snapshot['routingBody'], 'routing section should render the recommended evaluation_profile'
 assert [action['id'] for action in snapshot['actions']] == ['start', 'edit', 'cancel'], 'custom confirmation actions should stay Start/Edit/Cancel'
 assert [action['label'] for action in snapshot['actions']] == ['Start', 'Edit', 'Cancel'], 'custom confirmation action labels should be concise'
 for action in snapshot['actions']:
     assert 'Replace the crowded selector with a clearer action layout.' not in action['label'], 'proposal mission should not be embedded in action labels'
     assert 'Separate proposal text from actions.' not in action['description'], 'proposal scope should not be embedded in action descriptions'
 assert state['mission_anchor'] == 'Replace the crowded selector with a clearer action layout.', 'start action should still accept the proposed mission'
+assert state['continuation_reason'].startswith('User started workflow via /cook:'), 'start action should persist the startup routing outcome in continuation_reason'
+assert 'Keep critique details separate from the editable proposal body.' in state['continuation_reason'], 'start action should persist the accepted critique outcome canonically'
 PY
 
 # Custom confirmation UI: edit should keep the existing editor/parsing flow when the action comes from the new layout.
@@ -423,7 +449,7 @@ git init -q
 
 UI_SESSION_EDIT="$TMPDIR/ui-session-edit.jsonl"
 UI_DISCUSSION_EDIT=$'Mission: Keep editing support in the custom confirmation UI.\nScope:\n- Preserve the proposal editor.\nConstraints:\n- Keep parsing structured proposal text.\nAcceptance:\n- Update the mission anchor after edit.'
-UI_ANALYST_OUTPUT_EDIT='{"mission":"Keep editing support in the custom confirmation UI.","scope":["Preserve the proposal editor."],"constraints":["Keep parsing structured proposal text."],"acceptance":["Update the mission anchor after edit."],"confidence":0.94}'
+UI_ANALYST_OUTPUT_EDIT='{"mission":"Keep editing support in the custom confirmation UI.","scope":["Preserve the proposal editor."],"constraints":["Keep parsing structured proposal text."],"acceptance":["Update the mission anchor after edit."],"critique":["Keep critique persistence even when the operator edits the proposal body."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.94}'
 UI_EDIT_TEXT=$'Mission: Edited mission from the custom confirmation UI.\nScope:\n- Preserve parsing after edit.\nConstraints:\n- Keep the shared confirmation flow.\nAcceptance:\n- Start the workflow from the edited proposal.'
 write_session "$UI_SESSION_EDIT" "$UI_ROOT_EDIT" "$UI_DISCUSSION_EDIT"
 
@@ -448,6 +474,7 @@ assert state['evaluation_profile'] == 'completion-rubric-v1', 'edit action shoul
 assert plan['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update plan.json'
 assert active['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update active-slice.json'
 assert state['current_phase'] == 'reground', 'edit action should still bootstrap/reground the workflow'
+assert 'Keep critique persistence even when the operator edits the proposal body.' in state['continuation_reason'], 'edit action should preserve the accepted critique outcome canonically'
 PY
 
 # Custom confirmation UI: cancel should exit without writing canonical state.

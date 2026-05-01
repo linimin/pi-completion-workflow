@@ -103,10 +103,14 @@ Startup confirmation uses a custom UI that:
 
 - renders the proposal body separately from the action list
 - keeps Mission / Scope / Constraints / Acceptance readable as a content area
+- renders analyst-derived **Critique and risks** separately from the editable proposal body
+- renders recommended `task_type` / `evaluation_profile` routing hints separately from both the proposal body and the action list
 - presents explicit actions for:
   - **Start**
   - **Edit**
   - **Cancel**
+
+When you accept startup or refocus from that flow, `/cook` now persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
 
 The same confirmation flow is reused across:
 
@@ -243,7 +247,7 @@ npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks, includes deterministic observability coverage plus the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression — includes deterministic observability coverage plus the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 ## Release
 

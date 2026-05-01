@@ -143,6 +143,7 @@ type RecentDiscussionEntry = {
 type ContextProposalDecision = {
 	missionAnchor: string;
 	goalText: string;
+	analysis: ContextProposalAnalysis;
 };
 
 type ContextProposalConfirmAction = "start" | "edit" | "cancel";
@@ -158,6 +159,10 @@ type ContextProposalConfirmationLayout = {
 	intro: string;
 	proposalHeading: string;
 	proposalBody: string;
+	critiqueHeading?: string;
+	critiqueBody?: string;
+	routingHeading?: string;
+	routingBody?: string;
 	actionsHeading: string;
 	actions: ContextProposalConfirmationActionItem[];
 	footer: string;
@@ -1127,6 +1132,59 @@ function buildContextProposalDisplayText(proposal: ContextProposal): string {
 	return lines.join("\n");
 }
 
+function finalizeContextProposalAnalysis(analysis: ContextProposalAnalysis | undefined, hintTexts: string[] = []): ContextProposalAnalysis {
+	const merged = mergeContextProposalAnalysis(analysis ? [analysis] : [], hintTexts);
+	return {
+		taskType: merged.taskType ?? DEFAULT_TASK_TYPE,
+		evaluationProfile: merged.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE,
+		critique: merged.critique,
+		risks: merged.risks,
+		possibleNoise: merged.possibleNoise,
+	};
+}
+
+function buildContextProposalCritiqueText(analysis: ContextProposalAnalysis): string {
+	const lines: string[] = [];
+	if (analysis.critique.length > 0) {
+		lines.push("Critique");
+		for (const item of analysis.critique) lines.push(`- ${item}`);
+	}
+	if (analysis.risks.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push("Risks");
+		for (const item of analysis.risks) lines.push(`- ${item}`);
+	}
+	if (analysis.possibleNoise.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push("Possible noise");
+		for (const item of analysis.possibleNoise) lines.push(`- ${item}`);
+	}
+	if (lines.length === 0) {
+		return "No critique, risk, or possible-noise notes were derived for this startup proposal.";
+	}
+	return lines.join("\n");
+}
+
+function buildContextProposalRoutingText(analysis: ContextProposalAnalysis): string {
+	return [`- task_type: ${analysis.taskType ?? DEFAULT_TASK_TYPE}`, `- evaluation_profile: ${analysis.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE}`].join(
+		"\n",
+	);
+}
+
+function summarizeContextProposalAnalysisItems(label: string, items: string[]): string | undefined {
+	if (items.length === 0) return undefined;
+	return `${label}=${truncateInline(items.join(" | "), 160)}`;
+}
+
+function buildContextProposalContinuationReason(prefix: string, goalText: string, analysis: ContextProposalAnalysis): string {
+	const critiqueParts = [
+		analysis.critique.length > 0 ? `accepted critique=${truncateInline(analysis.critique.join(" | "), 160)}` : "accepted critique=none",
+		summarizeContextProposalAnalysisItems("risks", analysis.risks),
+		summarizeContextProposalAnalysisItems("possible_noise", analysis.possibleNoise),
+	].filter((part): part is string => Boolean(part));
+	return `${prefix} ${truncateInline(goalText, 220)} | startup routing: task_type=${analysis.taskType ?? DEFAULT_TASK_TYPE}; evaluation_profile=${analysis.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE}; critique outcome=${critiqueParts.join("; ")}`;
+}
+
 function buildContextProposalConfirmationActions(): ContextProposalConfirmationActionItem[] {
 	return [
 		{
@@ -1151,11 +1209,16 @@ function buildContextProposalConfirmationLayout(
 	title: string,
 	proposal: ContextProposal,
 ): ContextProposalConfirmationLayout {
+	const analysis = finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]);
 	return {
 		title,
-		intro: "Review the proposed mission, scope, constraints, and acceptance details before /cook writes canonical workflow state.",
+		intro: "Review the proposed mission, scope, constraints, acceptance, critique, and routing details before /cook writes canonical workflow state.",
 		proposalHeading: "Proposed workflow",
 		proposalBody: buildContextProposalDisplayText(proposal),
+		critiqueHeading: "Critique and risks",
+		critiqueBody: buildContextProposalCritiqueText(analysis),
+		routingHeading: "Routing recommendations",
+		routingBody: buildContextProposalRoutingText(analysis),
 		actionsHeading: "Actions",
 		actions: buildContextProposalConfirmationActions(),
 		footer: "↑↓ navigate • enter select • esc cancel",
@@ -1205,6 +1268,16 @@ async function promptContextProposalConfirmationAction(
 		container.addChild(new Text("", 0, 0));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.proposalHeading)), 1, 0));
 		container.addChild(new Text(layout.proposalBody, 1, 0));
+		if (layout.critiqueHeading && layout.critiqueBody) {
+			container.addChild(new Text("", 0, 0));
+			container.addChild(new Text(theme.fg("accent", theme.bold(layout.critiqueHeading)), 1, 0));
+			container.addChild(new Text(layout.critiqueBody, 1, 0));
+		}
+		if (layout.routingHeading && layout.routingBody) {
+			container.addChild(new Text("", 0, 0));
+			container.addChild(new Text(theme.fg("accent", theme.bold(layout.routingHeading)), 1, 0));
+			container.addChild(new Text(layout.routingBody, 1, 0));
+		}
 		container.addChild(new Text("", 0, 0));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.actionsHeading)), 1, 0));
 		const selectList = new SelectList(items, items.length, {
@@ -1240,17 +1313,28 @@ async function resolveEditedContextProposalDecision(
 	projectName: string,
 	editedText: string,
 	confirmMissionWhenNeeded: boolean,
+	fallbackAnalysis?: ContextProposalAnalysis,
 ): Promise<ContextProposalDecision | undefined> {
 	if (!editedText.trim()) return undefined;
 	const editedProposal = parseContextProposal(editedText, projectName);
-	if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
+	if (editedProposal) {
+		return {
+			missionAnchor: editedProposal.mission,
+			goalText: editedProposal.goalText,
+			analysis: finalizeContextProposalAnalysis(
+				mergeContextProposalAnalysis([editedProposal.analysis, fallbackAnalysis], [editedText, editedProposal.mission]),
+				[editedText, editedProposal.mission],
+			),
+		};
+	}
 	const assessment = assessMissionAnchor(editedText, projectName);
+	const analysis = finalizeContextProposalAnalysis(fallbackAnalysis, [editedText, assessment.derived]);
 	if (!confirmMissionWhenNeeded) {
-		return { missionAnchor: assessment.derived, goalText: editedText.trim() };
+		return { missionAnchor: assessment.derived, goalText: editedText.trim(), analysis };
 	}
 	const missionAnchor = await confirmMissionAnchor(ctx, assessment);
 	if (!missionAnchor) return undefined;
-	return { missionAnchor, goalText: editedText.trim() };
+	return { missionAnchor, goalText: editedText.trim(), analysis };
 }
 
 async function resolveContextProposalConfirmationAction(
@@ -1262,8 +1346,9 @@ async function resolveContextProposalConfirmationAction(
 	editedTextOverride?: string,
 ): Promise<ContextProposalDecision | undefined> {
 	if (action === "cancel") return undefined;
+	const analysis = finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]);
 	if (action === "start") {
-		return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+		return { missionAnchor: proposal.mission, goalText: proposal.goalText, analysis };
 	}
 	const editedText =
 		editedTextOverride ??
@@ -1272,7 +1357,7 @@ async function resolveContextProposalConfirmationAction(
 			buildContextProposalEditorText(proposal),
 		));
 	if (!editedText?.trim()) return undefined;
-	return await resolveEditedContextProposalDecision(ctx, projectName, editedText, editedTextOverride === undefined);
+	return await resolveEditedContextProposalDecision(ctx, projectName, editedText, editedTextOverride === undefined, analysis);
 }
 
 function buildContextProposalEditorText(proposal: ContextProposal): string {
@@ -1475,12 +1560,22 @@ async function confirmContextProposal(
 	const actionOverride = completionTestContextProposalActionOverride();
 	if (actionOverride === "cancel") return undefined;
 	if (actionOverride === "accept") {
-		return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+		return {
+			missionAnchor: proposal.mission,
+			goalText: proposal.goalText,
+			analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
+		};
 	}
 	if (actionOverride === "edit") {
 		const editedText = completionTestContextProposalEditText();
 		if (!editedText) return undefined;
-		return await resolveEditedContextProposalDecision(ctx, projectName, editedText, false);
+		return await resolveEditedContextProposalDecision(
+			ctx,
+			projectName,
+			editedText,
+			false,
+			finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
+		);
 	}
 	const layout = buildContextProposalConfirmationLayout(options.title, proposal);
 	maybeWriteContextProposalConfirmationSnapshot(layout);
@@ -1497,13 +1592,21 @@ async function confirmContextProposal(
 	}
 	if (!getCtxHasUI(ctx)) {
 		return options.nonInteractiveBehavior === "accept"
-			? { missionAnchor: proposal.mission, goalText: proposal.goalText }
+			? {
+				missionAnchor: proposal.mission,
+				goalText: proposal.goalText,
+				analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
+			}
 			: undefined;
 	}
 	const ui = getCtxUi(ctx);
 	if (!ui) {
 		return options.nonInteractiveBehavior === "accept"
-			? { missionAnchor: proposal.mission, goalText: proposal.goalText }
+			? {
+				missionAnchor: proposal.mission,
+				goalText: proposal.goalText,
+				analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
+			}
 			: undefined;
 	}
 	const choice = await promptContextProposalConfirmationAction(ui, layout);
@@ -1645,22 +1748,41 @@ async function confirmExistingWorkflowGoal(
 	return { action: "continue", currentMissionAnchor: currentMission };
 }
 
-async function refocusCompletionMission(snapshot: CompletionStateSnapshot, missionAnchor: string, rawGoal: string): Promise<void> {
+async function refocusCompletionMission(
+	snapshot: CompletionStateSnapshot,
+	missionAnchor: string,
+	rawGoal: string,
+	analysis?: ContextProposalAnalysis,
+): Promise<void> {
 	const requiredStopJudges = asNumber(snapshot.profile?.required_stop_judges) ?? 3;
 	const root = snapshot.files.root;
+	const routing = finalizeContextProposalAnalysis(analysis, [rawGoal, missionAnchor]);
+	const docsSurfaces = asStringArray(snapshot.profile?.docs_surfaces);
+	const nextProfile = buildProfileRecord({
+		projectName: asString(snapshot.profile?.project_name) ?? path.basename(root),
+		requiredStopJudges,
+		priorityPolicyId: asString(snapshot.profile?.priority_policy_id) ?? "completion-default",
+		docsSurfaces: docsSurfaces.length > 0 ? docsSurfaces : await detectDocsSurfaces(root),
+		taskType: routing.taskType,
+		evaluationProfile: routing.evaluationProfile,
+	});
 	const nextState = {
-		...defaultState(missionAnchor),
+		...defaultState(missionAnchor, {
+			taskType: routing.taskType,
+			evaluationProfile: routing.evaluationProfile,
+			continuationReason: buildContextProposalContinuationReason("User refocused workflow via /cook:", rawGoal, routing),
+		}),
 		remaining_stop_judges: requiredStopJudges,
-		continuation_reason: `User refocused workflow via /cook: ${truncateInline(rawGoal, 160)}`,
 		next_mandatory_action: "Reconcile canonical state from current repo truth for the refocused mission",
 	};
 	const nextPlan = {
-		...defaultPlan(missionAnchor),
+		...defaultPlan(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }),
 		plan_basis: "user_refocus",
 	};
-	const nextActive = defaultActiveSlice(missionAnchor);
+	const nextActive = defaultActiveSlice(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile });
 	await Promise.all([
 		fsp.writeFile(path.join(snapshot.files.agentDir, "mission.md"), buildMission(path.basename(root), missionAnchor), "utf8"),
+		writeJsonFile(snapshot.files.profilePath, nextProfile),
 		writeJsonFile(snapshot.files.statePath, nextState),
 		writeJsonFile(snapshot.files.planPath, nextPlan),
 		writeJsonFile(snapshot.files.activePath, nextActive),
@@ -1692,16 +1814,39 @@ function deriveMissionAnchor(rawGoal: string, projectName: string): string {
 	return mission;
 }
 
-function defaultState(missionAnchor: string): JsonRecord {
+function buildProfileRecord(args: {
+	projectName: string;
+	requiredStopJudges: number;
+	priorityPolicyId?: string;
+	docsSurfaces: string[];
+	taskType?: string;
+	evaluationProfile?: string;
+}): JsonRecord {
+	return {
+		schema_version: 1,
+		protocol_id: PROTOCOL_ID,
+		project_name: args.projectName,
+		required_stop_judges: args.requiredStopJudges,
+		priority_policy_id: args.priorityPolicyId ?? "completion-default",
+		task_type: args.taskType ?? DEFAULT_TASK_TYPE,
+		evaluation_profile: args.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE,
+		docs_surfaces: args.docsSurfaces,
+	};
+}
+
+function defaultState(
+	missionAnchor: string,
+	routing?: { taskType?: string; evaluationProfile?: string; continuationReason?: string },
+): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
 		current_phase: "reground",
 		continuation_policy: "continue",
-		continuation_reason: "Fresh completion bootstrap requires canonical re-ground",
+		continuation_reason: routing?.continuationReason ?? "Fresh completion bootstrap requires canonical re-ground",
 		project_done: false,
-		task_type: DEFAULT_TASK_TYPE,
-		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
+		task_type: routing?.taskType ?? DEFAULT_TASK_TYPE,
+		evaluation_profile: routing?.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE,
 		requires_reground: true,
 		slices_since_last_reground: 0,
 		remaining_release_blockers: null,
@@ -1719,24 +1864,30 @@ function defaultState(missionAnchor: string): JsonRecord {
 	};
 }
 
-function defaultPlan(missionAnchor: string): JsonRecord {
+function defaultPlan(
+	missionAnchor: string,
+	routing?: { taskType?: string; evaluationProfile?: string },
+): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
-		task_type: DEFAULT_TASK_TYPE,
-		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
+		task_type: routing?.taskType ?? DEFAULT_TASK_TYPE,
+		evaluation_profile: routing?.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE,
 		last_reground_at: null,
 		plan_basis: "bootstrap",
 		candidate_slices: [],
 	};
 }
 
-function defaultActiveSlice(missionAnchor: string): JsonRecord {
+function defaultActiveSlice(
+	missionAnchor: string,
+	routing?: { taskType?: string; evaluationProfile?: string },
+): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
-		task_type: DEFAULT_TASK_TYPE,
-		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
+		task_type: routing?.taskType ?? DEFAULT_TASK_TYPE,
+		evaluation_profile: routing?.evaluationProfile ?? DEFAULT_EVALUATION_PROFILE,
 		status: "idle",
 		slice_id: null,
 		goal: null,
@@ -1953,13 +2104,18 @@ type ScaffoldResult = {
 	missionAnchor: string;
 };
 
-async function scaffoldCompletionFiles(root: string, missionAnchor: string): Promise<ScaffoldResult> {
+async function scaffoldCompletionFiles(
+	root: string,
+	missionAnchor: string,
+	options?: { analysis?: ContextProposalAnalysis; continuationReason?: string },
+): Promise<ScaffoldResult> {
 	const files = resolveFiles(root);
 	const created: string[] = [];
 	const updated: string[] = [];
 	await fsp.mkdir(files.agentDir, { recursive: true });
 	await fsp.mkdir(path.join(files.agentDir, "tmp"), { recursive: true });
 	const projectName = path.basename(root);
+	const routing = finalizeContextProposalAnalysis(options?.analysis, [missionAnchor]);
 	const docsSurfaces = await detectDocsSurfaces(root);
 	const verifierCommand = await detectVerifierCommand(root);
 	const trackedFiles: Array<{ path: string; content: string; executable?: boolean }> = [
@@ -1967,13 +2123,16 @@ async function scaffoldCompletionFiles(root: string, missionAnchor: string): Pro
 		{ path: path.join(files.agentDir, "mission.md"), content: buildMission(projectName, missionAnchor) },
 		{
 			path: files.profilePath,
-			content: `${JSON.stringify({ schema_version: 1, protocol_id: PROTOCOL_ID, project_name: projectName, required_stop_judges: 3, priority_policy_id: "completion-default", task_type: DEFAULT_TASK_TYPE, evaluation_profile: DEFAULT_EVALUATION_PROFILE, docs_surfaces: docsSurfaces }, null, 2)}\n`,
+			content: `${JSON.stringify(buildProfileRecord({ projectName, requiredStopJudges: 3, docsSurfaces, taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n`,
 		},
 		{ path: path.join(files.agentDir, "verify_completion_stop.sh"), content: buildVerifyStopScript(verifierCommand), executable: true },
 		{ path: path.join(files.agentDir, "verify_completion_control_plane.sh"), content: buildVerifyControlPlaneScript(), executable: true },
-		{ path: files.statePath, content: `${JSON.stringify(defaultState(missionAnchor), null, 2)}\n` },
-		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor), null, 2)}\n` },
-		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor), null, 2)}\n` },
+		{
+			path: files.statePath,
+			content: `${JSON.stringify(defaultState(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile, continuationReason: options?.continuationReason }), null, 2)}\n`,
+		},
+		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
+		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
 		{ path: files.sliceHistoryPath, content: "" },
 		{ path: files.stopHistoryPath, content: "" },
 	];
@@ -3282,6 +3441,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const workflowDone = isWorkflowDone(snapshot);
 			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
 			let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
+			let kickoffAnalysis: ContextProposalAnalysis | undefined;
 
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
@@ -3307,6 +3467,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					}
 					goal = decision.goalText;
 					kickoffMissionAnchor = decision.missionAnchor;
+					kickoffAnalysis = decision.analysis;
 				} else {
 					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
 					const decision = await confirmContextProposal(ctx, proposal, projectName, {
@@ -3321,8 +3482,17 @@ export default function completionExtension(pi: ExtensionAPI) {
 					}
 					goal = decision.goalText;
 					kickoffMissionAnchor = decision.missionAnchor;
+					kickoffAnalysis = decision.analysis;
 				}
-				const created = await scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName);
+				const startupRouting = finalizeContextProposalAnalysis(kickoffAnalysis, [goal ?? kickoffMissionAnchor ?? projectName]);
+				const created = await scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName, {
+					analysis: startupRouting,
+					continuationReason: buildContextProposalContinuationReason(
+						"User started workflow via /cook:",
+						goal ?? kickoffMissionAnchor ?? projectName,
+						startupRouting,
+					),
+				});
 				emitCommandText(
 					ctx,
 					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
@@ -3358,7 +3528,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					goal = decision.goalText;
 					kickoffIntent = "refocus";
 					kickoffMissionAnchor = decision.missionAnchor;
-					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText);
+					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis);
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 				} else {
@@ -3396,7 +3566,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					goal = decision.goalText;
 					kickoffIntent = "refocus";
 					kickoffMissionAnchor = decision.missionAnchor;
-					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText);
+					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis);
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					emitCommandText(ctx, `Started a new completion workflow round from explicit goal: ${decision.missionAnchor}`, "info");
 				} else {
@@ -3421,7 +3591,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 							return;
 						}
 						goal = proposalDecision.goalText;
-						await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText);
+						await refocusCompletionMission(
+							snapshot,
+							proposalDecision.missionAnchor,
+							proposalDecision.goalText,
+							proposalDecision.analysis,
+						);
 						snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 						kickoffMissionAnchor = proposalDecision.missionAnchor;
 						emitCommandText(ctx, `Refocused completion mission to: ${proposalDecision.missionAnchor}`, "info");

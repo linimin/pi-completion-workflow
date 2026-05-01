@@ -13,6 +13,8 @@
 - threaded canonical `evaluation_profile` plus the active-slice implementation contract into reviewer/auditor/stop-judge reminder and dispatch surfaces so those read-only roles can recover from canonical state instead of prose-only summaries
 - made reviewer/auditor/stop-judge transcription fail closed on malformed rubric-bearing outputs while still accepting valid reports, and added deterministic transcription coverage for all three roles in `npm run rubric-contract-test`
 - kept deterministic `rubric-contract-test` coverage wired into `npm run release-check`
+- made the `/cook` confirmation UI critique-aware by rendering critique/risk notes plus recommended `task_type` / `evaluation_profile` routing hints in dedicated sections while keeping the existing Start/Edit/Cancel flow
+- persisted accepted startup/refocus routing choices canonically by writing the selected `task_type` / `evaluation_profile` into the canonical control-plane files and recording the accepted critique outcome in continuation state, with `context-proposal-test` and `release-check` covering the shipped flow
 
 ## 0.1.30
 
