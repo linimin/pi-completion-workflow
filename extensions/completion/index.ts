@@ -172,7 +172,7 @@ class StartupAnalystOverlay extends Container {
 			this.onAbort?.();
 			return;
 		}
-		super.handleInput(data);
+		// Container does not implement handleInput; ignore all other keys.
 	}
 
 	override invalidate(): void {
