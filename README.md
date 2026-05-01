@@ -54,7 +54,7 @@ Replace the active workflow with a different goal:
 Start the next round after the previous workflow is already done:
 
 ```text
-/cook ship the next workflow round for richer /cook startup proposals
+/cook improve startup proposal confirmation UX
 ```
 
 ## How `/cook` behaves

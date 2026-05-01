@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.30
+
+### Changed
+
+- clarified the README next-round example so the goal text no longer repeats `/cook` in a way that looks like part of the command syntax
+
 ## 0.1.29
 
 ### Changed
