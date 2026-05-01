@@ -6,8 +6,8 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 
 - `/cook` as the single workflow command
 - `/cook <goal>` to bootstrap or continue with an explicit goal, enriched by recent discussion before canonical state is written
-- `/cook` with no goal to resume an active canonical `.agent/**` workflow, or propose a new round from recent discussion when no active workflow is running
-- model-assisted startup proposal analysis for natural recent discussion, with rule-based parsing kept as the fallback when analysis is unavailable
+- `/cook` with no goal to resume an active canonical `.agent/**` workflow, or propose a new round from recent discussion through the proposal analyst when no active workflow is running
+- model-assisted startup proposal analysis for natural recent discussion, with a live `/cook proposal analyst` overlay; if that analysis is unavailable, use `/cook <goal>` instead of a built-in discussion parser fallback
 - `/cook <new goal>` on an active workflow asks whether to continue the current mission or abandon it for a replacement workflow; on a completed workflow it starts the next round from the new goal instead of reopening continue/refocus choices
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
@@ -90,9 +90,9 @@ After install, run `/reload` in pi. For this package, it is safest to reload whe
 
 | Repo state | `/cook` | `/cook <goal>` |
 |---|---|---|
-| No canonical workflow yet | Proposes a startup plan from recent discussion, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, enriches it from recent discussion, then asks for confirmation |
+| No canonical workflow yet | Proposes a startup plan from recent discussion when the proposal analyst can summarize it, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, enriches it from recent discussion when analyst output is available, then asks for confirmation |
 | Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | Asks whether to continue the current workflow or replace it with a new one |
-| Previous workflow is already `done` | Proposes the next workflow round from recent discussion, then asks for confirmation | Starts the next workflow round from the explicit goal, using recent discussion only as supplemental proposal context |
+| Previous workflow is already `done` | Proposes the next workflow round from recent discussion when the proposal analyst can summarize it, then asks for confirmation | Starts the next workflow round from the explicit goal, using recent discussion only as supplemental proposal context when analyst output is available |
 
 ### One-step start
 
@@ -102,7 +102,7 @@ After install, run `/reload` in pi. For this package, it is safest to reload whe
 
 This bootstraps `.agent/**` if missing, derives a clean initial `MISSION ANCHOR`, builds a startup proposal, lets you confirm or edit it, re-grounds canonical state, creates a slice plan, and drives the workflow.
 
-When a model is available, `/cook` first asks it to summarize the recent natural-language discussion into a structured proposal and falls back to the built-in rule-based parser if that analysis is unavailable. When you pass an explicit goal, that goal still stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written.
+When a model is available, `/cook` first asks it to summarize the recent natural-language discussion into a structured proposal and shows a live `/cook proposal analyst` progress overlay while that analysis is running. Discussion-only startup now relies on that analyst path only; if analyst output is unavailable, use `/cook <goal>` instead of expecting a built-in rule-based parser fallback. When you pass an explicit goal, that goal still stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written when analyst output is available.
 
 ### Resume later
 
@@ -139,7 +139,7 @@ If the previous workflow is already `done`, `/cook <goal>` starts the next workf
 /cook
 ```
 
-If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. This works with natural discussion best when a model is available, and otherwise falls back to the built-in parser.
+If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion through the proposal analyst, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. If analyst output is unavailable, provide an explicit goal with `/cook <goal>` instead.
 
 ## Canonical repo files
 

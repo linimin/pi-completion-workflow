@@ -4,7 +4,7 @@
 
 ### Changed
 
-- added model-assisted `/cook` startup proposal analysis for natural recent discussion, while keeping the built-in rule-based parser as the fallback and preserving explicit-goal mission anchoring
+- added model-assisted `/cook` startup proposal analysis for natural recent discussion with a live `/cook proposal analyst` progress overlay, removed the built-in discussion-parser fallback for discussion-only startup, and preserved explicit-goal mission anchoring even when analyst output is unavailable
 - added package metadata for npm and pi.dev discovery, fixed README publishing links for npm rendering, and refined install and workflow guidance after the `v0.1.26` tag
 
 ## 0.1.26

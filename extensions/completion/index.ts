@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { complete, StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { DynamicBorder, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { Container, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 const PROTOCOL_ID = "completion";
@@ -133,6 +133,53 @@ type ContextProposalConfirmOptions = {
 	nonInteractiveBehavior?: "accept" | "cancel";
 	editorPrompt?: string;
 };
+
+class StartupAnalystOverlay extends Container {
+	private readonly border: DynamicBorder;
+	private readonly title: Text;
+	private readonly body: Text;
+	private readonly footer: Text;
+	private lines: string[] = [];
+	onAbort?: () => void;
+
+	constructor(private readonly theme: any) {
+		super();
+		this.border = new DynamicBorder((s: string) => this.theme.fg("accent", s));
+		this.title = new Text("", 1, 0);
+		this.body = new Text("", 1, 1);
+		this.footer = new Text("", 1, 0);
+		this.addChild(this.border);
+		this.addChild(this.title);
+		this.addChild(this.body);
+		this.addChild(this.footer);
+		this.updateDisplay();
+	}
+
+	setLines(lines: string[]): void {
+		this.lines = [...lines];
+		this.updateDisplay();
+		this.invalidate();
+	}
+
+	private updateDisplay(): void {
+		this.title.setText(this.theme.fg("accent", this.theme.bold("/cook proposal analyst")));
+		this.body.setText(this.theme.fg("dim", this.lines.join("\n")));
+		this.footer.setText(this.theme.fg("muted", "Esc cancel • This analysis runs before /cook writes canonical workflow state"));
+	}
+
+	override handleInput(data: string): void {
+		if (data === "\u001b") {
+			this.onAbort?.();
+			return;
+		}
+		super.handleInput(data);
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.updateDisplay();
+	}
+}
 
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const LIVE_ROLE_WAITING_MS = 15_000;
@@ -677,8 +724,159 @@ function parseContextProposalAnalystOutput(
 	};
 }
 
+function contextProposalAnalystModelArg(model: unknown): string | undefined {
+	if (!isRecord(model)) return undefined;
+	const provider = asString(model.provider);
+	const id = asString(model.id);
+	return provider && id ? `${provider}/${id}` : undefined;
+}
+
+function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[], explicitGoal?: string): string {
+	const discussion = serializeRecentDiscussionEntries(recentEntries);
+	return [
+		`Project: ${projectName}`,
+		explicitGoal
+			? `Explicit goal (keep this mission anchor):\n${explicitGoal}`
+			: "Explicit goal: none provided; infer the current mission from the discussion.",
+		"",
+		"Recent discussion:",
+		discussion,
+	].join("\n");
+}
+
+function contextProposalAnalystProgressLines(activity: LiveRoleActivity): string[] {
+	return [
+		...buildInlineRunningLines({
+			role: activity.role,
+			startedAt: activity.startedAt,
+			updatedAt: activity.updatedAt,
+			currentAction: activity.currentAction,
+			toolActivity: activity.toolActivity,
+			toolRecentActivity: activity.toolRecentActivity,
+			recentActivity: activity.recentActivity,
+			assistantSummary: activity.assistantSummary,
+			progress: activity.progress,
+			rationale: activity.rationale,
+			nextStep: activity.nextStep,
+			verifying: activity.verifying,
+			stateDeltas: activity.stateDeltas,
+		}),
+		"",
+		"This step only prepares a proposal for confirmation.",
+	];
+}
+
+async function runContextProposalAnalystSubprocess(
+	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any },
+	projectName: string,
+	recentEntries: RecentDiscussionEntry[],
+	explicitGoal?: string,
+): Promise<string | undefined> {
+	const modelArg = contextProposalAnalystModelArg(ctx.model);
+	if (!modelArg) return undefined;
+	const cwd = getCtxCwd(ctx);
+	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
+	const rootKey = completionRootKey(undefined, cwd);
+	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries, explicitGoal);
+	const systemPromptTemp = await writeTempFile("pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
+	const analystRole = "cook-proposal-analyst";
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
+	const invocation = getPiInvocation(args);
+	const liveActivity = createLiveRoleActivity(analystRole);
+	liveActivity.progress = "Analyzing recent discussion";
+	liveActivity.currentAction = "Reading recent discussion and preparing a startup proposal";
+	liveActivity.assistantSummary = liveActivity.progress;
+	liveActivity.recentActivity = pushRecentActivity(liveActivity.recentActivity, `assistant: ${liveActivity.progress}`);
+	const messages: RoleMessage[] = [];
+	let stderr = "";
+	let overlay: StartupAnalystOverlay | undefined;
+	let finishOverlay: ((value: string | undefined) => void) | undefined;
+	let overlaySettled = false;
+	const settleOverlay = (value: string | undefined) => {
+		if (overlaySettled) return;
+		overlaySettled = true;
+		finishOverlay?.(value);
+	};
+	const updateActivity = (fresh = false) => {
+		if (fresh) liveActivity.updatedAt = nowMs();
+		liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: "running" }));
+		void refreshStatus(ctx);
+		overlay?.setLines(contextProposalAnalystProgressLines(liveActivity));
+	};
+	const heartbeat = setInterval(() => updateActivity(false), LIVE_ROLE_HEARTBEAT_MS);
+	const run = async (): Promise<string | undefined> => {
+		try {
+			updateActivity(true);
+			const output = await new Promise<string | undefined>((resolve) => {
+				const proc = spawn(invocation.command, invocation.args, {
+					cwd: runCwd,
+					env: process.env,
+					stdio: ["ignore", "pipe", "pipe"],
+					shell: false,
+				});
+				let buffer = "";
+				const processLine = (line: string) => {
+					if (!line.trim()) return;
+					try {
+						const event = JSON.parse(line) as JsonRecord;
+						if (applyLiveRoleEvent(liveActivity, event, messages)) updateActivity(true);
+					} catch {
+						// ignore malformed lines
+					}
+				};
+				proc.stdout.on("data", (chunk) => {
+					buffer += chunk.toString();
+					const lines = buffer.split("\n");
+					buffer = lines.pop() ?? "";
+					for (const line of lines) processLine(line);
+				});
+				proc.stderr.on("data", (chunk) => {
+					stderr += chunk.toString();
+				});
+				proc.on("close", (code) => {
+					if (buffer.trim()) processLine(buffer);
+					resolve(code === 0 ? liveActivity.lastAssistantText?.trim() || undefined : undefined);
+				});
+				proc.on("error", () => resolve(undefined));
+				if (overlay) {
+					overlay.onAbort = () => {
+						proc.kill("SIGTERM");
+						resolve(undefined);
+					};
+				}
+			});
+			liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: output ? "ok" : "error" }));
+			await refreshStatus(ctx);
+			return output;
+		} finally {
+			clearInterval(heartbeat);
+			setTimeout(() => {
+				const current = liveRoleActivityByRoot.get(rootKey);
+				if (current && current.role === analystRole && current.status !== "running") {
+					liveRoleActivityByRoot.delete(rootKey);
+					void refreshStatus(ctx);
+				}
+			}, 10_000);
+			await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
+		}
+	};
+	if (getCtxHasUI(ctx)) {
+		const ui = getCtxUi(ctx);
+		if (ui) {
+			return await ui.custom<string | undefined>((_tui, theme, _kb, done) => {
+				finishOverlay = done;
+				overlay = new StartupAnalystOverlay(theme);
+				overlay.setLines(contextProposalAnalystProgressLines(liveActivity));
+				run().then(settleOverlay).catch(() => settleOverlay(undefined));
+				return overlay;
+			});
+		}
+	}
+	return await run();
+}
+
 async function analyzeContextProposalWithAgent(
-	ctx: { model?: any; modelRegistry?: any },
+	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any; modelRegistry?: any },
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
 	explicitGoal?: string,
@@ -689,42 +887,12 @@ async function analyzeContextProposalWithAgent(
 		return parseContextProposalAnalystOutput(testOutput, projectName, explicitGoal);
 	}
 	if (recentEntries.length === 0) return undefined;
-	const model = ctx.model;
-	if (!model || !ctx.modelRegistry?.getApiKeyAndHeaders) return undefined;
-	let auth: { ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string } | undefined;
 	try {
-		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	} catch {
-		return undefined;
-	}
-	if (!auth?.ok || !auth.apiKey) return undefined;
-	const discussion = serializeRecentDiscussionEntries(recentEntries);
-	const prompt = [
-		`Project: ${projectName}`,
-		explicitGoal ? `Explicit goal (keep this mission anchor):\n${explicitGoal}` : "Explicit goal: none provided; infer the current mission from the discussion.",
-		"",
-		"Recent discussion:",
-		discussion,
-	].join("\n");
-	try {
-		const response = await complete(
-			model,
-			{
-				systemPrompt: CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT,
-				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-			},
-			{ apiKey: auth.apiKey, headers: auth.headers },
-		);
-		if (response.stopReason === "aborted") return undefined;
-		const raw = response.content
-			.filter((item): item is { type: "text"; text: string } => item.type === "text")
-			.map((item) => item.text)
-			.join("\n")
-			.trim();
+		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries, explicitGoal);
 		if (!raw) return undefined;
 		return parseContextProposalAnalystOutput(raw, projectName, explicitGoal);
 	} catch (error) {
-		console.warn("[completion] context proposal analyst failed; falling back to rule-based parsing", error);
+		console.warn("[completion] context proposal analyst failed", error);
 		return undefined;
 	}
 }
@@ -902,27 +1070,16 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 }
 
 async function extractContextProposalFromSession(
-	ctx: { sessionManager: any; model?: any; modelRegistry?: any },
+	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
 	explicitGoal?: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx);
-	const analystProposal = await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal);
-	if (analystProposal) return analystProposal;
-	const candidates = recentEntries.map((entry) => entry.text);
-	for (const candidate of candidates) {
-		const parsed = parseContextProposal(candidate, projectName);
-		if (parsed) return parsed;
-	}
-	if (candidates.length > 1) {
-		const combined = candidates.slice(0, 4).reverse().join("\n\n");
-		return parseContextProposal(combined, projectName);
-	}
-	return undefined;
+	return await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal);
 }
 
 async function buildGoalAnchoredContextProposal(
-	ctx: { sessionManager: any; model?: any; modelRegistry?: any },
+	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	goal: string,
 	projectName: string,
 ): Promise<ContextProposal> {
@@ -2633,7 +2790,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					if (!proposal) {
 						emitCommandText(
 							ctx,
-							"Usage: /cook <goal> (or finish shaping the plan in discussion, then rerun /cook to confirm the proposed workflow)",
+							"Usage: /cook <goal> (discussion-only startup needs proposal analyst output; otherwise pass an explicit goal)",
 							"error",
 						);
 						return;
@@ -2683,7 +2840,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					if (!proposal) {
 						emitCommandText(
 							ctx,
-							"The previous completion workflow is already done. Shape the next plan in discussion or provide a new goal, then rerun /cook to start the next round.",
+							"The previous completion workflow is already done. Provide /cook <goal>, or rerun /cook when the proposal analyst can summarize the next round from discussion.",
 							"info",
 						);
 						return;

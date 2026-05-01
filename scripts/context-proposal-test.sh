@@ -101,13 +101,30 @@ mkdir -p "$ROOT"
 cd "$ROOT"
 git init -q
 
-# No workflow yet: /cook with no goal should infer from recent discussion.
-SESSION_ONE="$TMPDIR/session-one.jsonl"
-DISCUSSION_ONE=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\n- Suppress the widget while a completion role is active.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\n- Keep observability regression coverage truthful.'
-write_session "$SESSION_ONE" "$ROOT" "$DISCUSSION_ONE"
+# No workflow yet: /cook with no goal should not bootstrap from discussion alone when analyst output is unavailable.
+SESSION_ZERO="$TMPDIR/session-zero.jsonl"
+DISCUSSION_ZERO=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\n- Suppress the widget while a completion role is active.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\n- Keep observability regression coverage truthful.'
+write_session "$SESSION_ZERO" "$ROOT" "$DISCUSSION_ZERO"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-no-analyst.out 2>/tmp/pi-completion-context-proposal-no-analyst.err
+
+python3 - <<'PY'
+from pathlib import Path
+
+assert not Path('.agent').exists(), '/cook should not bootstrap canonical state from discussion alone without analyst output'
+PY
+
+# No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
+SESSION_ONE="$TMPDIR/session-one.jsonl"
+DISCUSSION_ONE="$DISCUSSION_ZERO"
+ANALYST_OUTPUT_ONE='{"mission":"Remove the completion status line while keeping the completion widget.","scope":["Keep the non-running completion widget.","Suppress the widget while a completion role is active."],"constraints":["Do not reintroduce any other completion status surface."],"acceptance":["Update README to match the shipped behavior.","Keep observability regression coverage truthful."],"confidence":0.94}'
+write_session "$SESSION_ONE" "$ROOT" "$DISCUSSION_ONE"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_ONE" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_ONE" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-bootstrap.out 2>/tmp/pi-completion-context-proposal-bootstrap.err
 
@@ -121,23 +138,24 @@ state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
-assert mission in mission_text, '.agent/mission.md did not record the context-derived mission anchor'
-assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after context-derived bootstrap'
-assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after context-derived bootstrap'
-assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after context-derived bootstrap'
-assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after context-derived bootstrap'
-assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after context-derived bootstrap'
+assert mission in mission_text, '.agent/mission.md did not record the analyst-derived mission anchor'
+assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after analyst-derived bootstrap'
+assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after analyst-derived bootstrap'
+assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
+assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after analyst-derived bootstrap'
+assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after analyst-derived bootstrap'
 PY
 
-# Completed workflow: /cook with no goal should infer the next round from recent discussion.
+# Completed workflow: /cook with no goal should infer the next round from recent discussion through analyst output.
 mark_done
 
 SESSION_TWO="$TMPDIR/session-two.jsonl"
 DISCUSSION_TWO=$'Mission: Ship the next workflow round for richer context-derived /cook startup.\nScope:\n- Start a new workflow round from recent discussion after the previous one is done.\n- Keep using canonical .agent state after confirmation.\nConstraints:\n- Do not resume the completed workflow when the new round is clearly different.\nAcceptance:\n- Reset canonical state back to reground for the new mission.\n- Preserve the tracked completion control-plane files.'
+ANALYST_OUTPUT_TWO='{"mission":"Ship the next workflow round for richer context-derived /cook startup.","scope":["Start a new workflow round from recent discussion after the previous one is done.","Keep using canonical .agent state after confirmation."],"constraints":["Do not resume the completed workflow when the new round is clearly different."],"acceptance":["Reset canonical state back to reground for the new mission.","Preserve the tracked completion control-plane files."],"confidence":0.93}'
 write_session "$SESSION_TWO" "$ROOT" "$DISCUSSION_TWO"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
-PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_TWO" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_TWO" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-next-round.out 2>/tmp/pi-completion-context-proposal-next-round.err
 
@@ -165,8 +183,8 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: /cook <goal> plus refocus should use the explicit goal as the mission anchor,
-# while still allowing recent discussion to enrich the proposal before confirmation.
+# Active workflow: /cook <goal> plus refocus should use the explicit goal as the mission anchor
+# even when analyst output is unavailable, without falling back to session-derived proposal parsing.
 SESSION_THREE="$TMPDIR/session-three.jsonl"
 DISCUSSION_THREE=$'Scope:\n- Preserve the richer proposal structure from discussion.\nConstraints:\n- Keep explicit goals as the mission anchor when they conflict with earlier text.\nAcceptance:\n- Refresh canonical state from the replacement mission.'
 write_session "$SESSION_THREE" "$ROOT" "$DISCUSSION_THREE"
@@ -195,17 +213,19 @@ assert state['current_phase'] == 'reground', 'current_phase should reset to regr
 assert state['continuation_policy'] == 'continue', 'continuation_policy should stay continue after explicit-goal replacement'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal replacement'
 assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal replacement'
+assert 'Preserve the richer proposal structure from discussion.' not in state['continuation_reason'], 'session scope should not be merged when analyst output is unavailable'
+assert 'Keep explicit goals as the mission anchor when they conflict with earlier text.' not in state['continuation_reason'], 'session constraints should not be merged when analyst output is unavailable'
+assert 'Refresh canonical state from the replacement mission.' not in state['continuation_reason'], 'session acceptance should not be merged when analyst output is unavailable'
 assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal replacement'
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal replacement'
 PY
 
-# Completed workflow again: /cook <goal> should start the next round directly from the explicit goal,
-# keep explicit scope untouched, filter unrelated session-derived scope, and still merge
-# session-derived constraints/acceptance details.
+# Completed workflow again: /cook <goal> should start the next round directly from the explicit goal
+# even when analyst output is unavailable, without merging session-derived scope, constraints, or acceptance.
 mark_done
 
 SESSION_FOUR="$TMPDIR/session-four.jsonl"
-DISCUSSION_FOUR=$'Scope:\n- Filter scope by mission.\n- Restyle widget.\nConstraints:\n- Keep rules.\nAcceptance:\n- Add test.'
+DISCUSSION_FOUR=$'Scope:\n- Add session-only scope.\n- Restyle widget.\nConstraints:\n- Keep rules.\nAcceptance:\n- Add test.'
 EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit scope.'
 write_session "$SESSION_FOUR" "$ROOT" "$DISCUSSION_FOUR"
 
@@ -236,16 +256,16 @@ assert state['requires_reground'] is True, 'requires_reground should reset to tr
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal next-round start'
 assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal next-round start'
 assert 'Keep explicit scope.' in continuation_reason, 'explicit scope should remain in the explicit-goal proposal'
-assert 'Filter scope by mission.' in continuation_reason, 'relevant session-derived scope should remain in the explicit-goal proposal'
-assert 'Restyle widget.' not in continuation_reason, 'unrelated session-derived scope should be filtered from the explicit-goal proposal'
-assert 'Keep rules.' in continuation_reason, 'session-derived constraints should still merge into the explicit-goal proposal'
-assert 'Add test.' in continuation_reason, 'session-derived acceptance should still merge into the explicit-goal proposal'
+assert 'Add session-only scope.' not in continuation_reason, 'session-derived scope should not be merged when analyst output is unavailable'
+assert 'Restyle widget.' not in continuation_reason, 'unrelated session-derived scope should not be merged when analyst output is unavailable'
+assert 'Keep rules.' not in continuation_reason, 'session-derived constraints should not merge when analyst output is unavailable'
+assert 'Add test.' not in continuation_reason, 'session-derived acceptance should not merge when analyst output is unavailable'
 assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal next-round start'
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal next-round start'
 PY
 
 # Completed workflow again: /cook with no goal should be able to use model-assisted
-# analysis of natural discussion when the built-in parser would not have enough structure.
+# analysis of natural discussion when discussion-only startup depends on analyst output.
 mark_done
 
 SESSION_FIVE="$TMPDIR/session-five.jsonl"
