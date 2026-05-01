@@ -107,6 +107,7 @@ DISCUSSION_ONE=$'Mission: Remove the completion status line while keeping the co
 write_session "$SESSION_ONE" "$ROOT" "$DISCUSSION_ONE"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_ONE" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-bootstrap.out 2>/tmp/pi-completion-context-proposal-bootstrap.err
 
@@ -136,6 +137,7 @@ DISCUSSION_TWO=$'Mission: Ship the next workflow round for richer context-derive
 write_session "$SESSION_TWO" "$ROOT" "$DISCUSSION_TWO"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_TWO" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-next-round.out 2>/tmp/pi-completion-context-proposal-next-round.err
 
@@ -171,6 +173,7 @@ write_session "$SESSION_THREE" "$ROOT" "$DISCUSSION_THREE"
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_THREE" -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >/tmp/pi-completion-context-proposal-active-goal.out 2>/tmp/pi-completion-context-proposal-active-goal.err
 
@@ -207,6 +210,7 @@ EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit 
 write_session "$SESSION_FOUR" "$ROOT" "$DISCUSSION_FOUR"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_FOUR" -e "$PKG_ROOT" -p "/cook $EXPLICIT_GOAL_FOUR" >/tmp/pi-completion-context-proposal-done-goal.out 2>/tmp/pi-completion-context-proposal-done-goal.err
 
@@ -238,6 +242,41 @@ assert 'Keep rules.' in continuation_reason, 'session-derived constraints should
 assert 'Add test.' in continuation_reason, 'session-derived acceptance should still merge into the explicit-goal proposal'
 assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal next-round start'
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal next-round start'
+PY
+
+# Completed workflow again: /cook with no goal should be able to use model-assisted
+# analysis of natural discussion when the built-in parser would not have enough structure.
+mark_done
+
+SESSION_FIVE="$TMPDIR/session-five.jsonl"
+DISCUSSION_FIVE=$'I do not want to rewrite the parser. The safer path is to let /cook analyze the discussion first, keep the user\'s explicit mission if they provided one, and ignore stale scope that drifted in from earlier turns. We should still prove it with a regression test before writing canonical state.'
+ANALYST_OUTPUT_FIVE='{"mission":"Use a proposal analyst to summarize natural discussion before /cook writes canonical state.","scope":["Keep explicit goals anchored.","Drop stale scope from earlier turns."],"constraints":["Do not rewrite the parser."],"acceptance":["Add a regression test."],"confidence":0.91,"possible_noise":["old unrelated scope"]}'
+write_session "$SESSION_FIVE" "$ROOT" "$DISCUSSION_FIVE"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_FIVE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_FIVE" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-analyst.out 2>/tmp/pi-completion-context-proposal-analyst.err
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+mission = 'Use a proposal analyst to summarize natural discussion before /cook writes canonical state.'
+mission_text = Path('.agent/mission.md').read_text()
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+continuation_reason = state['continuation_reason']
+
+assert mission in mission_text, '.agent/mission.md did not record the analyst-derived mission anchor'
+assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after analyst-derived bootstrap'
+assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after analyst-derived bootstrap'
+assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
+assert state['current_phase'] == 'reground', 'current_phase should reset to reground after analyst-derived bootstrap'
+assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after analyst-derived bootstrap'
+assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the analyst-derived restart'
+assert 'Keep explicit goals anchored.' in continuation_reason, 'analyst-derived scope should be preserved'
 PY
 
 echo "context proposal test passed: $ROOT"

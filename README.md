@@ -7,6 +7,7 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 - `/cook` as the single workflow command
 - `/cook <goal>` to bootstrap or continue with an explicit goal, enriched by recent discussion before canonical state is written
 - `/cook` with no goal to resume an active canonical `.agent/**` workflow, or propose a new round from recent discussion when no active workflow is running
+- model-assisted startup proposal analysis for natural recent discussion, with rule-based parsing kept as the fallback when analysis is unavailable
 - `/cook <new goal>` on an active workflow asks whether to continue the current mission or abandon it for a replacement workflow; on a completed workflow it starts the next round from the new goal instead of reopening continue/refocus choices
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
@@ -101,7 +102,7 @@ After install, run `/reload` in pi. For this package, it is safest to reload whe
 
 This bootstraps `.agent/**` if missing, derives a clean initial `MISSION ANCHOR`, builds a startup proposal, lets you confirm or edit it, re-grounds canonical state, creates a slice plan, and drives the workflow.
 
-When you pass an explicit goal, that goal stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written.
+When a model is available, `/cook` first asks it to summarize the recent natural-language discussion into a structured proposal and falls back to the built-in rule-based parser if that analysis is unavailable. When you pass an explicit goal, that goal still stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written.
 
 ### Resume later
 
@@ -138,7 +139,7 @@ If the previous workflow is already `done`, `/cook <goal>` starts the next workf
 /cook
 ```
 
-If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state.
+If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. This works with natural discussion best when a model is available, and otherwise falls back to the built-in parser.
 
 ## Canonical repo files
 

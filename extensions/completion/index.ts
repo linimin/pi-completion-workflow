@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { complete, StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
@@ -115,7 +115,12 @@ type ContextProposal = {
 	acceptance: string[];
 	goalText: string;
 	basisPreview: string;
-	source: "session";
+	source: "session" | "analyst";
+};
+
+type RecentDiscussionEntry = {
+	role: "user" | "assistant" | "custom" | "summary";
+	text: string;
 };
 
 type ContextProposalDecision = {
@@ -420,6 +425,14 @@ function completionTestContextProposalEditText(): string | undefined {
 	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_EDIT_TEXT);
 }
 
+function shouldDisableContextProposalAnalyst(): boolean {
+	return process.env.PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST === "1";
+}
+
+function completionTestContextProposalAnalystOutput(): string | undefined {
+	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT);
+}
+
 function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean {
 	return asString(snapshot?.state?.continuation_policy) === "done";
 }
@@ -562,6 +575,158 @@ function isSessionScopeItemMissionRelevant(item: string, mission: string): boole
 	const overlap = itemTokens.filter((token) => missionTokens.has(token));
 	if (overlap.length >= 2) return true;
 	return overlap.some((token) => token.length >= 6 || /[\p{Script=Han}]/u.test(token));
+}
+
+const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
+	"You analyze recent /cook startup discussion and return a strict JSON object.",
+	"Do not emit markdown, code fences, or commentary.",
+	"Return exactly one JSON object with keys: mission, scope, constraints, acceptance, confidence, possible_noise.",
+	"mission must be a concise implementation mission anchor sentence.",
+	"scope must contain only work items that directly support the mission.",
+	"constraints must contain guardrails or non-goals explicitly stated or strongly implied by the discussion.",
+	"acceptance must contain verifiable outcomes explicitly stated or strongly implied by the discussion.",
+	"possible_noise should list discussion points that look stale, weakly related, or unsafe to promote into scope.",
+	"When an explicit goal is provided, keep the mission anchored to that goal instead of replacing it with a broader or different mission.",
+	"When discussion is insufficient, prefer empty arrays and a low confidence value over invention.",
+].join(" ");
+
+function collectRecentDiscussionEntries(ctx: { sessionManager: any }, limit = 8): RecentDiscussionEntry[] {
+	let branch: any[] = [];
+	try {
+		branch = ctx.sessionManager?.getBranch?.() ?? [];
+	} catch (error) {
+		if (isStaleContextError(error)) return [];
+		throw error;
+	}
+	const entries: RecentDiscussionEntry[] = [];
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const entry = branch[index];
+		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+		const message = entry.message as JsonRecord;
+		let text = "";
+		let role: RecentDiscussionEntry["role"] | undefined;
+		const messageRole = asString(message.role);
+		if (messageRole === "user" || messageRole === "assistant" || messageRole === "custom") {
+			text = extractTextFromMessageContent(message.content);
+			role = messageRole;
+		} else if (messageRole === "branchSummary" || messageRole === "compactionSummary") {
+			text = asString(message.summary) ?? "";
+			role = "summary";
+		}
+		if (!text || !role) continue;
+		const trimmed = text.trim();
+		if (!trimmed || /^\/(?:cook|complete)\b/i.test(trimmed)) continue;
+		entries.push({ role, text: trimmed });
+		if (entries.length >= limit) break;
+	}
+	return entries;
+}
+
+function serializeRecentDiscussionEntries(entries: RecentDiscussionEntry[]): string {
+	return entries
+		.slice()
+		.reverse()
+		.map((entry, index) => `[${index + 1}] ${entry.role.toUpperCase()}\n${entry.text}`)
+		.join("\n\n");
+}
+
+function extractJsonObjectFromText(text: string): string | undefined {
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+	const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+	if (unfenced.startsWith("{") && unfenced.endsWith("}")) return unfenced;
+	const start = unfenced.indexOf("{");
+	const end = unfenced.lastIndexOf("}");
+	if (start < 0 || end <= start) return undefined;
+	return unfenced.slice(start, end + 1);
+}
+
+function parseContextProposalAnalystOutput(
+	raw: string,
+	projectName: string,
+	explicitGoal?: string,
+): ContextProposal | undefined {
+	const jsonText = extractJsonObjectFromText(raw);
+	if (!jsonText) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(jsonText);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	const explicit = explicitGoal ? parseContextProposal(explicitGoal, projectName) : undefined;
+	const missionSource = explicit?.mission ?? explicitGoal ?? asString(parsed.mission);
+	if (!missionSource) return undefined;
+	const assessment = assessMissionAnchor(missionSource, projectName);
+	const normalizedMission = normalizeMissionAnchorText(missionSource);
+	if (!normalizedMission || isWeakMissionAnchor(normalizedMission)) return undefined;
+	const mission = assessment.derived;
+	const scope = uniqueProposalItems(asStringArray(parsed.scope));
+	const constraints = uniqueProposalItems(asStringArray(parsed.constraints));
+	const acceptance = uniqueProposalItems(asStringArray(parsed.acceptance));
+	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
+	return {
+		mission,
+		scope,
+		constraints,
+		acceptance,
+		goalText,
+		basisPreview: raw.replace(/\s+/g, " ").trim(),
+		source: "analyst",
+	};
+}
+
+async function analyzeContextProposalWithAgent(
+	ctx: { model?: any; modelRegistry?: any },
+	projectName: string,
+	recentEntries: RecentDiscussionEntry[],
+	explicitGoal?: string,
+): Promise<ContextProposal | undefined> {
+	if (shouldDisableContextProposalAnalyst()) return undefined;
+	const testOutput = completionTestContextProposalAnalystOutput();
+	if (testOutput) {
+		return parseContextProposalAnalystOutput(testOutput, projectName, explicitGoal);
+	}
+	if (recentEntries.length === 0) return undefined;
+	const model = ctx.model;
+	if (!model || !ctx.modelRegistry?.getApiKeyAndHeaders) return undefined;
+	let auth: { ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string } | undefined;
+	try {
+		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	} catch {
+		return undefined;
+	}
+	if (!auth?.ok || !auth.apiKey) return undefined;
+	const discussion = serializeRecentDiscussionEntries(recentEntries);
+	const prompt = [
+		`Project: ${projectName}`,
+		explicitGoal ? `Explicit goal (keep this mission anchor):\n${explicitGoal}` : "Explicit goal: none provided; infer the current mission from the discussion.",
+		"",
+		"Recent discussion:",
+		discussion,
+	].join("\n");
+	try {
+		const response = await complete(
+			model,
+			{
+				systemPrompt: CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT,
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+			},
+			{ apiKey: auth.apiKey, headers: auth.headers },
+		);
+		if (response.stopReason === "aborted") return undefined;
+		const raw = response.content
+			.filter((item): item is { type: "text"; text: string } => item.type === "text")
+			.map((item) => item.text)
+			.join("\n")
+			.trim();
+		if (!raw) return undefined;
+		return parseContextProposalAnalystOutput(raw, projectName, explicitGoal);
+	} catch (error) {
+		console.warn("[completion] context proposal analyst failed; falling back to rule-based parsing", error);
+		return undefined;
+	}
 }
 
 function buildContextProposalGoalText(proposal: {
@@ -736,31 +901,15 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 	};
 }
 
-function extractContextProposalFromSession(ctx: { sessionManager: any }, projectName: string): ContextProposal | undefined {
-	let branch: any[] = [];
-	try {
-		branch = ctx.sessionManager?.getBranch?.() ?? [];
-	} catch (error) {
-		if (isStaleContextError(error)) return undefined;
-		throw error;
-	}
-	const candidates: string[] = [];
-	for (let index = branch.length - 1; index >= 0; index -= 1) {
-		const entry = branch[index];
-		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
-		const message = entry.message as JsonRecord;
-		let text = "";
-		const role = asString(message.role);
-		if (role === "user" || role === "assistant" || role === "custom") {
-			text = extractTextFromMessageContent(message.content);
-		} else if (role === "branchSummary" || role === "compactionSummary") {
-			text = asString(message.summary) ?? "";
-		}
-		if (!text) continue;
-		const trimmed = text.trim();
-		if (!trimmed || /^\/(?:cook|complete)\b/i.test(trimmed)) continue;
-		candidates.push(trimmed);
-	}
+async function extractContextProposalFromSession(
+	ctx: { sessionManager: any; model?: any; modelRegistry?: any },
+	projectName: string,
+	explicitGoal?: string,
+): Promise<ContextProposal | undefined> {
+	const recentEntries = collectRecentDiscussionEntries(ctx);
+	const analystProposal = await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal);
+	if (analystProposal) return analystProposal;
+	const candidates = recentEntries.map((entry) => entry.text);
 	for (const candidate of candidates) {
 		const parsed = parseContextProposal(candidate, projectName);
 		if (parsed) return parsed;
@@ -772,13 +921,13 @@ function extractContextProposalFromSession(ctx: { sessionManager: any }, project
 	return undefined;
 }
 
-function buildGoalAnchoredContextProposal(
-	ctx: { sessionManager: any },
+async function buildGoalAnchoredContextProposal(
+	ctx: { sessionManager: any; model?: any; modelRegistry?: any },
 	goal: string,
 	projectName: string,
-): ContextProposal {
+): Promise<ContextProposal> {
 	const explicit = parseContextProposal(goal, projectName);
-	const sessionProposal = extractContextProposalFromSession(ctx, projectName);
+	const sessionProposal = await extractContextProposalFromSession(ctx, projectName, goal);
 	const missionSource = explicit?.mission ?? goal;
 	const assessment = assessMissionAnchor(missionSource, projectName);
 	const mission = assessment.derived;
@@ -795,7 +944,7 @@ function buildGoalAnchoredContextProposal(
 		acceptance,
 		goalText,
 		basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
-		source: "session",
+		source: sessionProposal?.source ?? "session",
 	};
 }
 
@@ -2480,7 +2629,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				const root = findRepoRoot(cwd) ?? cwd;
 				const projectName = path.basename(root);
 				if (!goal) {
-					const proposal = extractContextProposalFromSession(ctx, projectName);
+					const proposal = await extractContextProposalFromSession(ctx, projectName);
 					if (!proposal) {
 						emitCommandText(
 							ctx,
@@ -2501,7 +2650,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					goal = decision.goalText;
 					kickoffMissionAnchor = decision.missionAnchor;
 				} else {
-					const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
 					const decision = await confirmContextProposal(ctx, proposal, projectName, {
 						title: "Start a completion workflow from this goal?",
 						nonInteractiveBehavior: "accept",
@@ -2530,7 +2679,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (!goal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = extractContextProposalFromSession(ctx, projectName);
+					const proposal = await extractContextProposalFromSession(ctx, projectName);
 					if (!proposal) {
 						emitCommandText(
 							ctx,
@@ -2570,7 +2719,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (hadSnapshot && explicitGoal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
 					const decision = await confirmContextProposal(ctx, proposal, projectName, {
 						title: "Start the next workflow round from this goal?",
 						nonInteractiveBehavior: "accept",
@@ -2597,7 +2746,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					kickoffMissionAnchor = decision.currentMissionAnchor;
 					if (decision.action === "refocus") {
 						const projectName = path.basename(snapshot.files.root);
-						const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+						const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
 						const proposalDecision = await confirmContextProposal(ctx, proposal, projectName, {
 							title: "Start the replacement workflow from this goal?",
 							nonInteractiveBehavior: "accept",
