@@ -157,6 +157,27 @@ This package manages repo-local canonical workflow state under:
 
 Canonical truth lives in these files plus current repo truth.
 
+### Tracked vs ignored `.agent` files
+
+The `.agent` directory mixes two different kinds of workflow data:
+
+- **Tracked repo-contract files** define the repo-level workflow contract and should stay in git:
+  - `.agent/README.md`
+  - `.agent/mission.md`
+  - `.agent/profile.json`
+  - `.agent/verify_completion_stop.sh`
+  - `.agent/verify_completion_control_plane.sh`
+- **Ignored execution-state files** are local high-churn workflow state used for resume and recovery and should stay out of git:
+  - `.agent/state.json`
+  - `.agent/plan.json`
+  - `.agent/active-slice.json`
+  - `.agent/slice-history.jsonl`
+  - `.agent/stop-check-history.jsonl`
+  - `.agent/*.log`
+  - `.agent/tmp/`
+
+In other words: tracked `.agent` files describe the workflow contract for the repo, while ignored `.agent` files are the local control-plane state for the current run.
+
 ## Live observability surfaces
 
 When canonical `.agent/**` state exists and no role is actively running, the extension shows a completion widget sourced from that state. The non-running widget summarizes the current phase, selected slice, next mandatory role, and remaining work counts; there is no completion status line.
