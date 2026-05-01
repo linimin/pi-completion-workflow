@@ -36,10 +36,25 @@ You may conclude the project can stop only if current HEAD truth satisfies all o
 - if canonical state still keeps `FINAL-STOP-01` open or `project_done = false` solely because the current stop wave has not yet been recorded and reconciled, do not treat that pre-reconciliation posture by itself as a `NO-STOP` reason
 - `bash .agent/verify_completion_stop.sh` either already passes, or its only failing condition is the absence of the current wave's required current-HEAD judgment records; any other verifier failure is `NO-STOP`
 
+Always emit the shared rubric section before the stop verdict. Use these exact rubric dimension names and verdict words, and include all four lines even when every dimension is `pass`:
+
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
+
+If any rubric line is `fail`, `Can the project stop now` must be `no`.
+
 Answer only:
 
 - `MISSION ANCHOR: ...`
 - `Remaining contract IDs: ...`
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
 - `Can the project stop now: yes/no`
 - `Exact remaining open top-level contract IDs: ...`
 - `Blocker count: ...`

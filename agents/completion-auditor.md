@@ -24,10 +24,25 @@ During long work, emit short operator-facing progress lines when useful using th
 
 These lines are for workflow observability, not hidden reasoning. Keep them brief and truthful.
 
+Always emit the shared rubric section before the remaining audit fields. Use these exact rubric dimension names and verdict words, and include all four lines even when every dimension is `pass`:
+
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
+
+Use `concern` or `fail` to explain why the project is not yet done, why canonical state may be stale, or why backlog truth may need reconciliation.
+
 Answer only:
 
 - `MISSION ANCHOR: ...`
 - `Remaining contract IDs: ...`
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
 - `Why the project is still not done: ...`
 - `Open top-level contract IDs: ...`
 - `Blocker count: ...`

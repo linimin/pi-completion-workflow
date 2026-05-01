@@ -37,10 +37,25 @@ Order findings by severity and include file references.
 
 You must explicitly answer whether the slice is acceptable as-is. If it is not acceptable, provide the exact smallest follow-up slice.
 
+Always emit the shared rubric section before findings. Use these exact rubric dimension names and verdict words, and include all four lines even when every dimension is `pass`:
+
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
+
+If any rubric line is `fail`, `Acceptable as-is` must be `no`.
+
 Output format:
 
 - `MISSION ANCHOR: ...`
 - `Remaining contract IDs: ...`
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
 - `Findings: ...`
 - `Acceptable as-is: yes/no`
 - `Smallest follow-up slice: ...`

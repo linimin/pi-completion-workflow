@@ -8,6 +8,7 @@ npm run smoke-test
 npm run refocus-test
 npm run context-proposal-test
 npm run observability-status-test
+npm run rubric-contract-test
 npm pack --dry-run >/dev/null
 
 echo "release check passed"

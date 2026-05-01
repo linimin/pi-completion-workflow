@@ -161,6 +161,43 @@ All completion reports must begin with:
 
 If a role-specific fixed format uses before/after wording, keep the same mission-anchor first line and then follow that role's exact format.
 
+## Structured Evaluation Rubric Foundation
+
+`completion-reviewer`, `completion-auditor`, and `completion-stop-judge` must emit rubric-backed evaluations using the same shared dimension names and verdict semantics.
+
+This foundation is a prompt/report contract only. It does **not** add canonical `task_type` or `evaluation_profile` schema yet; later slices may wire those through the control plane.
+
+Required rubric section:
+
+- `Rubric:`
+- `- Contract coverage: pass|concern|fail - ...`
+- `- Correctness risk: pass|concern|fail - ...`
+- `- Verification evidence: pass|concern|fail - ...`
+- `- Docs/state parity: pass|concern|fail - ...`
+
+Use the dimension names and verdict words exactly as written above.
+
+Dimension meaning:
+
+- `Contract coverage` — whether the slice or current HEAD satisfies the locked acceptance criteria and role-specific workflow obligations.
+- `Correctness risk` — whether regressions, blocking defects, safety issues, or closure risks are still evident in current repo truth.
+- `Verification evidence` — whether tests, deterministic proof, and rerun verification are strong enough for the role's decision.
+- `Docs/state parity` — whether docs, config, runbooks, and canonical `.agent` state stay truthful to shipped behavior for the role's scope.
+
+Verdict semantics:
+
+- `pass` — no material issue remains for that dimension in the role's current decision.
+- `concern` — a real caveat or remaining gap exists, but it does not by itself force rejection or `NO-STOP`; explain the follow-up plainly.
+- `fail` — a blocking issue or contradictory truth exists and the role's final verdict must not be positive.
+
+Decision alignment rules:
+
+- Reviewer: any `fail` means `Acceptable as-is` must be `no`.
+- Auditor: use `concern` or `fail` to explain why the project is not yet done and whether canonical backlog/state remain truthful.
+- Stop judge: any `fail` means `Can the project stop now` must be `no`.
+
+Always include all four rubric lines, even when every dimension is `pass`.
+
 ## References
 
 Read these bundled references when you need the full protocol or scaffolding material:

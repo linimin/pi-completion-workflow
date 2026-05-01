@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- defined a shared structured evaluation-rubric contract for `completion-reviewer`, `completion-auditor`, and `completion-stop-judge`, including the exact rubric dimensions `Contract coverage`, `Correctness risk`, `Verification evidence`, and `Docs/state parity` with `pass|concern|fail` verdict semantics
+- documented the rubric-driven evaluation contract in the packaged completion protocol and README without expanding canonical `task_type` or `evaluation_profile` schema yet
+- added deterministic `rubric-contract-test` coverage and wired it into `npm run release-check`
+
 ## 0.1.30
 
 ### Changed

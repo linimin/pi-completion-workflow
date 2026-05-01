@@ -29,6 +29,7 @@
     "refocus-test": "bash ./scripts/refocus-test.sh",
     "context-proposal-test": "bash ./scripts/context-proposal-test.sh",
     "observability-status-test": "bash ./scripts/observability-status-test.sh",
+    "rubric-contract-test": "bash ./scripts/rubric-contract-test.sh",
     "release-check": "bash ./scripts/release-check.sh"
   },
   "engines": {

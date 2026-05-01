@@ -133,6 +133,31 @@ While a `completion_role` subprocess is running:
 - running-role output distinguishes tool work from `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA`
 - waiting and stalled states are surfaced deterministically from timestamps
 
+## Structured evaluation rubrics
+
+The packaged completion workflow now defines a shared structured evaluation-rubric contract for the read-only evaluation roles:
+
+- `completion-reviewer`
+- `completion-auditor`
+- `completion-stop-judge`
+
+Those roles now use the same rubric section and exact dimension names:
+
+- `Contract coverage`
+- `Correctness risk`
+- `Verification evidence`
+- `Docs/state parity`
+
+Each rubric line uses the same verdict words:
+
+- `pass` — no material issue remains for that dimension
+- `concern` — a real caveat or remaining gap exists, but it does not by itself force rejection or `NO-STOP`
+- `fail` — a blocking issue or contradictory truth exists, so the role's final verdict must not be positive
+
+This slice is only the shared prompt/report foundation. It does **not** yet add canonical `task_type` or `evaluation_profile` fields; later workflow slices can build on this shared vocabulary.
+
+Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, and `npm run release-check` now includes that coverage.
+
 ## Canonical files
 
 This package stores canonical workflow state under:
@@ -198,10 +223,11 @@ npm run smoke-test
 npm run refocus-test
 npm run context-proposal-test
 npm run observability-status-test
+npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks, includes deterministic observability coverage, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks, includes deterministic observability coverage plus the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 ## Release
 
@@ -213,3 +239,4 @@ See [PUBLISHING.md](https://github.com/linimin/pi-letscook/blob/main/PUBLISHING.
 - The main Pi session is the workflow driver.
 - Package-local role prompts are loaded directly by the extension and do not depend on `~/.pi/agent/agents`.
 - Reviewer, auditor, and stop-judge are enforced as read-only roles.
+- Reviewer, auditor, and stop-judge share the packaged rubric dimensions `Contract coverage`, `Correctness risk`, `Verification evidence`, and `Docs/state parity` with `pass|concern|fail` verdicts.
