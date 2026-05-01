@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.26
+
+### Changed
+
+- clarified the README install guidance and `/cook` behavior matrix, including tracked-vs-ignored `.agent` file explanations, active-workflow replacement examples, and safer `/reload` guidance for completion work
+
 ## 0.1.25
 
 ### Changed
