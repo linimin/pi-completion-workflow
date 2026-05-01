@@ -47,6 +47,8 @@ assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch af
 assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after bootstrap'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after bootstrap'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after bootstrap'
+assert active['implementation_surfaces'] == [], 'active-slice.json should scaffold empty implementation_surfaces'
+assert active['verification_commands'] == [], 'active-slice.json should scaffold empty verification_commands'
 assert 'Canonical routing profile:' in kickoff, 'kickoff prompt should expose canonical routing profile'
 assert f'- task_type: {expected_task_type}' in kickoff, 'kickoff prompt missing canonical task_type'
 assert f'- evaluation_profile: {expected_eval_profile}' in kickoff, 'kickoff prompt missing canonical evaluation_profile'
@@ -130,8 +132,10 @@ active.update({
     'contract_ids': ['smoke-contract'],
     'acceptance_criteria': ['criterion'],
     'blocked_on': [],
-    'locked_notes': [],
+    'locked_notes': ['keep the change scoped to the selected active-slice contract'],
     'must_fix_findings': [],
+    'implementation_surfaces': ['extensions/completion/index.ts', '.agent/verify_completion_control_plane.sh'],
+    'verification_commands': ['bash .agent/verify_completion_control_plane.sh', 'npm run smoke-test'],
     'basis_commit': 'deadbeef',
     'remaining_contract_ids_before': ['smoke-contract'],
     'release_blocker_count_before': 1,
@@ -157,7 +161,45 @@ active['why_now'] = 'smoke test exact handoff'
 path.write_text(json.dumps(active, indent=2) + '\n')
 PY
 
+python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path('.agent/active-slice.json')
+active = json.loads(path.read_text())
+active.pop('implementation_surfaces', None)
+active.pop('verification_commands', None)
+path.write_text(json.dumps(active, indent=2) + '\n')
+PY
+
+if bash .agent/verify_completion_control_plane.sh >/dev/null 2>&1; then
+  echo "expected control-plane verification to fail when selected active-slice omits implementation_surfaces/verification_commands" >&2
+  exit 1
+fi
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path('.agent/active-slice.json')
+active = json.loads(path.read_text())
+active['implementation_surfaces'] = ['extensions/completion/index.ts', '.agent/verify_completion_control_plane.sh']
+active['verification_commands'] = ['bash .agent/verify_completion_control_plane.sh', 'npm run smoke-test']
+path.write_text(json.dumps(active, indent=2) + '\n')
+PY
+
 bash .agent/verify_completion_control_plane.sh >/dev/null
 bash .agent/verify_completion_stop.sh >/dev/null
+
+python3 - "$PKG_ROOT" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1], 'extensions/completion', 'index.ts').read_text()
+assert 'Active slice priority: ${activePriority}' in text, 'system reminder source should expose active-slice priority'
+assert 'Active slice why_now: ${activeWhyNow}' in text, 'system reminder source should expose active-slice why_now'
+assert 'Active implementation surfaces: ${implementationSurfaces.join(", ")}' in text, 'system reminder source should expose implementation_surfaces'
+assert 'Active verification commands: ${verificationCommands.join(" | ")}' in text, 'system reminder source should expose verification_commands'
+assert '`- implementation_surfaces: ${implementationSurfaces.join(" | ")}`' in text, 'resume capsule source should expose implementation_surfaces'
+assert '`- verification_commands: ${verificationCommands.join(" | ")}`' in text, 'resume capsule source should expose verification_commands'
+PY
 
 echo "smoke test passed: $ROOT"

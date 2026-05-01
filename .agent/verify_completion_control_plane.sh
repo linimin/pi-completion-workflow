@@ -102,7 +102,8 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
 }
 
-const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
+const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
 const allowedActive = [...requiredActiveBase, 'priority', 'why_now'];
 const activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];
 requireKeys(active, requiredActiveBase, '.agent/active-slice.json');
@@ -115,6 +116,8 @@ assert(Array.isArray(active.acceptance_criteria), '.agent/active-slice.json: acc
 assert(isStringArray(active.blocked_on), '.agent/active-slice.json: blocked_on must be an array of strings');
 assert(isStringArray(active.locked_notes), '.agent/active-slice.json: locked_notes must be an array of strings');
 assert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_fix_findings must be an array of strings');
+assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be an array of strings');
+assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
 assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
 
 assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
@@ -126,9 +129,11 @@ assert(active.evaluation_profile === profile.evaluation_profile, '.agent/active-
 
 const requiresExactHandoff = ['selected', 'in_progress', 'committed', 'done'].includes(active.status);
 if (requiresExactHandoff) {
-  assert(Array.isArray(active.acceptance_criteria) && active.acceptance_criteria.length > 0 && active.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
   assert(typeof active.priority === 'number' && Number.isFinite(active.priority), '.agent/active-slice.json: priority must be a finite number when status carries an exact handoff');
   assert(isString(active.why_now) && active.why_now.length > 0, '.agent/active-slice.json: why_now must be a non-empty string when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be a non-empty array of strings when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be a non-empty array of strings when status carries an exact handoff');
   assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
   assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
   assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');

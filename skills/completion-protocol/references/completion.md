@@ -163,6 +163,8 @@ Required base fields:
 - `blocked_on`
 - `locked_notes`
 - `must_fix_findings`
+- `implementation_surfaces`
+- `verification_commands`
 - `basis_commit`
 - `remaining_contract_ids_before`
 - `release_blocker_count_before`
@@ -178,10 +180,17 @@ Required exact handoff fields:
 - `blocked_on`
 - `locked_notes`
 - `must_fix_findings`
+- `implementation_surfaces`
+- `verification_commands`
 - `basis_commit`
 - `remaining_contract_ids_before`
 - `release_blocker_count_before`
 - `high_value_gap_count_before`
+
+Field meaning:
+
+- `implementation_surfaces` — the repo files or surfaces this slice is expected to update or keep in parity, so implementers can resume on the right scope after compaction.
+- `verification_commands` — the focused and broader deterministic checks expected before the slice is committed.
 
 Allowed `status` values:
 

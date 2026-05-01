@@ -1491,6 +1491,8 @@ function defaultActiveSlice(missionAnchor: string): JsonRecord {
 		blocked_on: [],
 		locked_notes: [],
 		must_fix_findings: [],
+		implementation_surfaces: [],
+		verification_commands: [],
 		basis_commit: null,
 		remaining_contract_ids_before: [],
 		release_blocker_count_before: null,
@@ -1618,7 +1620,8 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
 }
 
-const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
+const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
 const allowedActive = [...requiredActiveBase, 'priority', 'why_now'];
 const activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];
 requireKeys(active, requiredActiveBase, '.agent/active-slice.json');
@@ -1631,6 +1634,8 @@ assert(Array.isArray(active.acceptance_criteria), '.agent/active-slice.json: acc
 assert(isStringArray(active.blocked_on), '.agent/active-slice.json: blocked_on must be an array of strings');
 assert(isStringArray(active.locked_notes), '.agent/active-slice.json: locked_notes must be an array of strings');
 assert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_fix_findings must be an array of strings');
+assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be an array of strings');
+assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
 assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
 
 assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
@@ -1642,9 +1647,11 @@ assert(active.evaluation_profile === profile.evaluation_profile, '.agent/active-
 
 const requiresExactHandoff = ['selected', 'in_progress', 'committed', 'done'].includes(active.status);
 if (requiresExactHandoff) {
-  assert(Array.isArray(active.acceptance_criteria) && active.acceptance_criteria.length > 0 && active.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
   assert(typeof active.priority === 'number' && Number.isFinite(active.priority), '.agent/active-slice.json: priority must be a finite number when status carries an exact handoff');
   assert(isString(active.why_now) && active.why_now.length > 0, '.agent/active-slice.json: why_now must be a non-empty string when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be a non-empty array of strings when status carries an exact handoff');
+  assert(isNonEmptyStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be a non-empty array of strings when status carries an exact handoff');
   assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
   assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
   assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');
@@ -1748,8 +1755,12 @@ function activeSliceMatchesPlan(snapshot: CompletionStateSnapshot): "yes" | "no"
 }
 
 function handoffSnapshotState(active: JsonRecord | undefined): "present" | "missing_or_unclear" {
+	const exactArrays = [
+		asStringArray(active?.acceptance_criteria),
+		asStringArray(active?.implementation_surfaces),
+		asStringArray(active?.verification_commands),
+	];
 	const required = [
-		active?.acceptance_criteria,
 		active?.priority,
 		active?.why_now,
 		active?.blocked_on,
@@ -1760,12 +1771,18 @@ function handoffSnapshotState(active: JsonRecord | undefined): "present" | "miss
 		active?.release_blocker_count_before,
 		active?.high_value_gap_count_before,
 	];
-	return required.every((value) => value !== undefined && value !== null) ? "present" : "missing_or_unclear";
+	return exactArrays.every((items) => items.length > 0) && required.every((value) => value !== undefined && value !== null)
+		? "present"
+		: "missing_or_unclear";
 }
 
 function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
 	const history = historyCounts(sliceHistory, stopHistory);
-	return [
+	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
+	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
+	const activePriority = asNumber(snapshot.active?.priority);
+	const activeWhyNow = asString(snapshot.active?.why_now);
+	const lines = [
 		"Completion workflow detected.",
 		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
 		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
@@ -1784,7 +1801,12 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 		"Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
 		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
 		"When recovering from compaction, prefer a deterministic restart from canonical files over conversational inference.",
-	].join(" ");
+	];
+	if (activePriority !== undefined) lines.push(`Active slice priority: ${activePriority}`);
+	if (activeWhyNow) lines.push(`Active slice why_now: ${activeWhyNow}`);
+	if (implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${implementationSurfaces.join(", ")}`);
+	if (verificationCommands.length > 0) lines.push(`Active verification commands: ${verificationCommands.join(" | ")}`);
+	return lines.join(" ");
 }
 
 function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot, marker: JsonRecord | undefined): string {
@@ -1795,7 +1817,11 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	const activeSliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)";
 	const taskType = currentTaskType(snapshot) ?? "(missing)";
 	const evaluationProfile = currentEvaluationProfile(snapshot) ?? "(missing)";
-	return [
+	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
+	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
+	const activePriority = asNumber(snapshot.active?.priority);
+	const activeWhyNow = asString(snapshot.active?.why_now);
+	const lines = [
 		"POST-COMPACTION RECOVERY MODE is active.",
 		`Compaction marker time: ${markerAt}`,
 		"Treat the previous conversation as lossy continuity support only.",
@@ -1810,7 +1836,12 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 		"If the canonical state is ambiguous, inconsistent, missing, or stale after re-reading it, your first mandatory action is to dispatch completion-regrounder rather than guessing.",
 		"If continuation_policy == continue and canonical state is coherent, continue dispatching the mandatory role directly without asking the user whether to continue.",
 		"If you are about to implement after compaction, confirm the active slice snapshot still matches .agent/plan.json before doing any work.",
-	].join(" ");
+	];
+	if (activePriority !== undefined) lines.push(`Canonical active-slice priority is currently: ${activePriority}`);
+	if (activeWhyNow) lines.push(`Canonical active-slice why_now is currently: ${activeWhyNow}`);
+	if (implementationSurfaces.length > 0) lines.push(`Canonical implementation surfaces are currently: ${implementationSurfaces.join(", ")}`);
+	if (verificationCommands.length > 0) lines.push(`Canonical verification commands are currently: ${verificationCommands.join(" | ")}`);
+	return lines.join(" ");
 }
 
 function isStaleContextError(error: unknown): boolean {
@@ -1886,6 +1917,8 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		: asStringArray(snapshot.activeSlice?.blocked_on);
 	const lockedNotes = asStringArray(snapshot.active?.locked_notes);
 	const mustFixFindings = asStringArray(snapshot.active?.must_fix_findings);
+	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
+	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const remainingBefore = asStringArray(snapshot.active?.remaining_contract_ids_before);
 	const lines = [
 		"Authoritative completion resume capsule:",
@@ -1910,11 +1943,15 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		`- slice_id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
 		`- status: ${asString(snapshot.active?.status) ?? asString(snapshot.activeSlice?.status) ?? "unknown"}`,
 		`- goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(unknown)"}`,
+		`- priority: ${asNumber(snapshot.active?.priority) ?? "(unknown)"}`,
+		`- why_now: ${asString(snapshot.active?.why_now) ?? "(unknown)"}`,
 		`- contract_ids: ${contractIds.length > 0 ? contractIds.join(", ") : "(none)"}`,
 	];
 	if (blockedOn.length > 0) lines.push(`- blocked_on: ${blockedOn.join(", ")}`);
 	if (lockedNotes.length > 0) lines.push(`- locked_notes: ${lockedNotes.join(" | ")}`);
 	if (mustFixFindings.length > 0) lines.push(`- must_fix_findings: ${mustFixFindings.join(" | ")}`);
+	if (implementationSurfaces.length > 0) lines.push(`- implementation_surfaces: ${implementationSurfaces.join(" | ")}`);
+	if (verificationCommands.length > 0) lines.push(`- verification_commands: ${verificationCommands.join(" | ")}`);
 	lines.push(`- basis_commit: ${asString(snapshot.active?.basis_commit) ?? "(none)"}`);
 	lines.push(`- remaining_contract_ids_before: ${remainingBefore.length > 0 ? remainingBefore.join(", ") : "(none)"}`);
 	lines.push(`- release_blocker_count_before: ${asNumber(snapshot.active?.release_blocker_count_before) ?? "(unknown)"}`);
@@ -1926,7 +1963,7 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		"",
 		"Rules:",
 		"- Treat this block as continuity support derived from canonical .agent state.",
-		"- Preserve exact slice_id, contract_ids, acceptance criteria, locked notes, and must-fix findings where still true.",
+		"- Preserve exact slice_id, contract_ids, acceptance criteria, priority, why_now, implementation surfaces, verification commands, locked notes, and must-fix findings where still true.",
 		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl before resuming long-running completion work.",
 		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
 		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",

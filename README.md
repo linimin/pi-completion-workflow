@@ -161,6 +161,13 @@ The packaged control plane now also carries canonical routing signals:
 
 Those identifiers are persisted in `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, then surfaced in kickoff/reminder/resume text so downstream roles can rely on canonical signaling instead of prose inference alone.
 
+The active-slice exact implementer handoff now also carries a stronger implementation contract for selected, in-progress, committed, and done slices:
+
+- `implementation_surfaces` — the repo surfaces expected to change or stay in parity for the slice
+- `verification_commands` — the focused and broader deterministic checks the implementer is expected to run before committing
+
+Those fields are scaffolded by default, enforced by `.agent/verify_completion_control_plane.sh` whenever an exact handoff is required, and surfaced alongside `priority` / `why_now` in reminder and compaction-resume text so implementers can recover from canonical state instead of prose-only summaries.
+
 This slice still does **not** enforce profile-specific rubric-output validation; later workflow slices can build stricter routing and transcription checks on top of these canonical identifiers.
 
 Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, while the bootstrap/refocus/context regressions plus control-plane verifier now fail closed when required canonical signaling is missing.

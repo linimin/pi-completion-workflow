@@ -6,8 +6,10 @@
 
 - defined a shared structured evaluation-rubric contract for `completion-reviewer`, `completion-auditor`, and `completion-stop-judge`, including the exact rubric dimensions `Contract coverage`, `Correctness risk`, `Verification evidence`, and `Docs/state parity` with `pass|concern|fail` verdict semantics
 - added canonical `task_type: completion-workflow` and `evaluation_profile: completion-rubric-v1` signaling across the packaged control-plane defaults, verifier schema, and kickoff/reminder/resume surfaces
+- expanded the exact active-slice implementer handoff with canonical `implementation_surfaces` and `verification_commands` fields, and now surface them alongside `priority` / `why_now` in reminder and compaction-resume text
 - documented the rubric-driven evaluation contract plus canonical routing-profile signaling in the packaged completion protocol and README without adding profile-specific rubric-output enforcement yet
 - strengthened the smoke/refocus/context regressions so bootstrap and refocus preserve the new canonical signaling and fail closed when required `task_type` / `evaluation_profile` fields are removed
+- strengthened the smoke regression and control-plane verifier so selected-slice handoffs now fail closed when the expanded implementation-contract fields are missing
 - kept deterministic `rubric-contract-test` coverage wired into `npm run release-check`
 
 ## 0.1.30

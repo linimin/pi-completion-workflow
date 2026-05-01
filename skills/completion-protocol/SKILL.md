@@ -148,6 +148,8 @@ The workflow driver must invoke `completion-regrounder` before continuing whenev
 - acceptance criteria for the selected or active slice are missing or unclear
 - the exact implementer handoff snapshot in `.agent/active-slice.json` is missing, stale, or contradictory
 
+The exact implementer handoff now includes implementation-scope surfaces and expected verification commands in addition to the locked slice goal, acceptance, notes, and before-slice counters.
+
 The workflow driver must not continue implementation, review, audit, or stop evaluation from compacted conversation memory alone.
 
 After compaction or recovery, `completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json` before resuming work. If `.agent/active-slice.json` still contains a truthful exact handoff snapshot, continue from canonical state rather than asking the user to resend the original caller payload.
