@@ -25,10 +25,22 @@ In a git repo, after installing the package:
 /cook build feature X end-to-end with tests and docs
 ```
 
-If you stop and come back later:
+If you stop and come back later while that workflow is still active:
 
 ```text
 /cook
+```
+
+If you want to replace the active workflow with a new goal:
+
+```text
+/cook fix onboarding crash first, with regression tests
+```
+
+If the previous workflow is already done and you want to start the next round from an explicit goal:
+
+```text
+/cook ship the next workflow round for richer /cook startup proposals
 ```
 
 ## Install
@@ -63,9 +75,19 @@ pi install git:github.com/<YOUR-USER>/pi-letscook@v0.1.0
 pi install npm:@linimin/pi-letscook
 ```
 
-After install, run `/reload` in pi.
+After install, run `/reload` in pi. For this package, it is safest to reload when pi is idle and no `completion_role` is currently running.
 
 ## Usage patterns
+
+### Mental model
+
+`/cook` is the single entrypoint for this package, but its behavior depends on the current canonical workflow state.
+
+| Repo state | `/cook` | `/cook <goal>` |
+|---|---|---|
+| No canonical workflow yet | Proposes a startup plan from recent discussion, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, enriches it from recent discussion, then asks for confirmation |
+| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | Asks whether to continue the current workflow or replace it with a new one |
+| Previous workflow is already `done` | Proposes the next workflow round from recent discussion, then asks for confirmation | Starts the next workflow round from the explicit goal, using recent discussion only as supplemental proposal context |
 
 ### One-step start
 
@@ -73,7 +95,9 @@ After install, run `/reload` in pi.
 /cook Build feature X with tests and docs
 ```
 
-This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, enrich the startup proposal from recent discussion when helpful, let you confirm or edit that proposal, re-ground canonical state, create a slice plan, and drive the workflow.
+This bootstraps `.agent/**` if missing, derives a clean initial `MISSION ANCHOR`, builds a startup proposal, lets you confirm or edit it, re-grounds canonical state, creates a slice plan, and drives the workflow.
+
+When you pass an explicit goal, that goal stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written.
 
 ### Resume later
 
@@ -81,7 +105,36 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 /cook
 ```
 
-If canonical `.agent/**` state already exists and is still active, `/cook` with no goal resumes from that state. If the previous workflow is already done, `/cook` with no goal now tries to infer a new plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. If you pass a new goal while a workflow is still active, the extension asks whether to keep the current mission anchor or replace the active workflow with the new one. If you pass a new goal after the previous workflow is already done, `/cook <goal>` starts the next round directly from that explicit goal, with recent discussion only used as supplemental proposal context.
+If canonical `.agent/**` state already exists and is still active, `/cook` with no goal resumes from that state.
+
+### Replace the active workflow
+
+```text
+/cook fix onboarding crash first, with regression tests
+```
+
+If a workflow is still active, `/cook <goal>` asks whether to:
+
+- continue the current workflow, or
+- abandon the current workflow and start this new one
+
+If you replace the active workflow, `/cook` rebuilds canonical state from the new goal and restarts from `reground`.
+
+### Start the next round after completion
+
+```text
+/cook ship the next workflow round for richer /cook startup proposals
+```
+
+If the previous workflow is already `done`, `/cook <goal>` starts the next workflow round directly from that explicit goal. It does not reopen the old continue/refocus choice. Recent discussion is only used as supplemental proposal context.
+
+### Start the next round from discussion only
+
+```text
+/cook
+```
+
+If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state.
 
 ## Canonical repo files
 
@@ -124,11 +177,12 @@ Run validation from the package root:
 ```bash
 npm run smoke-test
 npm run refocus-test
+npm run context-proposal-test
 npm run observability-status-test
 npm run release-check
 ```
 
-`npm run release-check` is the broader packaged-release verifier. It reruns the smoke and refocus checks, includes the deterministic observability regression coverage, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broader packaged-release verifier. It reruns the smoke, refocus, and context-proposal checks, includes the deterministic observability regression coverage, and finishes with `npm pack --dry-run`.
 
 See [PUBLISHING.md](./PUBLISHING.md) for GitHub and npm release steps.
 
