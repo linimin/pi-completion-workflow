@@ -5,9 +5,9 @@ Pi package for long-running coding workflows with canonical repo-local `.agent/*
 ## What it gives you
 
 - `/cook` as the single workflow command
-- `/cook <goal>` to bootstrap or continue with an explicit goal
-- `/cook` with no goal to resume from canonical `.agent/**` state
-- `/cook <new goal>` on an existing workflow asks whether to continue the current mission or refocus it
+- `/cook <goal>` to bootstrap or continue with an explicit goal, enriched by recent discussion before canonical state is written
+- `/cook` with no goal to resume an active canonical `.agent/**` workflow, or propose a new round from recent discussion when no active workflow is running
+- `/cook <new goal>` on an active workflow asks whether to continue the current mission or abandon it for a replacement workflow; on a completed workflow it starts the next round from the new goal instead of reopening continue/refocus choices
 - no duplicate prompt-template aliases for core workflow commands
 - role-based isolated subprocess execution via `completion_role`
 - completion widget sourced from canonical `.agent/**` state when no role is actively running, with no completion status line
@@ -73,7 +73,7 @@ After install, run `/reload` in pi.
 /cook Build feature X with tests and docs
 ```
 
-This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, optionally ask you to confirm or edit it when the goal is ambiguous, re-ground canonical state, create a slice plan, and drive the workflow.
+This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCHOR`, enrich the startup proposal from recent discussion when helpful, let you confirm or edit that proposal, re-ground canonical state, create a slice plan, and drive the workflow.
 
 ### Resume later
 
@@ -81,7 +81,7 @@ This will bootstrap `.agent/**` if missing, derive a clean initial `MISSION ANCH
 /cook
 ```
 
-If canonical `.agent/**` state already exists, `/cook` with no goal resumes from that state. If you pass a new goal while a workflow already exists, the extension asks whether to keep the current mission anchor or refocus it before continuing.
+If canonical `.agent/**` state already exists and is still active, `/cook` with no goal resumes from that state. If the previous workflow is already done, `/cook` with no goal now tries to infer a new plan from recent discussion, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. If you pass a new goal while a workflow is still active, the extension asks whether to keep the current mission anchor or replace the active workflow with the new one. If you pass a new goal after the previous workflow is already done, `/cook <goal>` starts the next round directly from that explicit goal, with recent discussion only used as supplemental proposal context.
 
 ## Canonical repo files
 

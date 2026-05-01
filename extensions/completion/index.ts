@@ -108,6 +108,27 @@ type CompletionStatusSurface = {
 	liveDetailsLines?: string[];
 };
 
+type ContextProposal = {
+	mission: string;
+	scope: string[];
+	constraints: string[];
+	acceptance: string[];
+	goalText: string;
+	basisPreview: string;
+	source: "session";
+};
+
+type ContextProposalDecision = {
+	missionAnchor: string;
+	goalText: string;
+};
+
+type ContextProposalConfirmOptions = {
+	title: string;
+	nonInteractiveBehavior?: "accept" | "cancel";
+	editorPrompt?: string;
+};
+
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const LIVE_ROLE_WAITING_MS = 15_000;
 const LIVE_ROLE_STALLED_MS = 45_000;
@@ -390,6 +411,387 @@ function shouldSkipDriverKickoffForTests(): boolean {
 	return process.env.PI_COMPLETION_SKIP_DRIVER_KICKOFF === "1";
 }
 
+function completionTestContextProposalActionOverride(): "accept" | "edit" | "cancel" | undefined {
+	const raw = process.env.PI_COMPLETION_CONTEXT_PROPOSAL_ACTION?.trim().toLowerCase();
+	return raw === "accept" || raw === "edit" || raw === "cancel" ? raw : undefined;
+}
+
+function completionTestContextProposalEditText(): string | undefined {
+	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_EDIT_TEXT);
+}
+
+function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean {
+	return asString(snapshot?.state?.continuation_policy) === "done";
+}
+
+function extractTextFromMessageContent(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((item) => {
+			if (!isRecord(item)) return "";
+			if (item.type !== "text") return "";
+			return asString(item.text) ?? "";
+		})
+		.filter((item) => item.length > 0)
+		.join("\n")
+		.trim();
+}
+
+function stripCodeBlocks(text: string): string {
+	return text.replace(/```[\s\S]*?```/g, " ");
+}
+
+function normalizeProposalLine(line: string): string {
+	return line
+		.replace(/^[-*+]\s+/, "")
+		.replace(/^\d+[.)]\s+/, "")
+		.replace(/^\[.?\]\s+/, "")
+		.replace(/^>\s*/, "")
+		.replace(/^[`*_~]+|[`*_~]+$/g, "")
+		.replace(/^\*\*(.+)\*\*$/u, "$1")
+		.replace(/^__([^_]+)__$/u, "$1")
+		.trim();
+}
+
+function detectProposalSection(line: string): "mission" | "scope" | "constraints" | "acceptance" | undefined {
+	const normalized = normalizeProposalLine(line)
+		.toLowerCase()
+		.replace(/[:：]$/, "")
+		.trim();
+	if (!normalized) return undefined;
+	if (["mission", "goal", "objective", "summary", "目標", "任務", "計劃", "计划", "方案"].includes(normalized)) return "mission";
+	if (["scope", "plan", "steps", "implementation", "範圍", "范围", "實作", "实现", "步驟", "步骤"].includes(normalized)) return "scope";
+	if (["constraints", "constraint", "guardrails", "non-goals", "限制", "約束", "约束", "非目標", "非目标"].includes(normalized)) return "constraints";
+	if (["acceptance", "acceptance criteria", "deliverables", "verification", "驗收", "验收", "交付", "驗證", "验证"].includes(normalized)) return "acceptance";
+	return undefined;
+}
+
+function matchInlineProposalSection(
+	line: string,
+): { section: "mission" | "scope" | "constraints" | "acceptance"; content: string } | undefined {
+	const normalized = normalizeProposalLine(line);
+	const match = normalized.match(/^([^:：]+)[:：]\s*(.+)$/u);
+	if (!match) return undefined;
+	const [, rawLabel, rawContent] = match;
+	const section = detectProposalSection(rawLabel);
+	const content = rawContent.trim();
+	if (!section || !content) return undefined;
+	return { section, content };
+}
+
+function bulletText(line: string): string | undefined {
+	if (!/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)) return undefined;
+	const normalized = normalizeProposalLine(line);
+	return normalized.length > 0 ? normalized : undefined;
+}
+
+function looksLikeConstraint(text: string): boolean {
+	return /(do not|don't|must not|avoid|without|keep\b|preserve|retain|remain|不要|不可|不能|不應|不应|保持|保留|避免)/i.test(text);
+}
+
+function looksLikeAcceptance(text: string): boolean {
+	return /(test|tests|testing|verify|verification|validated|README|docs?|documentation|regression|observability|驗證|验证|測試|测试|文件|文檔|文档|回歸|回归)/i.test(text);
+}
+
+function uniqueProposalItems(items: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const item of items) {
+		const normalized = normalizeProposalLine(item).replace(/\s+/g, " ").trim();
+		if (!normalized) continue;
+		const key = normalized.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(normalized);
+	}
+	return result;
+}
+
+function buildContextProposalGoalText(proposal: {
+	mission: string;
+	scope: string[];
+	constraints: string[];
+	acceptance: string[];
+}): string {
+	const lines = [`Mission: ${proposal.mission}`];
+	if (proposal.scope.length > 0) {
+		lines.push("", "Scope:");
+		for (const item of proposal.scope) lines.push(`- ${item}`);
+	}
+	if (proposal.constraints.length > 0) {
+		lines.push("", "Constraints:");
+		for (const item of proposal.constraints) lines.push(`- ${item}`);
+	}
+	if (proposal.acceptance.length > 0) {
+		lines.push("", "Acceptance:");
+		for (const item of proposal.acceptance) lines.push(`- ${item}`);
+	}
+	return lines.join("\n");
+}
+
+function buildContextProposalDisplayText(proposal: ContextProposal): string {
+	const lines = ["Mission", proposal.mission];
+	if (proposal.scope.length > 0) {
+		lines.push("", "Scope");
+		for (const item of proposal.scope) lines.push(`- ${item}`);
+	}
+	if (proposal.constraints.length > 0) {
+		lines.push("", "Constraints");
+		for (const item of proposal.constraints) lines.push(`- ${item}`);
+	}
+	if (proposal.acceptance.length > 0) {
+		lines.push("", "Acceptance");
+		for (const item of proposal.acceptance) lines.push(`- ${item}`);
+	}
+	return lines.join("\n");
+}
+
+function buildContextProposalSelectionText(proposal: ContextProposal): string {
+	return [
+		"I found a likely implementation plan in the recent discussion.",
+		"Confirm it before /cook writes canonical workflow state.",
+		"",
+		buildContextProposalDisplayText(proposal),
+		"",
+		"Start the workflow with this proposal.",
+	].join("\n");
+}
+
+function buildContextProposalEditChoiceText(): string {
+	return [
+		"Edit this proposal before starting.",
+		"",
+		"Use this when the mission is right but the scope, constraints, or acceptance details need cleanup.",
+	].join("\n");
+}
+
+function buildContextProposalCancelChoiceText(): string {
+	return ["Cancel", "", "Do not start a workflow yet."].join("\n");
+}
+
+function buildContextProposalEditorText(proposal: ContextProposal): string {
+	return buildContextProposalGoalText(proposal);
+}
+
+function parseContextProposal(text: string, projectName: string): ContextProposal | undefined {
+	const cleaned = stripCodeBlocks(text).replace(/\r/g, "").trim();
+	if (!cleaned) return undefined;
+	const lines = cleaned
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (lines.length === 0) return undefined;
+
+	let section: "mission" | "scope" | "constraints" | "acceptance" | undefined;
+	let missionLine: string | undefined;
+	const scope: string[] = [];
+	const constraints: string[] = [];
+	const acceptance: string[] = [];
+	let structuredSignalCount = 0;
+
+	for (const rawLine of lines) {
+		const inlineSection = matchInlineProposalSection(rawLine);
+		if (inlineSection) {
+			section = inlineSection.section;
+			structuredSignalCount += 1;
+			if (inlineSection.section === "mission" && !missionLine) {
+				missionLine = inlineSection.content;
+			} else if (inlineSection.section === "constraints") {
+				constraints.push(inlineSection.content);
+			} else if (inlineSection.section === "acceptance") {
+				acceptance.push(inlineSection.content);
+			} else if (inlineSection.section === "scope") {
+				scope.push(inlineSection.content);
+			}
+			continue;
+		}
+		const headerSection = detectProposalSection(rawLine);
+		if (headerSection) {
+			section = headerSection;
+			structuredSignalCount += 1;
+			continue;
+		}
+		const bullet = bulletText(rawLine);
+		if (bullet) {
+			structuredSignalCount += 1;
+			if (section === "mission" && !missionLine) {
+				missionLine = bullet;
+				continue;
+			}
+			if (section === "constraints") {
+				constraints.push(bullet);
+				continue;
+			}
+			if (section === "acceptance") {
+				acceptance.push(bullet);
+				continue;
+			}
+			if (section === "scope") {
+				scope.push(bullet);
+				continue;
+			}
+			if (!missionLine) {
+				missionLine = bullet;
+				continue;
+			}
+			if (looksLikeAcceptance(bullet)) acceptance.push(bullet);
+			else if (looksLikeConstraint(bullet)) constraints.push(bullet);
+			else scope.push(bullet);
+			continue;
+		}
+		const normalized = normalizeProposalLine(rawLine);
+		if (!normalized) continue;
+		if (!missionLine) {
+			missionLine = normalized;
+			continue;
+		}
+		if (section === "constraints" || looksLikeConstraint(normalized)) {
+			constraints.push(normalized);
+			continue;
+		}
+		if (section === "acceptance" || looksLikeAcceptance(normalized)) {
+			acceptance.push(normalized);
+			continue;
+		}
+		if (section === "scope") {
+			scope.push(normalized);
+		}
+	}
+
+	const basisPreview = cleaned.replace(/\s+/g, " ").trim();
+	const missionSource = missionLine ?? scope[0] ?? acceptance[0] ?? constraints[0] ?? basisPreview;
+	const assessment = assessMissionAnchor(missionSource, projectName);
+	const normalizedMission = normalizeMissionAnchorText(missionSource);
+	const itemCount = scope.length + constraints.length + acceptance.length;
+	const hasStrongStructure = structuredSignalCount >= 2 || itemCount >= 2;
+	if (!normalizedMission || isWeakMissionAnchor(normalizedMission)) return undefined;
+	if (!hasStrongStructure && basisPreview.length < 140) return undefined;
+	const mission = assessment.derived;
+	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
+	return {
+		mission,
+		scope,
+		constraints,
+		acceptance,
+		goalText,
+		basisPreview,
+		source: "session",
+	};
+}
+
+function extractContextProposalFromSession(ctx: { sessionManager: any }, projectName: string): ContextProposal | undefined {
+	let branch: any[] = [];
+	try {
+		branch = ctx.sessionManager?.getBranch?.() ?? [];
+	} catch (error) {
+		if (isStaleContextError(error)) return undefined;
+		throw error;
+	}
+	const candidates: string[] = [];
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const entry = branch[index];
+		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+		const message = entry.message as JsonRecord;
+		let text = "";
+		const role = asString(message.role);
+		if (role === "user" || role === "assistant" || role === "custom") {
+			text = extractTextFromMessageContent(message.content);
+		} else if (role === "branchSummary" || role === "compactionSummary") {
+			text = asString(message.summary) ?? "";
+		}
+		if (!text) continue;
+		const trimmed = text.trim();
+		if (!trimmed || /^\/(?:cook|complete)\b/i.test(trimmed)) continue;
+		candidates.push(trimmed);
+	}
+	for (const candidate of candidates) {
+		const parsed = parseContextProposal(candidate, projectName);
+		if (parsed) return parsed;
+	}
+	if (candidates.length > 1) {
+		const combined = candidates.slice(0, 4).reverse().join("\n\n");
+		return parseContextProposal(combined, projectName);
+	}
+	return undefined;
+}
+
+function buildGoalAnchoredContextProposal(
+	ctx: { sessionManager: any },
+	goal: string,
+	projectName: string,
+): ContextProposal {
+	const explicit = parseContextProposal(goal, projectName);
+	const sessionProposal = extractContextProposalFromSession(ctx, projectName);
+	const missionSource = explicit?.mission ?? goal;
+	const assessment = assessMissionAnchor(missionSource, projectName);
+	const mission = assessment.derived;
+	const scope = uniqueProposalItems([...(explicit?.scope ?? []), ...(sessionProposal?.scope ?? [])]);
+	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...(sessionProposal?.constraints ?? [])]);
+	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...(sessionProposal?.acceptance ?? [])]);
+	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
+	return {
+		mission,
+		scope,
+		constraints,
+		acceptance,
+		goalText,
+		basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
+		source: "session",
+	};
+}
+
+async function confirmContextProposal(
+	ctx: { hasUI: boolean; ui: any },
+	proposal: ContextProposal,
+	projectName: string,
+	options: ContextProposalConfirmOptions,
+): Promise<ContextProposalDecision | undefined> {
+	const actionOverride = completionTestContextProposalActionOverride();
+	if (actionOverride === "cancel") return undefined;
+	if (actionOverride === "accept") {
+		return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+	}
+	if (actionOverride === "edit") {
+		const editedText = completionTestContextProposalEditText();
+		if (!editedText) return undefined;
+		const editedProposal = parseContextProposal(editedText, projectName);
+		if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
+		const assessment = assessMissionAnchor(editedText, projectName);
+		return { missionAnchor: assessment.derived, goalText: editedText.trim() };
+	}
+	if (!getCtxHasUI(ctx)) {
+		return options.nonInteractiveBehavior === "accept"
+			? { missionAnchor: proposal.mission, goalText: proposal.goalText }
+			: undefined;
+	}
+	const ui = getCtxUi(ctx);
+	if (!ui) {
+		return options.nonInteractiveBehavior === "accept"
+			? { missionAnchor: proposal.mission, goalText: proposal.goalText }
+			: undefined;
+	}
+	const useChoice = buildContextProposalSelectionText(proposal);
+	const editChoice = buildContextProposalEditChoiceText();
+	const cancelChoice = buildContextProposalCancelChoiceText();
+	const choice = await ui.select(options.title, [useChoice, editChoice, cancelChoice]);
+	if (!choice || choice === cancelChoice) return undefined;
+	if (choice === editChoice) {
+		const editedText = await ui.editor(
+			options.editorPrompt ?? `${options.title}\n\nEdit the proposed mission, scope, constraints, and acceptance details below.`,
+			buildContextProposalEditorText(proposal),
+		);
+		if (!editedText?.trim()) return undefined;
+		const editedProposal = parseContextProposal(editedText, projectName);
+		if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
+		const assessment = assessMissionAnchor(editedText, projectName);
+		const missionAnchor = await confirmMissionAnchor(ctx, assessment);
+		if (!missionAnchor) return undefined;
+		return { missionAnchor, goalText: editedText.trim() };
+	}
+	return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+}
+
 function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
 	return (
 		asString(snapshot.state?.mission_anchor) ??
@@ -429,7 +831,7 @@ async function confirmExistingWorkflowGoal(
 	const title = [
 		"Existing completion workflow found",
 		"",
-		"A workflow is already in progress. Select one option:",
+		"A workflow is already in progress. Choose how /cook should proceed:",
 		"",
 		"Current mission",
 		currentMission,
@@ -437,8 +839,8 @@ async function confirmExistingWorkflowGoal(
 		"New proposed mission",
 		assessment.derived,
 	].join("\n");
-	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new text as extra direction only.";
-	const refocusChoice = "Refocus workflow\n\nReplace the current mission with the proposed mission anchor.";
+	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new goal as extra direction only.";
+	const refocusChoice = "Abandon current workflow and start this new one\n\nReplace the current mission with the new goal, then rebuild canonical state from that new direction.";
 	const cancelChoice = "Cancel\n\nExit without changing the current workflow.";
 	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
 	if (!choice || choice === cancelChoice) return undefined;
@@ -2007,23 +2409,55 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("cook", {
 		description: "Start or continue the completion workflow for a repo",
 		handler: async (args, ctx) => {
-			const goal = args.trim();
+			const explicitGoal = args.trim();
+			let goal = explicitGoal;
 			const cwd = getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);
 			const hadSnapshot = Boolean(snapshot);
+			const workflowDone = isWorkflowDone(snapshot);
+			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
+			let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
+
 			if (!snapshot) {
-				if (!goal) {
-					emitCommandText(ctx, "Usage: /cook <goal> (or rerun /cook after canonical .agent state exists)", "error");
-					return;
-				}
 				const root = findRepoRoot(cwd) ?? cwd;
-				const assessment = assessMissionAnchor(goal, path.basename(root));
-				const missionAnchor = await confirmMissionAnchor(ctx, assessment);
-				if (!missionAnchor) {
-					emitCommandText(ctx, "Cancelled mission anchor confirmation", "info");
-					return;
+				const projectName = path.basename(root);
+				if (!goal) {
+					const proposal = extractContextProposalFromSession(ctx, projectName);
+					if (!proposal) {
+						emitCommandText(
+							ctx,
+							"Usage: /cook <goal> (or finish shaping the plan in discussion, then rerun /cook to confirm the proposed workflow)",
+							"error",
+						);
+						return;
+					}
+					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+						title: "Start a completion workflow from the recent discussion?",
+						editorPrompt:
+							"Start a completion workflow from the recent discussion?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
+					});
+					if (!decision) {
+						emitCommandText(ctx, "Cancelled recent-discussion workflow proposal", "info");
+						return;
+					}
+					goal = decision.goalText;
+					kickoffMissionAnchor = decision.missionAnchor;
+				} else {
+					const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+						title: "Start a completion workflow from this goal?",
+						nonInteractiveBehavior: "accept",
+						editorPrompt:
+							"Start a completion workflow from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
+					});
+					if (!decision) {
+						emitCommandText(ctx, "Cancelled workflow startup proposal", "info");
+						return;
+					}
+					goal = decision.goalText;
+					kickoffMissionAnchor = decision.missionAnchor;
 				}
-				const created = await scaffoldCompletionFiles(root, missionAnchor);
+				const created = await scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName);
 				emitCommandText(
 					ctx,
 					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
@@ -2036,33 +2470,94 @@ export default function completionExtension(pi: ExtensionAPI) {
 				return;
 			}
 			if (!goal) {
-				const mission = currentMissionAnchor(snapshot);
-				pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
-				if (shouldSkipDriverKickoffForTests()) {
-					emitCommandText(ctx, "Skipped completion workflow resume kickoff (test mode)", "info");
-					return;
-				}
-				pi.sendUserMessage(completionResumePrompt());
-				emitCommandText(ctx, "Queued completion workflow resume", "info");
-				return;
-			}
-			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
-			let kickoffMissionAnchor = currentMissionAnchor(snapshot);
-			if (hadSnapshot) {
-				const decision = await confirmExistingWorkflowGoal(ctx, snapshot, goal);
-				if (!decision) {
-					emitCommandText(ctx, "Cancelled existing workflow confirmation", "info");
-					return;
-				}
-				kickoffIntent = decision.action;
-				kickoffMissionAnchor = decision.currentMissionAnchor;
-				if (decision.action === "refocus") {
-					await refocusCompletionMission(snapshot, decision.missionAnchor, goal);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+				if (workflowDone) {
+					const projectName = path.basename(snapshot.files.root);
+					const proposal = extractContextProposalFromSession(ctx, projectName);
+					if (!proposal) {
+						emitCommandText(
+							ctx,
+							"The previous completion workflow is already done. Shape the next plan in discussion or provide a new goal, then rerun /cook to start the next round.",
+							"info",
+						);
+						return;
+					}
+					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+						title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
+						editorPrompt:
+							"The previous completion workflow is done. Start the next workflow round from the recent discussion?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
+					});
+					if (!decision) {
+						emitCommandText(ctx, "Cancelled next workflow round proposal", "info");
+						return;
+					}
+					goal = decision.goalText;
+					kickoffIntent = "refocus";
 					kickoffMissionAnchor = decision.missionAnchor;
-					emitCommandText(ctx, `Refocused completion mission to: ${decision.missionAnchor}`, "info");
-				} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
-					emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
+					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText);
+					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+					emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
+				} else {
+					const mission = currentMissionAnchor(snapshot);
+					pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
+					if (shouldSkipDriverKickoffForTests()) {
+						emitCommandText(ctx, "Skipped completion workflow resume kickoff (test mode)", "info");
+						return;
+					}
+					pi.sendUserMessage(completionResumePrompt());
+					emitCommandText(ctx, "Queued completion workflow resume", "info");
+					return;
+				}
+			}
+			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
+			if (hadSnapshot && explicitGoal) {
+				if (workflowDone) {
+					const projectName = path.basename(snapshot.files.root);
+					const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+						title: "Start the next workflow round from this goal?",
+						nonInteractiveBehavior: "accept",
+						editorPrompt:
+							"Start the next workflow round from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
+					});
+					if (!decision) {
+						emitCommandText(ctx, "Cancelled next workflow round proposal", "info");
+						return;
+					}
+					goal = decision.goalText;
+					kickoffIntent = "refocus";
+					kickoffMissionAnchor = decision.missionAnchor;
+					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText);
+					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+					emitCommandText(ctx, `Started a new completion workflow round from explicit goal: ${decision.missionAnchor}`, "info");
+				} else {
+					const decision = await confirmExistingWorkflowGoal(ctx, snapshot, goal);
+					if (!decision) {
+						emitCommandText(ctx, "Cancelled existing workflow confirmation", "info");
+						return;
+					}
+					kickoffIntent = decision.action;
+					kickoffMissionAnchor = decision.currentMissionAnchor;
+					if (decision.action === "refocus") {
+						const projectName = path.basename(snapshot.files.root);
+						const proposal = buildGoalAnchoredContextProposal(ctx, goal, projectName);
+						const proposalDecision = await confirmContextProposal(ctx, proposal, projectName, {
+							title: "Start the replacement workflow from this goal?",
+							nonInteractiveBehavior: "accept",
+							editorPrompt:
+								"Start the replacement workflow from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
+						});
+						if (!proposalDecision) {
+							emitCommandText(ctx, "Cancelled replacement workflow proposal", "info");
+							return;
+						}
+						goal = proposalDecision.goalText;
+						await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText);
+						snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+						kickoffMissionAnchor = proposalDecision.missionAnchor;
+						emitCommandText(ctx, `Refocused completion mission to: ${proposalDecision.missionAnchor}`, "info");
+					} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
+						emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
+					}
 				}
 			}
 			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
