@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.27
+
+### Changed
+
+- added package metadata for npm and pi.dev discovery, fixed README publishing links for npm rendering, and refined install and workflow guidance after the `v0.1.26` tag
+
 ## 0.1.26
 
 ### Changed
