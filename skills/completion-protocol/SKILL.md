@@ -165,7 +165,7 @@ If a role-specific fixed format uses before/after wording, keep the same mission
 
 `completion-reviewer`, `completion-auditor`, and `completion-stop-judge` must emit rubric-backed evaluations using the same shared dimension names and verdict semantics.
 
-This foundation is a prompt/report contract only. It does **not** add canonical `task_type` or `evaluation_profile` schema yet; later slices may wire those through the control plane.
+The shared rubric foundation now sits alongside canonical `task_type` and `evaluation_profile` signaling in the control plane. That signaling is routing metadata only; later slices may still add stricter profile-aware rubric-output enforcement.
 
 Required rubric section:
 

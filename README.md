@@ -154,9 +154,16 @@ Each rubric line uses the same verdict words:
 - `concern` — a real caveat or remaining gap exists, but it does not by itself force rejection or `NO-STOP`
 - `fail` — a blocking issue or contradictory truth exists, so the role's final verdict must not be positive
 
-This slice is only the shared prompt/report foundation. It does **not** yet add canonical `task_type` or `evaluation_profile` fields; later workflow slices can build on this shared vocabulary.
+The packaged control plane now also carries canonical routing signals:
 
-Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, and `npm run release-check` now includes that coverage.
+- `task_type: completion-workflow`
+- `evaluation_profile: completion-rubric-v1`
+
+Those identifiers are persisted in `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, then surfaced in kickoff/reminder/resume text so downstream roles can rely on canonical signaling instead of prose inference alone.
+
+This slice still does **not** enforce profile-specific rubric-output validation; later workflow slices can build stricter routing and transcription checks on top of these canonical identifiers.
+
+Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, while the bootstrap/refocus/context regressions plus control-plane verifier now fail closed when required canonical signaling is missing.
 
 ## Canonical files
 

@@ -34,7 +34,8 @@ for (const file of [
   'skills/completion-protocol/references/completion.md',
 ]) {
   assertIncludes(file, rubricHeading);
-  assertIncludes(file, 'This foundation is a prompt/report contract only. It does **not** add canonical `task_type` or `evaluation_profile` schema yet; later slices may wire those through the control plane.');
+  assertIncludes(file, 'canonical `task_type` and `evaluation_profile` signaling');
+  assertIncludes(file, 'routing metadata only; later slices may still add stricter profile-aware rubric-output enforcement');
   assertIncludes(file, '- `Rubric:`');
   for (const dimension of rubricDimensions) {
     assertIncludes(file, `- \`- ${dimension}: pass|concern|fail - ...\``);
@@ -58,13 +59,22 @@ for (const file of [
 }
 
 assertIncludes('README.md', '## Structured evaluation rubrics');
-assertIncludes('README.md', 'Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, and `npm run release-check` now includes that coverage.');
+assertIncludes('README.md', '- `task_type: completion-workflow`');
+assertIncludes('README.md', '- `evaluation_profile: completion-rubric-v1`');
+assertIncludes('README.md', 'kickoff/reminder/resume text so downstream roles can rely on canonical signaling instead of prose inference alone.');
+assertIncludes('README.md', 'Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, while the bootstrap/refocus/context regressions plus control-plane verifier now fail closed when required canonical signaling is missing.');
 for (const dimension of rubricDimensions) {
   assertIncludes('README.md', `- \`${dimension}\``);
 }
 
 assertIncludes('CHANGELOG.md', 'shared structured evaluation-rubric contract');
-assertIncludes('CHANGELOG.md', 'added deterministic `rubric-contract-test` coverage and wired it into `npm run release-check`');
+assertIncludes('CHANGELOG.md', 'added canonical `task_type: completion-workflow` and `evaluation_profile: completion-rubric-v1` signaling across the packaged control-plane defaults, verifier schema, and kickoff/reminder/resume surfaces');
+assertIncludes('CHANGELOG.md', 'strengthened the smoke/refocus/context regressions so bootstrap and refocus preserve the new canonical signaling and fail closed when required `task_type` / `evaluation_profile` fields are removed');
+assertIncludes('extensions/completion/index.ts', 'Canonical routing profile:\\n- task_type: ${taskType}\\n- evaluation_profile: ${evaluationProfile}');
+assertIncludes('extensions/completion/index.ts', '`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/index.ts', '`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/index.ts', '`task_type: ${currentTaskType(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/index.ts', '`evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
 assertIncludes('package.json', '"rubric-contract-test": "bash ./scripts/rubric-contract-test.sh"');
 assertIncludes('scripts/release-check.sh', 'npm run rubric-contract-test');
 assertIncludes('.agent/verify_completion_stop.sh', 'npm run release-check >/dev/null');

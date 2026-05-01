@@ -30,6 +30,8 @@ const PACKAGE_REFERENCE_PATH = PACKAGE_ROOT
 const PACKAGE_AGENTS_DIR = PACKAGE_ROOT ? path.join(PACKAGE_ROOT, "agents") : undefined;
 const SKILL_PATH = PACKAGE_SKILL_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "SKILL.md");
 const REFERENCE_PATH = PACKAGE_REFERENCE_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "references", "completion.md");
+const DEFAULT_TASK_TYPE = "completion-workflow";
+const DEFAULT_EVALUATION_PROFILE = "completion-rubric-v1";
 
 type CompletionRole = (typeof ROLE_NAMES)[number];
 type JsonRecord = Record<string, unknown>;
@@ -497,6 +499,24 @@ function completionTestContextProposalUiActionOverride(): ContextProposalConfirm
 
 function completionTestContextProposalUiSnapshotPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_PATH);
+}
+
+function completionTestDriverPromptPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_DRIVER_PROMPT_PATH);
+}
+
+function completionTestSystemReminderPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_SYSTEM_REMINDER_PATH);
+}
+
+function maybeWriteTestSnapshot(targetPath: string | undefined, content: string): void {
+	if (!targetPath) return;
+	try {
+		fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+		fs.writeFileSync(targetPath, content, "utf8");
+	} catch {
+		// ignore malformed or unwritable test snapshot paths
+	}
 }
 
 function shouldDisableContextProposalAnalyst(): boolean {
@@ -1300,6 +1320,24 @@ function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
 	);
 }
 
+function currentTaskType(snapshot: CompletionStateSnapshot): string | undefined {
+	return (
+		asString(snapshot.active?.task_type) ??
+		asString(snapshot.state?.task_type) ??
+		asString(snapshot.plan?.task_type) ??
+		asString(snapshot.profile?.task_type)
+	);
+}
+
+function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | undefined {
+	return (
+		asString(snapshot.active?.evaluation_profile) ??
+		asString(snapshot.state?.evaluation_profile) ??
+		asString(snapshot.plan?.evaluation_profile) ??
+		asString(snapshot.profile?.evaluation_profile)
+	);
+}
+
 async function confirmExistingWorkflowGoal(
 	ctx: { hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
@@ -1406,6 +1444,8 @@ function defaultState(missionAnchor: string): JsonRecord {
 		continuation_policy: "continue",
 		continuation_reason: "Fresh completion bootstrap requires canonical re-ground",
 		project_done: false,
+		task_type: DEFAULT_TASK_TYPE,
+		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
 		requires_reground: true,
 		slices_since_last_reground: 0,
 		remaining_release_blockers: null,
@@ -1427,6 +1467,8 @@ function defaultPlan(missionAnchor: string): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
+		task_type: DEFAULT_TASK_TYPE,
+		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
 		last_reground_at: null,
 		plan_basis: "bootstrap",
 		candidate_slices: [],
@@ -1437,6 +1479,8 @@ function defaultActiveSlice(missionAnchor: string): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
+		task_type: DEFAULT_TASK_TYPE,
+		evaluation_profile: DEFAULT_EVALUATION_PROFILE,
 		status: "idle",
 		slice_id: null,
 		goal: null,
@@ -1470,15 +1514,146 @@ function buildVerifyStopScript(verifierCommand?: string): string {
 }
 
 function buildVerifyControlPlaneScript(): string {
-	return `#!/usr/bin/env bash\nset -euo pipefail\n\nfor file in \\
-  .agent/README.md \\
-  .agent/mission.md \\
-  .agent/profile.json \\
-  .agent/verify_completion_stop.sh \\
-  .agent/verify_completion_control_plane.sh \\
-  .agent/state.json \\
-  .agent/plan.json \\
-  .agent/active-slice.json; do\n  [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }\ndone\n\nnode <<'NODE'\nconst fs = require('node:fs');\n\nconst readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));\nconst assert = (condition, message) => {\n  if (!condition) {\n    console.error(message);\n    process.exit(1);\n  }\n};\nconst isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);\nconst isString = (value) => typeof value === 'string';\nconst isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');\nconst hasOnlyKeys = (object, allowed, label) => {\n  const unknown = Object.keys(object).filter((key) => !allowed.includes(key));\n  assert(unknown.length === 0, label + ': unknown keys: ' + unknown.join(', '));\n};\nconst requireKeys = (object, required, label) => {\n  for (const key of required) {\n    assert(Object.prototype.hasOwnProperty.call(object, key), label + ': missing required field: ' + key);\n  }\n};\n\nfor (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {\n  readJson(file);\n}\n\nconst profile = readJson('.agent/profile.json');\nconst state = readJson('.agent/state.json');\nconst plan = readJson('.agent/plan.json');\nconst active = readJson('.agent/active-slice.json');\n\nassert(isObject(profile), '.agent/profile.json must be an object');\nassert(isObject(state), '.agent/state.json must be an object');\nassert(isObject(plan), '.agent/plan.json must be an object');\nassert(isObject(active), '.agent/active-slice.json must be an object');\n\nconst requiredProfile = ['schema_version', 'protocol_id', 'project_name', 'required_stop_judges', 'priority_policy_id', 'docs_surfaces'];\nrequireKeys(profile, requiredProfile, '.agent/profile.json');\nhasOnlyKeys(profile, requiredProfile, '.agent/profile.json');\nassert(profile.protocol_id === 'completion', '.agent/profile.json: protocol_id must be completion');\nassert(Array.isArray(profile.docs_surfaces), '.agent/profile.json: docs_surfaces must be an array');\n\nconst requiredState = [\n  'schema_version','mission_anchor','current_phase','continuation_policy','continuation_reason','project_done',\n  'requires_reground','slices_since_last_reground','remaining_release_blockers','remaining_high_value_gaps',\n  'unsatisfied_contract_ids','release_blocker_ids','next_mandatory_action','next_mandatory_role',\n  'remaining_stop_judges','last_reground_at','last_auditor_verdict','contract_status','latest_completed_slice','latest_verified_slice'\n];\nconst continuationPolicies = ['continue', 'await_user_input', 'blocked', 'paused', 'done'];\nconst workflowRoles = ['completion-bootstrapper', 'completion-regrounder', 'completion-implementer', 'completion-reviewer', 'completion-auditor', 'completion-stop-judge', null];\nconst workflowPhases = ['reground', 'implement', 'post_commit_review', 'post_commit_audit', 'post_commit_reconcile', 'stop_wave', 'awaiting_user', 'blocked', 'done'];\nrequireKeys(state, requiredState, '.agent/state.json');\nhasOnlyKeys(state, requiredState, '.agent/state.json');\nassert(continuationPolicies.includes(state.continuation_policy), '.agent/state.json: invalid continuation_policy');\nassert(workflowRoles.includes(state.next_mandatory_role), '.agent/state.json: invalid next_mandatory_role');\nassert(workflowPhases.includes(state.current_phase), '.agent/state.json: invalid current_phase');\nassert(isStringArray(state.unsatisfied_contract_ids), '.agent/state.json: unsatisfied_contract_ids must be an array of strings');\nassert(isStringArray(state.release_blocker_ids), '.agent/state.json: release_blocker_ids must be an array of strings');\n\nconst requiredPlan = ['schema_version', 'mission_anchor', 'last_reground_at', 'plan_basis', 'candidate_slices'];\nconst requiredSlice = ['slice_id', 'goal', 'acceptance_criteria', 'contract_ids', 'priority', 'status', 'why_now', 'blocked_on', 'evidence'];\nconst sliceStatuses = ['planned', 'selected', 'in_progress', 'blocked', 'done', 'cancelled'];\nrequireKeys(plan, requiredPlan, '.agent/plan.json');\nhasOnlyKeys(plan, requiredPlan, '.agent/plan.json');\nassert(Array.isArray(plan.candidate_slices), '.agent/plan.json: candidate_slices must be an array');\nfor (const [index, slice] of plan.candidate_slices.entries()) {\n  const label = '.agent/plan.json candidate_slices[' + index + ']';\n  assert(isObject(slice), label + ' must be an object');\n  requireKeys(slice, requiredSlice, label);\n  hasOnlyKeys(slice, requiredSlice, label);\n  assert(isString(slice.slice_id) && slice.slice_id.length > 0, label + ': slice_id must be a non-empty string');\n  assert(isString(slice.goal) && slice.goal.length > 0, label + ': goal must be a non-empty string');\n  assert(Array.isArray(slice.acceptance_criteria) && slice.acceptance_criteria.length > 0 && slice.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), label + ': acceptance_criteria must be a non-empty array of strings');\n  assert(isStringArray(slice.contract_ids), label + ': contract_ids must be an array of strings');\n  assert(typeof slice.priority === 'number' && Number.isFinite(slice.priority), label + ': priority must be a finite number');\n  assert(sliceStatuses.includes(slice.status), label + ': invalid status');\n  assert(isString(slice.why_now) && slice.why_now.length > 0, label + ': why_now must be a non-empty string');\n  assert(isStringArray(slice.blocked_on), label + ': blocked_on must be an array of strings');\n  assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');\n}\n\nconst requiredActiveBase = ['schema_version', 'mission_anchor', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];\nconst allowedActive = [...requiredActiveBase, 'priority', 'why_now'];\nconst activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];\nrequireKeys(active, requiredActiveBase, '.agent/active-slice.json');\nhasOnlyKeys(active, allowedActive, '.agent/active-slice.json');\nassert(activeStatuses.includes(active.status), '.agent/active-slice.json: invalid status');\nassert(isStringArray(active.contract_ids), '.agent/active-slice.json: contract_ids must be an array of strings');\nassert(Array.isArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be an array');\nassert(isStringArray(active.blocked_on), '.agent/active-slice.json: blocked_on must be an array of strings');\nassert(isStringArray(active.locked_notes), '.agent/active-slice.json: locked_notes must be an array of strings');\nassert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_fix_findings must be an array of strings');\nassert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');\n\nconst requiresExactHandoff = ['selected', 'in_progress', 'committed', 'done'].includes(active.status);\nif (requiresExactHandoff) {\n  assert(Array.isArray(active.acceptance_criteria) && active.acceptance_criteria.length > 0 && active.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');\n  assert(typeof active.priority === 'number' && Number.isFinite(active.priority), '.agent/active-slice.json: priority must be a finite number when status carries an exact handoff');\n  assert(isString(active.why_now) && active.why_now.length > 0, '.agent/active-slice.json: why_now must be a non-empty string when status carries an exact handoff');\n  assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');\n  assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');\n  assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');\n} else {\n  assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');\n  assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');\n}\nNODE\n`;
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+for file in \
+  .agent/README.md \
+  .agent/mission.md \
+  .agent/profile.json \
+  .agent/verify_completion_stop.sh \
+  .agent/verify_completion_control_plane.sh \
+  .agent/state.json \
+  .agent/plan.json \
+  .agent/active-slice.json; do
+  [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }
+done
+
+node <<'NODE'
+const fs = require('node:fs');
+
+const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+const assert = (condition, message) => {
+  if (!condition) {
+    console.error(message);
+    process.exit(1);
+  }
+};
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isString = (value) => typeof value === 'string';
+const isNonEmptyString = (value) => isString(value) && value.length > 0;
+const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');
+const hasOnlyKeys = (object, allowed, label) => {
+  const unknown = Object.keys(object).filter((key) => !allowed.includes(key));
+  assert(unknown.length === 0, label + ': unknown keys: ' + unknown.join(', '));
+};
+const requireKeys = (object, required, label) => {
+  for (const key of required) {
+    assert(Object.prototype.hasOwnProperty.call(object, key), label + ': missing required field: ' + key);
+  }
+};
+
+for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {
+  readJson(file);
+}
+
+const profile = readJson('.agent/profile.json');
+const state = readJson('.agent/state.json');
+const plan = readJson('.agent/plan.json');
+const active = readJson('.agent/active-slice.json');
+
+assert(isObject(profile), '.agent/profile.json must be an object');
+assert(isObject(state), '.agent/state.json must be an object');
+assert(isObject(plan), '.agent/plan.json must be an object');
+assert(isObject(active), '.agent/active-slice.json must be an object');
+
+const requiredProfile = ['schema_version', 'protocol_id', 'project_name', 'required_stop_judges', 'priority_policy_id', 'task_type', 'evaluation_profile', 'docs_surfaces'];
+requireKeys(profile, requiredProfile, '.agent/profile.json');
+hasOnlyKeys(profile, requiredProfile, '.agent/profile.json');
+assert(profile.protocol_id === 'completion', '.agent/profile.json: protocol_id must be completion');
+assert(Array.isArray(profile.docs_surfaces), '.agent/profile.json: docs_surfaces must be an array');
+assert(isNonEmptyString(profile.task_type), '.agent/profile.json: task_type must be a non-empty string');
+assert(isNonEmptyString(profile.evaluation_profile), '.agent/profile.json: evaluation_profile must be a non-empty string');
+
+const requiredState = [
+  'schema_version','mission_anchor','task_type','evaluation_profile','current_phase','continuation_policy','continuation_reason','project_done',
+  'requires_reground','slices_since_last_reground','remaining_release_blockers','remaining_high_value_gaps',
+  'unsatisfied_contract_ids','release_blocker_ids','next_mandatory_action','next_mandatory_role',
+  'remaining_stop_judges','last_reground_at','last_auditor_verdict','contract_status','latest_completed_slice','latest_verified_slice'
+];
+const continuationPolicies = ['continue', 'await_user_input', 'blocked', 'paused', 'done'];
+const workflowRoles = ['completion-bootstrapper', 'completion-regrounder', 'completion-implementer', 'completion-reviewer', 'completion-auditor', 'completion-stop-judge', null];
+const workflowPhases = ['reground', 'implement', 'post_commit_review', 'post_commit_audit', 'post_commit_reconcile', 'stop_wave', 'awaiting_user', 'blocked', 'done'];
+requireKeys(state, requiredState, '.agent/state.json');
+hasOnlyKeys(state, requiredState, '.agent/state.json');
+assert(continuationPolicies.includes(state.continuation_policy), '.agent/state.json: invalid continuation_policy');
+assert(workflowRoles.includes(state.next_mandatory_role), '.agent/state.json: invalid next_mandatory_role');
+assert(workflowPhases.includes(state.current_phase), '.agent/state.json: invalid current_phase');
+assert(isNonEmptyString(state.task_type), '.agent/state.json: task_type must be a non-empty string');
+assert(isNonEmptyString(state.evaluation_profile), '.agent/state.json: evaluation_profile must be a non-empty string');
+assert(isStringArray(state.unsatisfied_contract_ids), '.agent/state.json: unsatisfied_contract_ids must be an array of strings');
+assert(isStringArray(state.release_blocker_ids), '.agent/state.json: release_blocker_ids must be an array of strings');
+
+const requiredPlan = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'last_reground_at', 'plan_basis', 'candidate_slices'];
+const requiredSlice = ['slice_id', 'goal', 'acceptance_criteria', 'contract_ids', 'priority', 'status', 'why_now', 'blocked_on', 'evidence'];
+const sliceStatuses = ['planned', 'selected', 'in_progress', 'blocked', 'done', 'cancelled'];
+requireKeys(plan, requiredPlan, '.agent/plan.json');
+hasOnlyKeys(plan, requiredPlan, '.agent/plan.json');
+assert(isNonEmptyString(plan.task_type), '.agent/plan.json: task_type must be a non-empty string');
+assert(isNonEmptyString(plan.evaluation_profile), '.agent/plan.json: evaluation_profile must be a non-empty string');
+assert(Array.isArray(plan.candidate_slices), '.agent/plan.json: candidate_slices must be an array');
+for (const [index, slice] of plan.candidate_slices.entries()) {
+  const label = '.agent/plan.json candidate_slices[' + index + ']';
+  assert(isObject(slice), label + ' must be an object');
+  requireKeys(slice, requiredSlice, label);
+  hasOnlyKeys(slice, requiredSlice, label);
+  assert(isString(slice.slice_id) && slice.slice_id.length > 0, label + ': slice_id must be a non-empty string');
+  assert(isString(slice.goal) && slice.goal.length > 0, label + ': goal must be a non-empty string');
+  assert(Array.isArray(slice.acceptance_criteria) && slice.acceptance_criteria.length > 0 && slice.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), label + ': acceptance_criteria must be a non-empty array of strings');
+  assert(isStringArray(slice.contract_ids), label + ': contract_ids must be an array of strings');
+  assert(typeof slice.priority === 'number' && Number.isFinite(slice.priority), label + ': priority must be a finite number');
+  assert(sliceStatuses.includes(slice.status), label + ': invalid status');
+  assert(isString(slice.why_now) && slice.why_now.length > 0, label + ': why_now must be a non-empty string');
+  assert(isStringArray(slice.blocked_on), label + ': blocked_on must be an array of strings');
+  assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
+}
+
+const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+const allowedActive = [...requiredActiveBase, 'priority', 'why_now'];
+const activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];
+requireKeys(active, requiredActiveBase, '.agent/active-slice.json');
+hasOnlyKeys(active, allowedActive, '.agent/active-slice.json');
+assert(activeStatuses.includes(active.status), '.agent/active-slice.json: invalid status');
+assert(isNonEmptyString(active.task_type), '.agent/active-slice.json: task_type must be a non-empty string');
+assert(isNonEmptyString(active.evaluation_profile), '.agent/active-slice.json: evaluation_profile must be a non-empty string');
+assert(isStringArray(active.contract_ids), '.agent/active-slice.json: contract_ids must be an array of strings');
+assert(Array.isArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be an array');
+assert(isStringArray(active.blocked_on), '.agent/active-slice.json: blocked_on must be an array of strings');
+assert(isStringArray(active.locked_notes), '.agent/active-slice.json: locked_notes must be an array of strings');
+assert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_fix_findings must be an array of strings');
+assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
+
+assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
+assert(plan.task_type === profile.task_type, '.agent/plan.json: task_type must match .agent/profile.json');
+assert(active.task_type === profile.task_type, '.agent/active-slice.json: task_type must match .agent/profile.json');
+assert(state.evaluation_profile === profile.evaluation_profile, '.agent/state.json: evaluation_profile must match .agent/profile.json');
+assert(plan.evaluation_profile === profile.evaluation_profile, '.agent/plan.json: evaluation_profile must match .agent/profile.json');
+assert(active.evaluation_profile === profile.evaluation_profile, '.agent/active-slice.json: evaluation_profile must match .agent/profile.json');
+
+const requiresExactHandoff = ['selected', 'in_progress', 'committed', 'done'].includes(active.status);
+if (requiresExactHandoff) {
+  assert(Array.isArray(active.acceptance_criteria) && active.acceptance_criteria.length > 0 && active.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
+  assert(typeof active.priority === 'number' && Number.isFinite(active.priority), '.agent/active-slice.json: priority must be a finite number when status carries an exact handoff');
+  assert(isString(active.why_now) && active.why_now.length > 0, '.agent/active-slice.json: why_now must be a non-empty string when status carries an exact handoff');
+  assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
+  assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
+  assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');
+} else {
+  assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
+  assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
+}
+NODE
+`;
 }
 
 async function ensureGitignore(root: string): Promise<boolean> {
@@ -1529,7 +1704,7 @@ async function scaffoldCompletionFiles(root: string, missionAnchor: string): Pro
 		{ path: path.join(files.agentDir, "mission.md"), content: buildMission(projectName, missionAnchor) },
 		{
 			path: files.profilePath,
-			content: `${JSON.stringify({ schema_version: 1, protocol_id: PROTOCOL_ID, project_name: projectName, required_stop_judges: 3, priority_policy_id: "completion-default", docs_surfaces: docsSurfaces }, null, 2)}\n`,
+			content: `${JSON.stringify({ schema_version: 1, protocol_id: PROTOCOL_ID, project_name: projectName, required_stop_judges: 3, priority_policy_id: "completion-default", task_type: DEFAULT_TASK_TYPE, evaluation_profile: DEFAULT_EVALUATION_PROFILE, docs_surfaces: docsSurfaces }, null, 2)}\n`,
 		},
 		{ path: path.join(files.agentDir, "verify_completion_stop.sh"), content: buildVerifyStopScript(verifierCommand), executable: true },
 		{ path: path.join(files.agentDir, "verify_completion_control_plane.sh"), content: buildVerifyControlPlaneScript(), executable: true },
@@ -1594,6 +1769,8 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 		"Completion workflow detected.",
 		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
 		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`,
+		`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
 		`Current phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
 		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
 		`Continuation reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
@@ -1616,11 +1793,15 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	const nextAction = asString(snapshot.state?.next_mandatory_action) ?? "unknown";
 	const continuation = asString(snapshot.state?.continuation_policy) ?? "unknown";
 	const activeSliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)";
+	const taskType = currentTaskType(snapshot) ?? "(missing)";
+	const evaluationProfile = currentEvaluationProfile(snapshot) ?? "(missing)";
 	return [
 		"POST-COMPACTION RECOVERY MODE is active.",
 		`Compaction marker time: ${markerAt}`,
 		"Treat the previous conversation as lossy continuity support only.",
 		"Before taking any substantive action, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl from disk.",
+		`Canonical task_type is currently: ${taskType}`,
+		`Canonical evaluation_profile is currently: ${evaluationProfile}`,
 		`Canonical next mandatory role is currently: ${nextRole}`,
 		`Canonical next mandatory action is currently: ${nextAction}`,
 		`Canonical continuation policy is currently: ${continuation}`,
@@ -1711,6 +1892,8 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		"",
 		"<completion-state>",
 		`mission_anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
+		`task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
+		`evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
 		`current_phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
 		`continuation_policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
 		`continuation_reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
@@ -2483,18 +2666,24 @@ function lastAssistantText(messages: Array<{ role: string; content: Array<{ type
 	return "";
 }
 
-function completionKickoff(goal: string, intent: "auto" | "continue" | "refocus" = "auto", missionAnchor?: string): string {
+function completionKickoff(
+	goal: string,
+	taskType: string,
+	evaluationProfile: string,
+	intent: "auto" | "continue" | "refocus" = "auto",
+	missionAnchor?: string,
+): string {
 	const intentBlock =
 		intent === "continue" && missionAnchor
 			? `Existing canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- Continue the existing workflow.\n- Treat the new user text as supplemental direction unless canonical reconciliation proves the mission itself must change.\n\n`
 			: intent === "refocus" && missionAnchor
 				? `Updated canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- The user explicitly refocused the workflow before this kickoff.\n- Re-read canonical .agent/** state and continue from the refocused mission.\n\n`
 				: "";
-	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
-function completionResumePrompt(): string {
-	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+function completionResumePrompt(taskType: string, evaluationProfile: string): string {
+	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 export default function completionExtension(pi: ExtensionAPI) {
@@ -2529,6 +2718,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		}
 		const additions = [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
 		if (marker) additions.push(buildPostCompactionDriverInstructions(loaded.snapshot, marker));
+		maybeWriteTestSnapshot(completionTestSystemReminderPath(), additions.join("\n\n"));
 		const systemPrompt = getSystemPromptSafe(ctx);
 		if (!systemPrompt) return;
 		return {
@@ -2998,11 +3188,16 @@ export default function completionExtension(pi: ExtensionAPI) {
 				} else {
 					const mission = currentMissionAnchor(snapshot);
 					pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
+					const resumePrompt = completionResumePrompt(
+						currentTaskType(snapshot) ?? "(missing)",
+						currentEvaluationProfile(snapshot) ?? "(missing)",
+					);
+					maybeWriteTestSnapshot(completionTestDriverPromptPath(), `${resumePrompt}\n`);
 					if (shouldSkipDriverKickoffForTests()) {
 						emitCommandText(ctx, "Skipped completion workflow resume kickoff (test mode)", "info");
 						return;
 					}
-					pi.sendUserMessage(completionResumePrompt());
+					pi.sendUserMessage(resumePrompt);
 					emitCommandText(ctx, "Queued completion workflow resume", "info");
 					return;
 				}
@@ -3060,11 +3255,19 @@ export default function completionExtension(pi: ExtensionAPI) {
 				}
 			}
 			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
+			const kickoffPrompt = completionKickoff(
+				goal,
+				currentTaskType(snapshot) ?? "(missing)",
+				currentEvaluationProfile(snapshot) ?? "(missing)",
+				kickoffIntent,
+				kickoffMissionAnchor,
+			);
+			maybeWriteTestSnapshot(completionTestDriverPromptPath(), `${kickoffPrompt}\n`);
 			if (shouldSkipDriverKickoffForTests()) {
 				emitCommandText(ctx, "Skipped completion workflow kickoff (test mode)", "info");
 				return;
 			}
-			pi.sendUserMessage(completionKickoff(goal, kickoffIntent, kickoffMissionAnchor));
+			pi.sendUserMessage(kickoffPrompt);
 			emitCommandText(ctx, "Queued completion workflow kickoff", "info");
 		},
 	});

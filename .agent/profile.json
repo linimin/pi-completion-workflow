@@ -4,6 +4,8 @@
   "project_name": "pi-completion-workflow",
   "required_stop_judges": 3,
   "priority_policy_id": "completion-default",
+  "task_type": "completion-workflow",
+  "evaluation_profile": "completion-rubric-v1",
   "docs_surfaces": [
     "README.md",
     "CHANGELOG.md"

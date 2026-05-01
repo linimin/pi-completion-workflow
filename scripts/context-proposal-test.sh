@@ -133,15 +133,26 @@ import json
 from pathlib import Path
 
 mission = 'Remove the completion status line while keeping the completion widget.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert mission in mission_text, '.agent/mission.md did not record the analyst-derived mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after analyst-derived bootstrap'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after analyst-derived bootstrap'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after analyst-derived bootstrap'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after analyst-derived bootstrap'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after analyst-derived bootstrap'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after analyst-derived bootstrap'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after analyst-derived bootstrap'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after analyst-derived bootstrap'
 PY
@@ -164,15 +175,26 @@ import json
 from pathlib import Path
 
 mission = 'Ship the next workflow round for richer context-derived /cook startup.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert mission in mission_text, '.agent/mission.md did not update to the next-round context-derived mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after next-round startup'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after next-round startup'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after starting the next workflow round'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after starting the next workflow round'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after starting the next workflow round'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after starting the next workflow round'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after starting the next workflow round'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after starting the next workflow round'
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after starting the next workflow round'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after starting the next workflow round'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after starting the next workflow round'
 assert state['current_phase'] == 'reground', 'state.json current_phase should reset to reground for the next workflow round'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should reset to continue for the next workflow round'
 assert state['requires_reground'] is True, 'requires_reground should reset to true for the next workflow round'
@@ -200,15 +222,26 @@ import json
 from pathlib import Path
 
 mission = 'Explicit replacement mission for the active workflow.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert mission in mission_text, '.agent/mission.md did not update to the explicit replacement mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after explicit-goal replacement'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after explicit-goal replacement'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after explicit-goal replacement'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after explicit-goal replacement'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after explicit-goal replacement'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after explicit-goal replacement'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after explicit-goal replacement'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after explicit-goal replacement'
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal replacement'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal replacement'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal replacement'
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal replacement'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should stay continue after explicit-goal replacement'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal replacement'
@@ -239,16 +272,27 @@ import json
 from pathlib import Path
 
 mission = 'Filter scope by mission.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 continuation_reason = state['continuation_reason']
 
 assert mission in mission_text, '.agent/mission.md did not update to the explicit next-round mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after explicit-goal next-round start'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after explicit-goal next-round start'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after explicit-goal next-round start'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after explicit-goal next-round start'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after explicit-goal next-round start'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after explicit-goal next-round start'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after explicit-goal next-round start'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after explicit-goal next-round start'
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal next-round start'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal next-round start'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal next-round start'
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal next-round start'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should reset to continue after explicit-goal next-round start'
 assert state['project_done'] is False, 'project_done should reset to false after explicit-goal next-round start'
@@ -283,16 +327,27 @@ import json
 from pathlib import Path
 
 mission = 'Use a proposal analyst to summarize natural discussion before /cook writes canonical state.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 continuation_reason = state['continuation_reason']
 
 assert mission in mission_text, '.agent/mission.md did not record the analyst-derived mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after analyst-derived restart'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after analyst-derived restart'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after analyst-derived bootstrap'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after analyst-derived bootstrap'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after analyst-derived bootstrap'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after analyst-derived bootstrap'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after analyst-derived bootstrap'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after analyst-derived bootstrap'
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after analyst-derived bootstrap'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after analyst-derived bootstrap'
 assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the analyst-derived restart'
@@ -326,6 +381,8 @@ snapshot = json.loads(Path(sys.argv[1]).read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 
 assert snapshot['proposalHeading'] == 'Proposed workflow', 'custom confirmation snapshot should expose a dedicated proposal section'
+assert state['task_type'] == 'completion-workflow', 'start action should preserve canonical task_type'
+assert state['evaluation_profile'] == 'completion-rubric-v1', 'start action should preserve canonical evaluation_profile'
 assert 'Mission\nReplace the crowded selector with a clearer action layout.' in snapshot['proposalBody'], 'proposal body should be captured separately from the action list'
 assert [action['id'] for action in snapshot['actions']] == ['start', 'edit', 'cancel'], 'custom confirmation actions should stay Start/Edit/Cancel'
 assert [action['label'] for action in snapshot['actions']] == ['Start', 'Edit', 'Cancel'], 'custom confirmation action labels should be concise'
@@ -363,6 +420,8 @@ active = json.loads(Path('.agent/active-slice.json').read_text())
 mission = 'Edited mission from the custom confirmation UI.'
 
 assert state['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update state.json'
+assert state['task_type'] == 'completion-workflow', 'edit action should preserve canonical task_type'
+assert state['evaluation_profile'] == 'completion-rubric-v1', 'edit action should preserve canonical evaluation_profile'
 assert plan['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update plan.json'
 assert active['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update active-slice.json'
 assert state['current_phase'] == 'reground', 'edit action should still bootstrap/reground the workflow'

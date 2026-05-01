@@ -36,6 +36,8 @@
   "project_name": "<repo-name>",
   "required_stop_judges": 3,
   "priority_policy_id": "completion-default",
+  "task_type": "completion-workflow",
+  "evaluation_profile": "completion-rubric-v1",
   "docs_surfaces": ["README.md", "docs/"]
 }
 ```
@@ -48,6 +50,8 @@ Required fields:
 
 - `schema_version`
 - `mission_anchor`
+- `task_type`
+- `evaluation_profile`
 - `current_phase`
 - `continuation_policy`
 - `continuation_reason`
@@ -111,6 +115,8 @@ Required fields:
 
 - `schema_version`
 - `mission_anchor`
+- `task_type`
+- `evaluation_profile`
 - `last_reground_at`
 - `plan_basis`
 - `candidate_slices`
@@ -142,6 +148,25 @@ Rules:
 5. Clean handoff before next slice. After a committed slice is reviewed and audited, the tracked and unignored worktree must be clean before the next slice is selected.
 
 `active-slice.json` carries one current slice cursor.
+
+Required base fields:
+
+- `schema_version`
+- `mission_anchor`
+- `task_type`
+- `evaluation_profile`
+- `status`
+- `slice_id`
+- `goal`
+- `contract_ids`
+- `acceptance_criteria`
+- `blocked_on`
+- `locked_notes`
+- `must_fix_findings`
+- `basis_commit`
+- `remaining_contract_ids_before`
+- `release_blocker_count_before`
+- `high_value_gap_count_before`
 
 When `status` is `selected`, `in_progress`, `committed`, or `done`, `active-slice.json` must also carry the exact implementer handoff snapshot so `completion-implementer` can resume after compaction without asking the user to resend the original caller payload.
 
@@ -203,7 +228,7 @@ Empty history files are legal.
 
 `completion-reviewer`, `completion-auditor`, and `completion-stop-judge` must emit rubric-backed evaluations using the same shared dimension names and verdict semantics.
 
-This foundation is a prompt/report contract only. It does **not** add canonical `task_type` or `evaluation_profile` schema yet; later slices may wire those through the control plane.
+The shared rubric foundation now sits alongside canonical `task_type` and `evaluation_profile` signaling in `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`. That signaling is routing metadata only; later slices may still add stricter profile-aware rubric-output enforcement.
 
 Required rubric section:
 

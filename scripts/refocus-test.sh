@@ -44,15 +44,26 @@ import json
 from pathlib import Path
 
 new_anchor = 'refocused smoke-test mission with tests and docs parity.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
 mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert new_anchor in mission_text, '.agent/mission.md did not update to the refocused mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after refocus'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after refocus'
 assert state['mission_anchor'] == new_anchor, 'state.json mission_anchor mismatch after refocus'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after refocus'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after refocus'
 assert plan['mission_anchor'] == new_anchor, 'plan.json mission_anchor mismatch after refocus'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after refocus'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after refocus'
 assert active['mission_anchor'] == new_anchor, 'active-slice.json mission_anchor mismatch after refocus'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after refocus'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after refocus'
 assert state['current_phase'] == 'reground', 'state.json current_phase should reset to reground after refocus'
 assert state['requires_reground'] is True, 'state.json requires_reground should be true after refocus'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should reset to completion-regrounder'
