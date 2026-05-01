@@ -209,7 +209,7 @@ npm run release-check
 
 `npm run release-check` is the broader packaged-release verifier. It reruns the smoke, refocus, and context-proposal checks, includes the deterministic observability regression coverage, and finishes with `npm pack --dry-run`.
 
-See [PUBLISHING.md](./PUBLISHING.md) for GitHub and npm release steps.
+See [PUBLISHING.md](https://github.com/linimin/pi-letscook/blob/main/PUBLISHING.md) for GitHub and npm release steps.
 
 ## Notes
 
