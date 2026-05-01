@@ -120,16 +120,19 @@ PY
 # No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
 SESSION_ONE="$TMPDIR/session-one.jsonl"
 DISCUSSION_ONE="$DISCUSSION_ZERO"
-ANALYST_OUTPUT_ONE='{"mission":"Remove the completion status line while keeping the completion widget.","scope":["Keep the non-running completion widget.","Suppress the widget while a completion role is active."],"constraints":["Do not reintroduce any other completion status surface."],"acceptance":["Update README to match the shipped behavior.","Keep observability regression coverage truthful."],"confidence":0.94}'
+ANALYST_OUTPUT_ONE='{"mission":"Remove the completion status line while keeping the completion widget.","scope":["Keep the non-running completion widget.","Suppress the widget while a completion role is active."],"constraints":["Do not reintroduce any other completion status surface."],"acceptance":["Update README to match the shipped behavior.","Keep observability regression coverage truthful."],"critique":["Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal."],"risks":["Stale widget-removal discussion could broaden the startup plan if it gets treated as mission text."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","possible_noise":["older widget restyle ideas"],"confidence":0.94}'
+DISCUSSION_SNAPSHOT_ONE="$TMPDIR/context-proposal-discussion-hints.json"
 write_session "$SESSION_ONE" "$ROOT" "$DISCUSSION_ONE"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ONE" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_ONE" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-bootstrap.out 2>/tmp/pi-completion-context-proposal-bootstrap.err
 
-python3 - <<'PY'
+python3 - "$DISCUSSION_SNAPSHOT_ONE" <<'PY'
 import json
+import sys
 from pathlib import Path
 
 mission = 'Remove the completion status line while keeping the completion widget.'
@@ -140,6 +143,7 @@ profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
+proposal = json.loads(Path(sys.argv[1]).read_text())
 
 assert mission in mission_text, '.agent/mission.md did not record the analyst-derived mission anchor'
 assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after analyst-derived bootstrap'
@@ -153,6 +157,14 @@ assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluatio
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after analyst-derived bootstrap'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after analyst-derived bootstrap'
+assert proposal['mission'] == mission, 'discussion-only proposal snapshot should keep the inferred mission anchor'
+assert proposal['analysis']['taskType'] == expected_task_type, 'discussion-only proposal snapshot should expose task_type hints separately'
+assert proposal['analysis']['evaluationProfile'] == expected_eval_profile, 'discussion-only proposal snapshot should expose evaluation_profile hints separately'
+assert proposal['analysis']['critique'] == ['Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal.'], 'discussion-only proposal snapshot should preserve critique hints'
+assert proposal['analysis']['risks'] == ['Stale widget-removal discussion could broaden the startup plan if it gets treated as mission text.'], 'discussion-only proposal snapshot should preserve risk hints'
+assert proposal['analysis']['possibleNoise'] == ['older widget restyle ideas'], 'discussion-only proposal snapshot should preserve possible_noise hints'
+assert 'Critique:' not in proposal['goalText'], 'goalText should keep critique separate from mission/scope/constraints/acceptance'
+assert 'Task type:' not in proposal['goalText'], 'goalText should keep task_type hints separate from the mission body'
 assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after analyst-derived bootstrap'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after analyst-derived bootstrap'
 PY
@@ -259,16 +271,19 @@ mark_done
 
 SESSION_FOUR="$TMPDIR/session-four.jsonl"
 DISCUSSION_FOUR=$'Scope:\n- Add session-only scope.\n- Restyle widget.\nConstraints:\n- Keep rules.\nAcceptance:\n- Add test.'
-EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit scope.'
+EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit scope.\nCritique:\n- Keep critique notes separate from the mission anchor.\nRisks:\n- Session-only scope could leak into the next workflow round.\nTask type: completion-workflow\nEvaluation profile: completion-rubric-v1'
+EXPLICIT_SNAPSHOT_FOUR="$TMPDIR/context-proposal-explicit-hints.json"
 write_session "$SESSION_FOUR" "$ROOT" "$DISCUSSION_FOUR"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$EXPLICIT_SNAPSHOT_FOUR" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_FOUR" -e "$PKG_ROOT" -p "/cook $EXPLICIT_GOAL_FOUR" >/tmp/pi-completion-context-proposal-done-goal.out 2>/tmp/pi-completion-context-proposal-done-goal.err
 
-python3 - <<'PY'
+python3 - "$EXPLICIT_SNAPSHOT_FOUR" <<'PY'
 import json
+import sys
 from pathlib import Path
 
 mission = 'Filter scope by mission.'
@@ -279,6 +294,7 @@ profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
+proposal = json.loads(Path(sys.argv[1]).read_text())
 continuation_reason = state['continuation_reason']
 
 assert mission in mission_text, '.agent/mission.md did not update to the explicit next-round mission anchor'
@@ -293,6 +309,13 @@ assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluatio
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal next-round start'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal next-round start'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal next-round start'
+assert proposal['mission'] == mission, 'explicit-goal proposal snapshot should preserve the explicit mission anchor'
+assert proposal['analysis']['taskType'] == expected_task_type, 'explicit-goal proposal snapshot should preserve task_type hints from the goal text'
+assert proposal['analysis']['evaluationProfile'] == expected_eval_profile, 'explicit-goal proposal snapshot should preserve evaluation_profile hints from the goal text'
+assert proposal['analysis']['critique'] == ['Keep critique notes separate from the mission anchor.'], 'explicit-goal proposal snapshot should preserve critique hints from the goal text'
+assert proposal['analysis']['risks'] == ['Session-only scope could leak into the next workflow round.'], 'explicit-goal proposal snapshot should preserve risk hints from the goal text'
+assert 'Critique:' not in proposal['goalText'], 'goalText should keep critique notes separate from mission/scope/constraints/acceptance'
+assert 'Task type:' not in proposal['goalText'], 'goalText should keep task_type hints separate from the mission body'
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal next-round start'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should reset to continue after explicit-goal next-round start'
 assert state['project_done'] is False, 'project_done should reset to false after explicit-goal next-round start'

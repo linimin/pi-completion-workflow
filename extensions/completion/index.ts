@@ -114,15 +114,26 @@ type CompletionStatusSurface = {
 	liveDetailsLines?: string[];
 };
 
+type ContextProposalAnalysis = {
+	taskType?: string;
+	evaluationProfile?: string;
+	critique: string[];
+	risks: string[];
+	possibleNoise: string[];
+};
+
 type ContextProposal = {
 	mission: string;
 	scope: string[];
 	constraints: string[];
 	acceptance: string[];
+	analysis: ContextProposalAnalysis;
 	goalText: string;
 	basisPreview: string;
 	source: "session" | "analyst";
 };
+
+type ContextProposalSection = "mission" | "scope" | "constraints" | "acceptance" | "critique" | "risks";
 
 type RecentDiscussionEntry = {
 	role: "user" | "assistant" | "custom" | "summary";
@@ -505,6 +516,10 @@ function completionTestContextProposalUiSnapshotPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_PATH);
 }
 
+function completionTestContextProposalSnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH);
+}
+
 function completionTestDriverPromptPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_DRIVER_PROMPT_PATH);
 }
@@ -565,7 +580,7 @@ function normalizeProposalLine(line: string): string {
 		.trim();
 }
 
-function detectProposalSection(line: string): "mission" | "scope" | "constraints" | "acceptance" | undefined {
+function detectProposalSection(line: string): ContextProposalSection | undefined {
 	const normalized = normalizeProposalLine(line)
 		.toLowerCase()
 		.replace(/[:：]$/, "")
@@ -575,12 +590,12 @@ function detectProposalSection(line: string): "mission" | "scope" | "constraints
 	if (["scope", "plan", "steps", "implementation", "範圍", "范围", "實作", "实现", "步驟", "步骤"].includes(normalized)) return "scope";
 	if (["constraints", "constraint", "guardrails", "non-goals", "限制", "約束", "约束", "非目標", "非目标"].includes(normalized)) return "constraints";
 	if (["acceptance", "acceptance criteria", "deliverables", "verification", "驗收", "验收", "交付", "驗證", "验证"].includes(normalized)) return "acceptance";
+	if (["critique", "critic", "concerns", "concern", "warnings", "warning", "notes", "note", "評論", "评论", "提醒"].includes(normalized)) return "critique";
+	if (["risk", "risks", "hazards", "hazard", "failure modes", "failure mode", "風險", "风险"].includes(normalized)) return "risks";
 	return undefined;
 }
 
-function matchInlineProposalSection(
-	line: string,
-): { section: "mission" | "scope" | "constraints" | "acceptance"; content: string } | undefined {
+function matchInlineProposalSection(line: string): { section: ContextProposalSection; content: string } | undefined {
 	const normalized = normalizeProposalLine(line);
 	const match = normalized.match(/^([^:：]+)[:：]\s*(.+)$/u);
 	if (!match) return undefined;
@@ -617,6 +632,113 @@ function uniqueProposalItems(items: string[]): string[] {
 		result.push(normalized);
 	}
 	return result;
+}
+
+function normalizeContextProposalHint(value: unknown): string | undefined {
+	const normalized = asString(value)?.replace(/\s+/g, " ").trim();
+	return normalized || undefined;
+}
+
+function normalizeContextProposalTaskTypeHint(value: unknown): string | undefined {
+	const normalized = normalizeContextProposalHint(value);
+	if (!normalized) return undefined;
+	const canonical = normalized.toLowerCase().replace(/[\s/]+/g, "-");
+	return canonical === DEFAULT_TASK_TYPE ? DEFAULT_TASK_TYPE : normalized;
+}
+
+function normalizeContextProposalEvaluationProfileHint(value: unknown): string | undefined {
+	const normalized = normalizeContextProposalHint(value);
+	if (!normalized) return undefined;
+	const canonical = normalized.toLowerCase().replace(/[\s/]+/g, "-");
+	return canonical === DEFAULT_EVALUATION_PROFILE ? DEFAULT_EVALUATION_PROFILE : normalized;
+}
+
+function inferContextProposalTaskType(texts: string[]): string | undefined {
+	const corpus = texts
+		.map((text) => normalizeProposalLine(text).toLowerCase())
+		.filter(Boolean)
+		.join("\n");
+	if (!corpus) return undefined;
+	return /(completion|\/cook|\/complete|\.agent|slice|reground|reviewer|auditor|stop judge|stop-judge|workflow)/i.test(corpus)
+		? DEFAULT_TASK_TYPE
+		: undefined;
+}
+
+function inferContextProposalEvaluationProfile(texts: string[], taskType?: string): string | undefined {
+	const corpus = texts
+		.map((text) => normalizeProposalLine(text).toLowerCase())
+		.filter(Boolean)
+		.join("\n");
+	if (!corpus) return undefined;
+	if (
+		/(rubric|evaluation[_\s-]*profile|pass\|concern\|fail|contract coverage|correctness risk|verification evidence|docs\/state parity|reviewer|auditor|stop judge|stop-judge)/i.test(
+			corpus,
+		)
+	) {
+		return DEFAULT_EVALUATION_PROFILE;
+	}
+	return taskType === DEFAULT_TASK_TYPE && /(completion|\/cook|\/complete|slice|workflow|review|audit)/i.test(corpus)
+		? DEFAULT_EVALUATION_PROFILE
+		: undefined;
+}
+
+function buildContextProposalAnalysis(args: {
+	taskType?: unknown;
+	evaluationProfile?: unknown;
+	critique?: string[];
+	risks?: string[];
+	possibleNoise?: string[];
+	hintTexts?: string[];
+}): ContextProposalAnalysis {
+	const critique = uniqueProposalItems(args.critique ?? []);
+	const risks = uniqueProposalItems(args.risks ?? []);
+	const possibleNoise = uniqueProposalItems(args.possibleNoise ?? []);
+	const hintTexts = [...(args.hintTexts ?? []), ...critique, ...risks, ...possibleNoise];
+	const taskType = normalizeContextProposalTaskTypeHint(args.taskType) ?? inferContextProposalTaskType(hintTexts);
+	const evaluationProfile =
+		normalizeContextProposalEvaluationProfileHint(args.evaluationProfile) ??
+		inferContextProposalEvaluationProfile(hintTexts, taskType);
+	return {
+		taskType,
+		evaluationProfile,
+		critique,
+		risks,
+		possibleNoise,
+	};
+}
+
+function mergeContextProposalAnalysis(
+	sources: Array<ContextProposalAnalysis | undefined>,
+	hintTexts: string[] = [],
+): ContextProposalAnalysis {
+	const critique = uniqueProposalItems(sources.flatMap((source) => source?.critique ?? []));
+	const risks = uniqueProposalItems(sources.flatMap((source) => source?.risks ?? []));
+	const possibleNoise = uniqueProposalItems(sources.flatMap((source) => source?.possibleNoise ?? []));
+	const taskType =
+		sources.map((source) => source?.taskType).find((value): value is string => Boolean(value)) ??
+		inferContextProposalTaskType([...hintTexts, ...critique, ...risks, ...possibleNoise]);
+	const evaluationProfile =
+		sources.map((source) => source?.evaluationProfile).find((value): value is string => Boolean(value)) ??
+		inferContextProposalEvaluationProfile([...hintTexts, ...critique, ...risks, ...possibleNoise], taskType);
+	return {
+		taskType,
+		evaluationProfile,
+		critique,
+		risks,
+		possibleNoise,
+	};
+}
+
+function matchContextProposalRoutingHint(
+	line: string,
+): { field: "taskType" | "evaluationProfile"; value: string } | undefined {
+	const normalized = normalizeProposalLine(line);
+	const match = normalized.match(/^(task[\s_-]*type|evaluation[\s_-]*profile)[:：]\s*(.+)$/iu);
+	if (!match) return undefined;
+	const label = match[1].toLowerCase().replace(/[\s_-]+/g, "");
+	const value = match[2].trim();
+	if (!value) return undefined;
+	return label === "tasktype" ? { field: "taskType", value } : { field: "evaluationProfile", value };
 }
 
 const MISSION_SCOPE_FILTER_STOPWORDS = new Set([
@@ -678,11 +800,14 @@ function isSessionScopeItemMissionRelevant(item: string, mission: string): boole
 const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 	"You analyze recent /cook startup discussion and return a strict JSON object.",
 	"Do not emit markdown, code fences, or commentary.",
-	"Return exactly one JSON object with keys: mission, scope, constraints, acceptance, confidence, possible_noise.",
+	"Return exactly one JSON object with keys: mission, scope, constraints, acceptance, critique, risks, task_type, evaluation_profile, confidence, possible_noise.",
 	"mission must be a concise implementation mission anchor sentence.",
 	"scope must contain only work items that directly support the mission.",
 	"constraints must contain guardrails or non-goals explicitly stated or strongly implied by the discussion.",
 	"acceptance must contain verifiable outcomes explicitly stated or strongly implied by the discussion.",
+	"critique must contain operator-facing cautions, concerns, or reminders that should be shown separately from mission and scope later.",
+	"risks must contain concrete failure modes or regressions that the later workflow should keep in view.",
+	"task_type and evaluation_profile should be candidate routing hints only; reuse the existing completion vocabulary when it clearly fits instead of inventing new schema names.",
 	"possible_noise should list discussion points that look stale, weakly related, or unsafe to promote into scope.",
 	"When an explicit goal is provided, keep the mission anchored to that goal instead of replacing it with a broader or different mission.",
 	"When discussion is insufficient, prefer empty arrays and a low confidence value over invention.",
@@ -763,12 +888,27 @@ function parseContextProposalAnalystOutput(
 	const scope = uniqueProposalItems(asStringArray(parsed.scope));
 	const constraints = uniqueProposalItems(asStringArray(parsed.constraints));
 	const acceptance = uniqueProposalItems(asStringArray(parsed.acceptance));
+	const analysis = mergeContextProposalAnalysis(
+		[
+			explicit?.analysis,
+			buildContextProposalAnalysis({
+				taskType: parsed.task_type ?? parsed.taskType,
+				evaluationProfile: parsed.evaluation_profile ?? parsed.evaluationProfile,
+				critique: asStringArray(parsed.critique),
+				risks: asStringArray(parsed.risks ?? parsed.risk),
+				possibleNoise: asStringArray(parsed.possible_noise ?? parsed.possibleNoise),
+				hintTexts: [raw, mission, ...scope, ...constraints, ...acceptance],
+			}),
+		],
+		[explicitGoal ?? "", raw, mission, ...scope, ...constraints, ...acceptance],
+	);
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
 	return {
 		mission,
 		scope,
 		constraints,
 		acceptance,
+		analysis,
 		goalText,
 		basisPreview: raw.replace(/\s+/g, " ").trim(),
 		source: "analyst",
@@ -1033,6 +1173,17 @@ function maybeWriteContextProposalConfirmationSnapshot(layout: ContextProposalCo
 	}
 }
 
+function maybeWriteContextProposalSnapshot(proposal: ContextProposal): void {
+	const snapshotPath = completionTestContextProposalSnapshotPath();
+	if (!snapshotPath) return;
+	try {
+		fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+		fs.writeFileSync(snapshotPath, `${JSON.stringify(proposal, null, 2)}\n`, "utf8");
+	} catch {
+		// ignore malformed or unwritable test snapshot paths
+	}
+}
+
 function buildContextProposalConfirmationSelectItems(layout: ContextProposalConfirmationLayout): SelectItem[] {
 	return layout.actions.map((action) => ({
 		value: action.id,
@@ -1137,14 +1288,25 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 		.filter((line) => line.length > 0);
 	if (lines.length === 0) return undefined;
 
-	let section: "mission" | "scope" | "constraints" | "acceptance" | undefined;
+	let section: ContextProposalSection | undefined;
 	let missionLine: string | undefined;
+	let taskTypeHint: string | undefined;
+	let evaluationProfileHint: string | undefined;
 	const scope: string[] = [];
 	const constraints: string[] = [];
 	const acceptance: string[] = [];
+	const critique: string[] = [];
+	const risks: string[] = [];
 	let structuredSignalCount = 0;
 
 	for (const rawLine of lines) {
+		const routingHint = matchContextProposalRoutingHint(rawLine);
+		if (routingHint) {
+			structuredSignalCount += 1;
+			if (routingHint.field === "taskType") taskTypeHint = routingHint.value;
+			else evaluationProfileHint = routingHint.value;
+			continue;
+		}
 		const inlineSection = matchInlineProposalSection(rawLine);
 		if (inlineSection) {
 			section = inlineSection.section;
@@ -1157,6 +1319,10 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 				acceptance.push(inlineSection.content);
 			} else if (inlineSection.section === "scope") {
 				scope.push(inlineSection.content);
+			} else if (inlineSection.section === "critique") {
+				critique.push(inlineSection.content);
+			} else if (inlineSection.section === "risks") {
+				risks.push(inlineSection.content);
 			}
 			continue;
 		}
@@ -1185,6 +1351,14 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 				scope.push(bullet);
 				continue;
 			}
+			if (section === "critique") {
+				critique.push(bullet);
+				continue;
+			}
+			if (section === "risks") {
+				risks.push(bullet);
+				continue;
+			}
 			if (!missionLine) {
 				missionLine = bullet;
 				continue;
@@ -1198,6 +1372,14 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 		if (!normalized) continue;
 		if (!missionLine) {
 			missionLine = normalized;
+			continue;
+		}
+		if (section === "critique") {
+			critique.push(normalized);
+			continue;
+		}
+		if (section === "risks") {
+			risks.push(normalized);
 			continue;
 		}
 		if (section === "constraints" || looksLikeConstraint(normalized)) {
@@ -1217,17 +1399,25 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 	const missionSource = missionLine ?? scope[0] ?? acceptance[0] ?? constraints[0] ?? basisPreview;
 	const assessment = assessMissionAnchor(missionSource, projectName);
 	const normalizedMission = normalizeMissionAnchorText(missionSource);
-	const itemCount = scope.length + constraints.length + acceptance.length;
+	const itemCount = scope.length + constraints.length + acceptance.length + critique.length + risks.length;
 	const hasStrongStructure = structuredSignalCount >= 2 || itemCount >= 2;
 	if (!normalizedMission || isWeakMissionAnchor(normalizedMission)) return undefined;
 	if (!hasStrongStructure && basisPreview.length < 140) return undefined;
 	const mission = assessment.derived;
+	const analysis = buildContextProposalAnalysis({
+		taskType: taskTypeHint,
+		evaluationProfile: evaluationProfileHint,
+		critique,
+		risks,
+		hintTexts: [cleaned, mission, ...scope, ...constraints, ...acceptance, ...critique, ...risks],
+	});
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
 	return {
 		mission,
 		scope,
 		constraints,
 		acceptance,
+		analysis,
 		goalText,
 		basisPreview,
 		source: "session",
@@ -1258,15 +1448,20 @@ async function buildGoalAnchoredContextProposal(
 	const scope = uniqueProposalItems([...explicitScope, ...sessionScope]);
 	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...(sessionProposal?.constraints ?? [])]);
 	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...(sessionProposal?.acceptance ?? [])]);
+	const analysis = mergeContextProposalAnalysis(
+		[explicit?.analysis, sessionProposal?.analysis],
+		[goal, mission, ...(sessionProposal?.analysis.possibleNoise ?? []), ...scope, ...constraints, ...acceptance],
+	);
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
 	return {
 		mission,
 		scope,
 		constraints,
 		acceptance,
+		analysis,
 		goalText,
 		basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
-		source: sessionProposal?.source ?? "session",
+		source: sessionProposal?.source ?? explicit?.source ?? "session",
 	};
 }
 
@@ -1276,6 +1471,7 @@ async function confirmContextProposal(
 	projectName: string,
 	options: ContextProposalConfirmOptions,
 ): Promise<ContextProposalDecision | undefined> {
+	maybeWriteContextProposalSnapshot(proposal);
 	const actionOverride = completionTestContextProposalActionOverride();
 	if (actionOverride === "cancel") return undefined;
 	if (actionOverride === "accept") {
