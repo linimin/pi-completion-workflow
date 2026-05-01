@@ -196,27 +196,30 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus 
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal replacement'
 PY
 
-# Completed workflow again: /cook <goal> should start the next round directly from the explicit goal
-# without requiring existing-workflow continue/refocus confirmation.
+# Completed workflow again: /cook <goal> should start the next round directly from the explicit goal,
+# keep explicit scope untouched, filter unrelated session-derived scope, and still merge
+# session-derived constraints/acceptance details.
 mark_done
 
 SESSION_FOUR="$TMPDIR/session-four.jsonl"
-DISCUSSION_FOUR=$'Mission: This older discussion should not override the explicit next-round goal.\nScope:\n- Reuse discussion details only as supplemental proposal context.\nAcceptance:\n- Start the next round from the explicit goal.'
+DISCUSSION_FOUR=$'Scope:\n- Filter scope by mission.\n- Restyle widget.\nConstraints:\n- Keep rules.\nAcceptance:\n- Add test.'
+EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit scope.'
 write_session "$SESSION_FOUR" "$ROOT" "$DISCUSSION_FOUR"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_FOUR" -e "$PKG_ROOT" -p "/cook Explicit goal for the next completed-workflow round" >/tmp/pi-completion-context-proposal-done-goal.out 2>/tmp/pi-completion-context-proposal-done-goal.err
+pi --session "$SESSION_FOUR" -e "$PKG_ROOT" -p "/cook $EXPLICIT_GOAL_FOUR" >/tmp/pi-completion-context-proposal-done-goal.out 2>/tmp/pi-completion-context-proposal-done-goal.err
 
 python3 - <<'PY'
 import json
 from pathlib import Path
 
-mission = 'Explicit goal for the next completed-workflow round.'
+mission = 'Filter scope by mission.'
 mission_text = Path('.agent/mission.md').read_text()
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
+continuation_reason = state['continuation_reason']
 
 assert mission in mission_text, '.agent/mission.md did not update to the explicit next-round mission anchor'
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after explicit-goal next-round start'
@@ -227,7 +230,12 @@ assert state['continuation_policy'] == 'continue', 'continuation_policy should r
 assert state['project_done'] is False, 'project_done should reset to false after explicit-goal next-round start'
 assert state['requires_reground'] is True, 'requires_reground should reset to true after explicit-goal next-round start'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal next-round start'
-assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal next-round start'
+assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal next-round start'
+assert 'Keep explicit scope.' in continuation_reason, 'explicit scope should remain in the explicit-goal proposal'
+assert 'Filter scope by mission.' in continuation_reason, 'relevant session-derived scope should remain in the explicit-goal proposal'
+assert 'Restyle widget.' not in continuation_reason, 'unrelated session-derived scope should be filtered from the explicit-goal proposal'
+assert 'Keep rules.' in continuation_reason, 'session-derived constraints should still merge into the explicit-goal proposal'
+assert 'Add test.' in continuation_reason, 'session-derived acceptance should still merge into the explicit-goal proposal'
 assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal next-round start'
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal next-round start'
 PY

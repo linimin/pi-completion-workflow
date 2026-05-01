@@ -508,6 +508,62 @@ function uniqueProposalItems(items: string[]): string[] {
 	return result;
 }
 
+const MISSION_SCOPE_FILTER_STOPWORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"by",
+	"for",
+	"from",
+	"goal",
+	"goals",
+	"in",
+	"into",
+	"is",
+	"it",
+	"its",
+	"mission",
+	"of",
+	"on",
+	"or",
+	"scope",
+	"that",
+	"the",
+	"their",
+	"this",
+	"to",
+	"using",
+	"with",
+	"workflow",
+]);
+
+function missionScopeFilterTokens(text: string): string[] {
+	const normalized = normalizeProposalLine(text).toLowerCase();
+	const tokens = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+	return tokens.filter((token) => {
+		if (/^[\p{Script=Han}]+$/u.test(token)) return token.length >= 2;
+		if (token.length < 2) return false;
+		return !MISSION_SCOPE_FILTER_STOPWORDS.has(token);
+	});
+}
+
+function isSessionScopeItemMissionRelevant(item: string, mission: string): boolean {
+	const normalizedItem = normalizeProposalLine(item).toLowerCase();
+	const normalizedMission = normalizeMissionAnchorText(mission).toLowerCase();
+	if (!normalizedItem || !normalizedMission) return true;
+	if (normalizedItem.includes(normalizedMission) || normalizedMission.includes(normalizedItem)) return true;
+	const itemTokens = [...new Set(missionScopeFilterTokens(normalizedItem))];
+	const missionTokens = new Set(missionScopeFilterTokens(normalizedMission));
+	if (itemTokens.length === 0 || missionTokens.size === 0) return true;
+	const overlap = itemTokens.filter((token) => missionTokens.has(token));
+	if (overlap.length >= 2) return true;
+	return overlap.some((token) => token.length >= 6 || /[\p{Script=Han}]/u.test(token));
+}
+
 function buildContextProposalGoalText(proposal: {
 	mission: string;
 	scope: string[];
@@ -726,7 +782,9 @@ function buildGoalAnchoredContextProposal(
 	const missionSource = explicit?.mission ?? goal;
 	const assessment = assessMissionAnchor(missionSource, projectName);
 	const mission = assessment.derived;
-	const scope = uniqueProposalItems([...(explicit?.scope ?? []), ...(sessionProposal?.scope ?? [])]);
+	const explicitScope = explicit?.scope ?? [];
+	const sessionScope = (sessionProposal?.scope ?? []).filter((item) => isSessionScopeItemMissionRelevant(item, mission));
+	const scope = uniqueProposalItems([...explicitScope, ...sessionScope]);
 	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...(sessionProposal?.constraints ?? [])]);
 	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...(sessionProposal?.acceptance ?? [])]);
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
