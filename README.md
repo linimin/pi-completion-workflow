@@ -63,17 +63,21 @@ pi install /absolute/path/to/pi-letscook
 pi install -l /absolute/path/to/pi-letscook
 ```
 
-### Install from git after publishing
-
-```bash
-pi install git:github.com/<YOUR-USER>/pi-letscook@v0.1.0
-```
-
 ### Install from npm after publishing
 
 ```bash
 pi install npm:@linimin/pi-letscook
 ```
+
+### Install from git after publishing
+
+For normal installs, prefer the npm package above. Use the git source if you want to install directly from GitHub.
+
+```bash
+pi install git:github.com/linimin/pi-letscook
+```
+
+You can also pin a specific tag or commit if you want a fixed version, for example `git:github.com/linimin/pi-letscook@vX.Y.Z`.
 
 After install, run `/reload` in pi. For this package, it is safest to reload when pi is idle and no `completion_role` is currently running.
 
