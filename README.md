@@ -159,7 +159,7 @@ The packaged control plane now also carries canonical routing signals:
 - `task_type: completion-workflow`
 - `evaluation_profile: completion-rubric-v1`
 
-Those identifiers are persisted in `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, then surfaced in kickoff/reminder/resume text so downstream roles can rely on canonical signaling instead of prose inference alone.
+Those identifiers are persisted in `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, then surfaced in kickoff/reminder/resume text and reviewer/auditor/stop-judge evaluation handoffs so downstream roles can rely on canonical signaling instead of prose inference alone.
 
 The active-slice exact implementer handoff now also carries a stronger implementation contract for selected, in-progress, committed, and done slices:
 
@@ -168,9 +168,11 @@ The active-slice exact implementer handoff now also carries a stronger implement
 
 Those fields are scaffolded by default, enforced by `.agent/verify_completion_control_plane.sh` whenever an exact handoff is required, and surfaced alongside `priority` / `why_now` in reminder and compaction-resume text so implementers can recover from canonical state instead of prose-only summaries.
 
-This slice still does **not** enforce profile-specific rubric-output validation; later workflow slices can build stricter routing and transcription checks on top of these canonical identifiers.
+Reviewer, auditor, and stop-judge dispatch/reminder surfaces now also thread the current active-slice implementation contract (`implementation_surfaces`, `verification_commands`, locked notes, must-fix findings, and before-slice counters) alongside the canonical `evaluation_profile` so those read-only roles can reason from canonical state after compaction.
 
-Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, while the bootstrap/refocus/context regressions plus control-plane verifier now fail closed when required canonical signaling is missing.
+Canonical reviewer/auditor/stop-judge transcription now fails closed on malformed rubric-bearing reports: the shared rubric heading plus all four rubric dimensions must be present, required role fields must remain intact, and reviewer/stop-judge yes/no verdicts cannot contradict rubric `fail` lines.
+
+Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, which now exercises reviewer, auditor, and stop-judge transcription paths while the bootstrap/refocus/context regressions plus control-plane verifier fail closed when required canonical signaling is missing.
 
 ## Canonical files
 

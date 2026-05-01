@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as roleReporting from "./role-reporting.js";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, parseFrontmatter } from "@mariozechner/pi-coding-agent";
@@ -32,6 +33,9 @@ const SKILL_PATH = PACKAGE_SKILL_PATH ?? path.join(AGENT_HOME, "skills", "comple
 const REFERENCE_PATH = PACKAGE_REFERENCE_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "references", "completion.md");
 const DEFAULT_TASK_TYPE = "completion-workflow";
 const DEFAULT_EVALUATION_PROFILE = "completion-rubric-v1";
+const RUBRIC_EVALUATION_ROLES = ["completion-reviewer", "completion-auditor", "completion-stop-judge"] as const;
+
+type RubricEvaluationRole = (typeof RUBRIC_EVALUATION_ROLES)[number];
 
 type CompletionRole = (typeof ROLE_NAMES)[number];
 type JsonRecord = Record<string, unknown>;
@@ -1338,6 +1342,62 @@ function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | u
 	);
 }
 
+function isRubricEvaluationRole(role: string | undefined): role is RubricEvaluationRole {
+	return RUBRIC_EVALUATION_ROLES.includes(role as RubricEvaluationRole);
+}
+
+function activeSliceContext(snapshot: CompletionStateSnapshot) {
+	const active = snapshot.active;
+	const activeSlice = snapshot.activeSlice;
+	return {
+		sliceId: asString(active?.slice_id) ?? asString(activeSlice?.slice_id),
+		status: asString(active?.status) ?? asString(activeSlice?.status),
+		goal: asString(active?.goal) ?? asString(activeSlice?.goal),
+		contractIds:
+			asStringArray(active?.contract_ids).length > 0 ? asStringArray(active?.contract_ids) : asStringArray(activeSlice?.contract_ids),
+		acceptance:
+			asStringArray(active?.acceptance_criteria).length > 0
+				? asStringArray(active?.acceptance_criteria)
+				: asStringArray(activeSlice?.acceptance_criteria),
+		implementationSurfaces: asStringArray(active?.implementation_surfaces),
+		verificationCommands: asStringArray(active?.verification_commands),
+		lockedNotes: asStringArray(active?.locked_notes),
+		mustFixFindings: asStringArray(active?.must_fix_findings),
+		remainingBefore: asStringArray(active?.remaining_contract_ids_before),
+		basisCommit: asString(active?.basis_commit),
+		releaseBlockerCountBefore: asNumber(active?.release_blocker_count_before),
+		highValueGapCountBefore: asNumber(active?.high_value_gap_count_before),
+	};
+}
+
+function buildEvaluationRoleContextLines(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string[] {
+	const context = activeSliceContext(snapshot);
+	const lines = [
+		`Canonical evaluation handoff for ${role}:`,
+		`- task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
+		`- evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
+		`- latest_completed_slice: ${asString(snapshot.state?.latest_completed_slice) ?? "(none)"}`,
+		`- active_slice_id: ${context.sliceId ?? "(none)"}`,
+		`- active_slice_status: ${context.status ?? "(unknown)"}`,
+		`- active_slice_goal: ${context.goal ?? "(unknown)"}`,
+		`- contract_ids: ${context.contractIds.length > 0 ? context.contractIds.join(", ") : "(none)"}`,
+		`- acceptance_criteria: ${context.acceptance.length > 0 ? context.acceptance.join(" | ") : "(none)"}`,
+		`- implementation_surfaces: ${context.implementationSurfaces.length > 0 ? context.implementationSurfaces.join(" | ") : "(none)"}`,
+		`- verification_commands: ${context.verificationCommands.length > 0 ? context.verificationCommands.join(" | ") : "(none)"}`,
+		`- locked_notes: ${context.lockedNotes.length > 0 ? context.lockedNotes.join(" | ") : "(none)"}`,
+		`- must_fix_findings: ${context.mustFixFindings.length > 0 ? context.mustFixFindings.join(" | ") : "(none)"}`,
+		`- basis_commit: ${context.basisCommit ?? "(none)"}`,
+		`- remaining_contract_ids_before: ${context.remainingBefore.length > 0 ? context.remainingBefore.join(", ") : "(none)"}`,
+		`- release_blocker_count_before: ${context.releaseBlockerCountBefore ?? "(unknown)"}`,
+		`- high_value_gap_count_before: ${context.highValueGapCountBefore ?? "(unknown)"}`,
+	];
+	return lines;
+}
+
+function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string {
+	return buildEvaluationRoleContextLines(snapshot, role).join(" ");
+}
+
 async function confirmExistingWorkflowGoal(
 	ctx: { hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
@@ -1782,6 +1842,7 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const activePriority = asNumber(snapshot.active?.priority);
 	const activeWhyNow = asString(snapshot.active?.why_now);
+	const nextRole = asString(snapshot.state?.next_mandatory_role);
 	const lines = [
 		"Completion workflow detected.",
 		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
@@ -1806,6 +1867,7 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	if (activeWhyNow) lines.push(`Active slice why_now: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${implementationSurfaces.join(", ")}`);
 	if (verificationCommands.length > 0) lines.push(`Active verification commands: ${verificationCommands.join(" | ")}`);
+	if (isRubricEvaluationRole(nextRole)) lines.push(buildEvaluationRoleReminderText(snapshot, nextRole));
 	return lines.join(" ");
 }
 
@@ -1841,6 +1903,7 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	if (activeWhyNow) lines.push(`Canonical active-slice why_now is currently: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Canonical implementation surfaces are currently: ${implementationSurfaces.join(", ")}`);
 	if (verificationCommands.length > 0) lines.push(`Canonical verification commands are currently: ${verificationCommands.join(" | ")}`);
+	if (isRubricEvaluationRole(nextRole)) lines.push(buildEvaluationRoleReminderText(snapshot, nextRole));
 	return lines.join(" ");
 }
 
@@ -2296,33 +2359,15 @@ async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
 }
 
 function parseReportFields(text: string): Record<string, string> {
-	const fields: Record<string, string> = {};
-	for (const rawLine of text.split("\n")) {
-		const line = rawLine.trim();
-		if (!line) continue;
-		const normalized = line.replace(/^-\s*/, "").replace(/^`/, "").replace(/`$/, "");
-		const match = normalized.match(/^([A-Za-z][A-Za-z0-9 _\/-]*?):\s*(.*)$/);
-		if (!match) continue;
-		const [, key, value] = match;
-		fields[key.trim()] = value.trim();
-	}
-	return fields;
+	return roleReporting.parseReportFields(text);
 }
 
 function parseYesNo(value: string | undefined): boolean | undefined {
-	if (!value) return undefined;
-	const normalized = value.trim().toLowerCase();
-	if (normalized.startsWith("yes")) return true;
-	if (normalized.startsWith("no")) return false;
-	return undefined;
+	return roleReporting.parseYesNo(value);
 }
 
 function parseFirstNumber(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const match = value.match(/-?\d+/);
-	if (!match) return undefined;
-	const parsed = Number.parseInt(match[0], 10);
-	return Number.isFinite(parsed) ? parsed : undefined;
+	return roleReporting.parseFirstNumber(value);
 }
 
 async function gitHeadSha(cwd: string): Promise<string | undefined> {
@@ -2472,16 +2517,13 @@ function parseStructuredProgress(text: string): {
 }
 
 async function transcribeRoleOutput(role: CompletionRole, cwd: string, output: string, reportFields: Record<string, string>): Promise<TranscriptionResult> {
-	const result: TranscriptionResult = { appended: [], skipped: [], errors: [] };
 	const snapshot = await loadCompletionSnapshot(cwd);
 	if (!snapshot) {
-		result.skipped.push("No canonical completion snapshot found.");
-		return result;
+		return { appended: [], skipped: ["No canonical completion snapshot found."], errors: [] };
 	}
 	const headSha = await gitHeadSha(snapshot.files.root);
 	if (!headSha) {
-		result.errors.push("Could not resolve git HEAD for transcription.");
-		return result;
+		return { appended: [], skipped: [], errors: ["Could not resolve git HEAD for transcription."] };
 	}
 
 	const sliceId =
@@ -2489,117 +2531,14 @@ async function transcribeRoleOutput(role: CompletionRole, cwd: string, output: s
 		asString(snapshot.activeSlice?.slice_id) ??
 		asString(snapshot.state?.latest_completed_slice);
 
-		if (role === "completion-reviewer" || role === "completion-auditor") {
-		if (!sliceId) {
-			result.errors.push(`Missing slice_id for ${role} transcription.`);
-			return result;
-		}
-		const type = role === "completion-reviewer" ? "reviewed" : "audited";
-		const history = await readJsonl(snapshot.files.sliceHistoryPath);
-		const duplicate = history.some((entry) => {
-			return (
-				asString(entry.type) === type &&
-				asString(entry.slice_id) === sliceId &&
-				asString(entry.head_sha) === headSha &&
-				asString(entry.report_text) === output.trim()
-			);
-		});
-		if (duplicate) {
-			result.skipped.push(`Skipped duplicate ${type} record for slice ${sliceId} at ${headSha.slice(0, 12)}.`);
-			return result;
-		}
-		await appendJsonlRecord(snapshot.files.sliceHistoryPath, {
-			schema_version: 1,
-			type,
-			recorded_at: Date.now(),
-			slice_id: sliceId,
-			commit_sha: headSha,
-			head_sha: headSha,
-			role,
-			report_fields: reportFields,
-			report_text: output.trim(),
-		});
-		result.appended.push(`${type}:${sliceId}`);
-		return result;
-	}
-
-	if (role === "completion-stop-judge") {
-		const canStop = parseYesNo(reportFields["Can the project stop now"]);
-		const blockerCount = parseFirstNumber(reportFields["Blocker count"]);
-		const highValueGapCount = parseFirstNumber(reportFields["High-value gap count"]);
-		if (canStop === undefined || blockerCount === undefined || highValueGapCount === undefined) {
-			result.errors.push("Missing required stop-judge fields for canonical judgment transcription.");
-			return result;
-		}
-		const history = await readJsonl(snapshot.files.stopHistoryPath);
-		const duplicate = history.some((entry) => {
-			return asString(entry.type) === "judgment" && asString(entry.head_sha) === headSha && asString(entry.report_text) === output.trim();
-		});
-		if (duplicate) {
-			result.skipped.push(`Skipped duplicate judgment record at ${headSha.slice(0, 12)}.`);
-			return result;
-		}
-		await appendJsonlRecord(snapshot.files.stopHistoryPath, {
-			schema_version: 1,
-			type: "judgment",
-			recorded_at: Date.now(),
-			head_sha: headSha,
-			can_stop: canStop,
-			blocker_count: blockerCount,
-			high_value_gap_count: highValueGapCount,
-			role,
-			report_fields: reportFields,
-			report_text: output.trim(),
-		});
-		result.appended.push(`judgment:${headSha.slice(0, 12)}`);
-		return result;
-	}
-
-	if (role === "completion-regrounder") {
-		const rawDecision = asString(reportFields["Reconciliation decision"])?.toLowerCase();
-		const decision = rawDecision?.match(/\b(accepted|reopened|none)\b/)?.[1];
-		if (!decision || decision === "none") {
-			result.skipped.push("No reconciliation decision emitted by completion-regrounder.");
-			return result;
-		}
-		const reconciledSliceId =
-			asString(reportFields["Reconciled slice ID"]) ??
-			asString(reportFields["Current selected slice"]) ??
-			sliceId;
-		if (!reconciledSliceId || reconciledSliceId === "none" || reconciledSliceId === "(none)") {
-			result.errors.push("Missing reconciled slice id for completion-regrounder transcription.");
-			return result;
-		}
-		const history = await readJsonl(snapshot.files.sliceHistoryPath);
-		const duplicate = history.some((entry) => {
-			return (
-				asString(entry.type) === decision &&
-				asString(entry.slice_id) === reconciledSliceId &&
-				asString(entry.head_sha) === headSha &&
-				asString(entry.report_text) === output.trim()
-			);
-		});
-		if (duplicate) {
-			result.skipped.push(`Skipped duplicate ${decision} record for slice ${reconciledSliceId} at ${headSha.slice(0, 12)}.`);
-			return result;
-		}
-		await appendJsonlRecord(snapshot.files.sliceHistoryPath, {
-			schema_version: 1,
-			type: decision,
-			recorded_at: Date.now(),
-			slice_id: reconciledSliceId,
-			commit_sha: headSha,
-			head_sha: headSha,
-			role,
-			report_fields: reportFields,
-			report_text: output.trim(),
-		});
-		result.appended.push(`${decision}:${reconciledSliceId}`);
-		return result;
-	}
-
-	result.skipped.push(`No automatic transcription configured for ${role}.`);
-	return result;
+	return await roleReporting.transcribeCanonicalRoleReport({
+		role,
+		output,
+		reportFields,
+		snapshotFiles: snapshot.files,
+		headSha,
+		sliceId,
+	});
 }
 
 function isPathInside(root: string, candidatePath: string): boolean {
@@ -2858,6 +2797,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 			const rootKey = runCwd;
 			const agent = await loadAgentDefinition(runCwd, role);
+			const loaded = await loadCompletionDataForReminder(runCwd);
 			type RunningDetails = {
 				role: string;
 				status: "running" | "ok" | "error";
@@ -2887,6 +2827,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 				`- ${REFERENCE_PATH}`,
 				"Use canonical .agent/** state as the source of truth.",
 			];
+			if (loaded && isRubricEvaluationRole(role)) {
+				taskLines.push("", ...buildEvaluationRoleContextLines(loaded.snapshot, role));
+			}
 			if (params.task?.trim()) {
 				taskLines.push("", "Supplemental task context:", params.task.trim());
 			}

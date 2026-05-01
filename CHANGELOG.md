@@ -10,6 +10,8 @@
 - documented the rubric-driven evaluation contract plus canonical routing-profile signaling in the packaged completion protocol and README without adding profile-specific rubric-output enforcement yet
 - strengthened the smoke/refocus/context regressions so bootstrap and refocus preserve the new canonical signaling and fail closed when required `task_type` / `evaluation_profile` fields are removed
 - strengthened the smoke regression and control-plane verifier so selected-slice handoffs now fail closed when the expanded implementation-contract fields are missing
+- threaded canonical `evaluation_profile` plus the active-slice implementation contract into reviewer/auditor/stop-judge reminder and dispatch surfaces so those read-only roles can recover from canonical state instead of prose-only summaries
+- made reviewer/auditor/stop-judge transcription fail closed on malformed rubric-bearing outputs while still accepting valid reports, and added deterministic transcription coverage for all three roles in `npm run rubric-contract-test`
 - kept deterministic `rubric-contract-test` coverage wired into `npm run release-check`
 
 ## 0.1.30

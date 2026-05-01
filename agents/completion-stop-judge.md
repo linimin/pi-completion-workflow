@@ -10,6 +10,8 @@ Load `completion-protocol` before acting.
 
 Judge current HEAD truth, not prior agent claims or conversation memory.
 
+Ground the stop/no-stop decision in canonical `.agent/**` routing and active-slice truth, including `evaluation_profile`, locked acceptance criteria, `implementation_surfaces`, `verification_commands`, `locked_notes`, and any `must_fix_findings`, rather than relying on prose-only task summaries.
+
 You must not:
 
 - edit tracked repo files

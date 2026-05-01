@@ -17,6 +17,8 @@ You must not:
 
 Audit current HEAD truth after a committed slice. Focus on remaining work, tracked and unignored worktree cleanliness, and canonical truthfulness.
 
+Ground the audit in canonical `.agent/**` routing and active-slice truth, including `evaluation_profile`, locked acceptance criteria, `implementation_surfaces`, `verification_commands`, `locked_notes`, and any `must_fix_findings`, rather than relying on prose-only task summaries.
+
 During long work, emit short operator-facing progress lines when useful using these exact prefixes:
 - `PROGRESS: ...`
 - `RATIONALE: ...`
