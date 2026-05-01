@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { Container, Text } from "@mariozechner/pi-tui";
+import { Container, matchesKey, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 const PROTOCOL_ID = "completion";
@@ -126,6 +126,24 @@ type RecentDiscussionEntry = {
 type ContextProposalDecision = {
 	missionAnchor: string;
 	goalText: string;
+};
+
+type ContextProposalConfirmAction = "start" | "edit" | "cancel";
+
+type ContextProposalConfirmationActionItem = {
+	id: ContextProposalConfirmAction;
+	label: string;
+	description: string;
+};
+
+type ContextProposalConfirmationLayout = {
+	title: string;
+	intro: string;
+	proposalHeading: string;
+	proposalBody: string;
+	actionsHeading: string;
+	actions: ContextProposalConfirmationActionItem[];
+	footer: string;
 };
 
 type ContextProposalConfirmOptions = {
@@ -470,6 +488,15 @@ function completionTestContextProposalActionOverride(): "accept" | "edit" | "can
 
 function completionTestContextProposalEditText(): string | undefined {
 	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_EDIT_TEXT);
+}
+
+function completionTestContextProposalUiActionOverride(): ContextProposalConfirmAction | undefined {
+	const raw = process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_ACTION?.trim().toLowerCase();
+	return raw === "start" || raw === "edit" || raw === "cancel" ? raw : undefined;
+}
+
+function completionTestContextProposalUiSnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_PATH);
 }
 
 function shouldDisableContextProposalAnalyst(): boolean {
@@ -936,27 +963,141 @@ function buildContextProposalDisplayText(proposal: ContextProposal): string {
 	return lines.join("\n");
 }
 
-function buildContextProposalSelectionText(proposal: ContextProposal): string {
+function buildContextProposalConfirmationActions(): ContextProposalConfirmationActionItem[] {
 	return [
-		"I found a likely implementation plan in the recent discussion.",
-		"Confirm it before /cook writes canonical workflow state.",
-		"",
-		buildContextProposalDisplayText(proposal),
-		"",
-		"Start the workflow with this proposal.",
-	].join("\n");
+		{
+			id: "start",
+			label: "Start",
+			description: "Accept this proposal and let /cook write or refocus canonical workflow state.",
+		},
+		{
+			id: "edit",
+			label: "Edit",
+			description: "Open the existing proposal editor before starting the workflow.",
+		},
+		{
+			id: "cancel",
+			label: "Cancel",
+			description: "Exit without changing canonical workflow state.",
+		},
+	];
 }
 
-function buildContextProposalEditChoiceText(): string {
-	return [
-		"Edit this proposal before starting.",
-		"",
-		"Use this when the mission is right but the scope, constraints, or acceptance details need cleanup.",
-	].join("\n");
+function buildContextProposalConfirmationLayout(
+	title: string,
+	proposal: ContextProposal,
+): ContextProposalConfirmationLayout {
+	return {
+		title,
+		intro: "Review the proposed mission, scope, constraints, and acceptance details before /cook writes canonical workflow state.",
+		proposalHeading: "Proposed workflow",
+		proposalBody: buildContextProposalDisplayText(proposal),
+		actionsHeading: "Actions",
+		actions: buildContextProposalConfirmationActions(),
+		footer: "↑↓ navigate • enter select • esc cancel",
+	};
 }
 
-function buildContextProposalCancelChoiceText(): string {
-	return ["Cancel", "", "Do not start a workflow yet."].join("\n");
+function maybeWriteContextProposalConfirmationSnapshot(layout: ContextProposalConfirmationLayout): void {
+	const snapshotPath = completionTestContextProposalUiSnapshotPath();
+	if (!snapshotPath) return;
+	try {
+		fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+		fs.writeFileSync(snapshotPath, `${JSON.stringify(layout, null, 2)}\n`, "utf8");
+	} catch {
+		// ignore malformed or unwritable test snapshot paths
+	}
+}
+
+function buildContextProposalConfirmationSelectItems(layout: ContextProposalConfirmationLayout): SelectItem[] {
+	return layout.actions.map((action) => ({
+		value: action.id,
+		label: action.label,
+		description: action.description,
+	}));
+}
+
+async function promptContextProposalConfirmationAction(
+	ui: any,
+	layout: ContextProposalConfirmationLayout,
+): Promise<ContextProposalConfirmAction | undefined> {
+	const items = buildContextProposalConfirmationSelectItems(layout);
+	return await ui.custom<ContextProposalConfirmAction | undefined>((tui: any, theme: any, _kb: any, done: any) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+		container.addChild(new Text(theme.fg("accent", theme.bold(layout.title)), 1, 0));
+		container.addChild(new Text(theme.fg("dim", layout.intro), 1, 0));
+		container.addChild(new Text("", 0, 0));
+		container.addChild(new Text(theme.fg("accent", theme.bold(layout.proposalHeading)), 1, 0));
+		container.addChild(new Text(theme.fg("dim", layout.proposalBody), 1, 0));
+		container.addChild(new Text("", 0, 0));
+		container.addChild(new Text(theme.fg("accent", theme.bold(layout.actionsHeading)), 1, 0));
+		const selectList = new SelectList(items, items.length, {
+			selectedPrefix: (text) => theme.fg("accent", text),
+			selectedText: (text) => theme.fg("accent", text),
+			description: (text) => theme.fg("muted", text),
+			scrollInfo: (text) => theme.fg("dim", text),
+			noMatch: (text) => theme.fg("warning", text),
+		});
+		selectList.onSelect = (item) => done(item.value as ContextProposalConfirmAction);
+		selectList.onCancel = () => done(undefined);
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", layout.footer), 1, 0));
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput: (data: string) => {
+				if (matchesKey(data, "escape")) {
+					done(undefined);
+					return;
+				}
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
+async function resolveEditedContextProposalDecision(
+	ctx: { hasUI: boolean; ui: any },
+	projectName: string,
+	editedText: string,
+	confirmMissionWhenNeeded: boolean,
+): Promise<ContextProposalDecision | undefined> {
+	if (!editedText.trim()) return undefined;
+	const editedProposal = parseContextProposal(editedText, projectName);
+	if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
+	const assessment = assessMissionAnchor(editedText, projectName);
+	if (!confirmMissionWhenNeeded) {
+		return { missionAnchor: assessment.derived, goalText: editedText.trim() };
+	}
+	const missionAnchor = await confirmMissionAnchor(ctx, assessment);
+	if (!missionAnchor) return undefined;
+	return { missionAnchor, goalText: editedText.trim() };
+}
+
+async function resolveContextProposalConfirmationAction(
+	ctx: { hasUI: boolean; ui: any },
+	proposal: ContextProposal,
+	projectName: string,
+	options: ContextProposalConfirmOptions,
+	action: ContextProposalConfirmAction,
+	editedTextOverride?: string,
+): Promise<ContextProposalDecision | undefined> {
+	if (action === "cancel") return undefined;
+	if (action === "start") {
+		return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+	}
+	const editedText =
+		editedTextOverride ??
+		(await getCtxUi(ctx)?.editor(
+			options.editorPrompt ?? `${options.title}\n\nEdit the proposed mission, scope, constraints, and acceptance details below.`,
+			buildContextProposalEditorText(proposal),
+		));
+	if (!editedText?.trim()) return undefined;
+	return await resolveEditedContextProposalDecision(ctx, projectName, editedText, editedTextOverride === undefined);
 }
 
 function buildContextProposalEditorText(proposal: ContextProposal): string {
@@ -1119,10 +1260,20 @@ async function confirmContextProposal(
 	if (actionOverride === "edit") {
 		const editedText = completionTestContextProposalEditText();
 		if (!editedText) return undefined;
-		const editedProposal = parseContextProposal(editedText, projectName);
-		if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
-		const assessment = assessMissionAnchor(editedText, projectName);
-		return { missionAnchor: assessment.derived, goalText: editedText.trim() };
+		return await resolveEditedContextProposalDecision(ctx, projectName, editedText, false);
+	}
+	const layout = buildContextProposalConfirmationLayout(options.title, proposal);
+	maybeWriteContextProposalConfirmationSnapshot(layout);
+	const uiActionOverride = completionTestContextProposalUiActionOverride();
+	if (uiActionOverride) {
+		return await resolveContextProposalConfirmationAction(
+			ctx,
+			proposal,
+			projectName,
+			options,
+			uiActionOverride,
+			uiActionOverride === "edit" ? completionTestContextProposalEditText() : undefined,
+		);
 	}
 	if (!getCtxHasUI(ctx)) {
 		return options.nonInteractiveBehavior === "accept"
@@ -1135,25 +1286,9 @@ async function confirmContextProposal(
 			? { missionAnchor: proposal.mission, goalText: proposal.goalText }
 			: undefined;
 	}
-	const useChoice = buildContextProposalSelectionText(proposal);
-	const editChoice = buildContextProposalEditChoiceText();
-	const cancelChoice = buildContextProposalCancelChoiceText();
-	const choice = await ui.select(options.title, [useChoice, editChoice, cancelChoice]);
-	if (!choice || choice === cancelChoice) return undefined;
-	if (choice === editChoice) {
-		const editedText = await ui.editor(
-			options.editorPrompt ?? `${options.title}\n\nEdit the proposed mission, scope, constraints, and acceptance details below.`,
-			buildContextProposalEditorText(proposal),
-		);
-		if (!editedText?.trim()) return undefined;
-		const editedProposal = parseContextProposal(editedText, projectName);
-		if (editedProposal) return { missionAnchor: editedProposal.mission, goalText: editedProposal.goalText };
-		const assessment = assessMissionAnchor(editedText, projectName);
-		const missionAnchor = await confirmMissionAnchor(ctx, assessment);
-		if (!missionAnchor) return undefined;
-		return { missionAnchor, goalText: editedText.trim() };
-	}
-	return { missionAnchor: proposal.mission, goalText: proposal.goalText };
+	const choice = await promptContextProposalConfirmationAction(ui, layout);
+	if (!choice) return undefined;
+	return await resolveContextProposalConfirmationAction(ctx, proposal, projectName, options, choice);
 }
 
 function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
