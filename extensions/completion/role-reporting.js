@@ -108,6 +108,12 @@ function validateRequiredFields(reportFields, requiredFields, errors, role) {
   }
 }
 
+function validateYesNoField(reportFields, field, errors, message) {
+  const parsed = parseYesNo(reportFields[field]);
+  if (parsed === undefined) errors.push(message);
+  return parsed;
+}
+
 function validateRoleReport(role, output, reportFields = parseReportFields(output)) {
   const errors = [];
   if (!asString(output)) {
@@ -147,10 +153,32 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
     if (parseFirstNumber(reportFields["High-value gap count"]) === undefined) {
       errors.push("Auditor output must include a numeric High-value gap count.");
     }
+    validateYesNoField(
+      reportFields,
+      "Tracked and unignored worktree is clean",
+      errors,
+      "Auditor output must answer 'Tracked and unignored worktree is clean' with yes or no.",
+    );
+    validateYesNoField(
+      reportFields,
+      "Stale or conflicting canonical state",
+      errors,
+      "Auditor output must answer 'Stale or conflicting canonical state' with yes or no.",
+    );
+    validateYesNoField(
+      reportFields,
+      "Plan truthfully captures remaining slice backlog",
+      errors,
+      "Auditor output must answer 'Plan truthfully captures remaining slice backlog' with yes or no.",
+    );
   } else if (role === "completion-stop-judge") {
     validateRequiredFields(reportFields, STOP_JUDGE_REQUIRED_FIELDS, errors, role);
-    const canStop = parseYesNo(reportFields["Can the project stop now"]);
-    if (canStop === undefined) errors.push("Stop-judge output must answer 'Can the project stop now' with yes or no.");
+    const canStop = validateYesNoField(
+      reportFields,
+      "Can the project stop now",
+      errors,
+      "Stop-judge output must answer 'Can the project stop now' with yes or no.",
+    );
     if (anyFail && canStop === true) {
       errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when any rubric line is fail.");
     }
@@ -160,6 +188,18 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
     if (parseFirstNumber(reportFields["High-value gap count"]) === undefined) {
       errors.push("Stop-judge output must include a numeric High-value gap count.");
     }
+    validateYesNoField(
+      reportFields,
+      "Docs/config/runbooks match shipped behavior",
+      errors,
+      "Stop-judge output must answer 'Docs/config/runbooks match shipped behavior' with yes or no.",
+    );
+    validateYesNoField(
+      reportFields,
+      "Tracked and unignored worktree is clean",
+      errors,
+      "Stop-judge output must answer 'Tracked and unignored worktree is clean' with yes or no.",
+    );
   }
 
   return { valid: errors.length === 0, errors, reportFields, rubric };

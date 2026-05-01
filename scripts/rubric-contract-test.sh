@@ -86,7 +86,12 @@ assertIncludes('extensions/completion/index.ts', 'buildEvaluationRoleReminderTex
 assertIncludes('extensions/completion/index.ts', 'roleReporting.transcribeCanonicalRoleReport');
 assertIncludes('extensions/completion/role-reporting.js', 'Missing Rubric heading for ${role}.');
 assertIncludes('extensions/completion/role-reporting.js', 'Reviewer output cannot mark \'Acceptable as-is: yes\' when any rubric line is fail.');
+assertIncludes('extensions/completion/role-reporting.js', 'Auditor output must answer \'Tracked and unignored worktree is clean\' with yes or no.');
+assertIncludes('extensions/completion/role-reporting.js', 'Auditor output must answer \'Stale or conflicting canonical state\' with yes or no.');
+assertIncludes('extensions/completion/role-reporting.js', 'Auditor output must answer \'Plan truthfully captures remaining slice backlog\' with yes or no.');
 assertIncludes('extensions/completion/role-reporting.js', 'Stop-judge output cannot mark \'Can the project stop now: yes\' when any rubric line is fail.');
+assertIncludes('extensions/completion/role-reporting.js', 'Stop-judge output must answer \'Docs/config/runbooks match shipped behavior\' with yes or no.');
+assertIncludes('extensions/completion/role-reporting.js', 'Stop-judge output must answer \'Tracked and unignored worktree is clean\' with yes or no.');
 assertIncludes('package.json', '"rubric-contract-test": "bash ./scripts/rubric-contract-test.sh"');
 assertIncludes('scripts/release-check.sh', 'npm run rubric-contract-test');
 assertIncludes('.agent/verify_completion_stop.sh', 'npm run release-check >/dev/null');
@@ -126,6 +131,10 @@ const auditorMalformed = `MISSION ANCHOR: test mission\nRemaining contract IDs: 
 const stopJudgeReport = `MISSION ANCHOR: test mission\nRemaining contract IDs: none\nRubric:\n- Contract coverage: pass - All implementation slices are accepted on HEAD.\n- Correctness risk: pass - No remaining blocker or high-value gap is evident.\n- Verification evidence: pass - Final verification passes for the current head.\n- Docs/state parity: pass - Docs, config, and canonical state match shipped behavior.\nCan the project stop now: yes\nExact remaining open top-level contract IDs: none\nBlocker count: 0\nHigh-value gap count: 0\nLatest completed slice commit: abcdef1234567890abcdef1234567890abcdef12\nDocs/config/runbooks match shipped behavior: yes\nTracked and unignored worktree is clean: yes\nBrief justification: Current HEAD satisfies the stop criteria.`;
 
 const stopJudgeMalformed = `MISSION ANCHOR: test mission\nRemaining contract IDs: none\nRubric:\n- Contract coverage: fail - A blocking contract is still open.\n- Correctness risk: pass - No additional risk was found.\n- Verification evidence: pass - Verification still passes.\n- Docs/state parity: pass - Docs and state match.\nCan the project stop now: yes\nExact remaining open top-level contract IDs: TEST-CONTRACT\nBlocker count: 1\nHigh-value gap count: 0\nLatest completed slice commit: abcdef1234567890abcdef1234567890abcdef12\nDocs/config/runbooks match shipped behavior: yes\nTracked and unignored worktree is clean: yes\nBrief justification: This should be rejected because the rubric blocks stop.`;
+
+const auditorMalformedYesNo = `MISSION ANCHOR: test mission\nRemaining contract IDs: TEST-CONTRACT\nRubric:\n- Contract coverage: pass - The accepted slice remains satisfied on HEAD.\n- Correctness risk: concern - Remaining planned work still keeps the project open.\n- Verification evidence: pass - Verification was rerun for the accepted slice.\n- Docs/state parity: pass - Canonical state can be reconciled truthfully.\nWhy the project is still not done: One planned contract remains after this accepted slice.\nOpen top-level contract IDs: TEST-CONTRACT\nBlocker count: 0\nHigh-value gap count: 1\nTracked and unignored worktree is clean: maybe\nWorktree blockers: none\nNext mandatory slice: next-slice\nStale or conflicting canonical state: perhaps\nPlan truthfully captures remaining slice backlog: sorta.`;
+
+const stopJudgeMalformedYesNo = `MISSION ANCHOR: test mission\nRemaining contract IDs: none\nRubric:\n- Contract coverage: pass - All implementation slices are accepted on HEAD.\n- Correctness risk: pass - No remaining blocker or high-value gap is evident.\n- Verification evidence: pass - Final verification passes for the current head.\n- Docs/state parity: pass - Docs, config, and canonical state match shipped behavior.\nCan the project stop now: no\nExact remaining open top-level contract IDs: TEST-CONTRACT\nBlocker count: 0\nHigh-value gap count: 1\nLatest completed slice commit: abcdef1234567890abcdef1234567890abcdef12\nDocs/config/runbooks match shipped behavior: maybe\nTracked and unignored worktree is clean: perhaps\nBrief justification: This should be rejected because malformed yes/no-style fields must fail closed.`;
 
 (async () => {
   const reviewed = await transcribeCanonicalRoleReport({
@@ -200,6 +209,32 @@ const stopJudgeMalformed = `MISSION ANCHOR: test mission\nRemaining contract IDs
   });
   assert(judgeRejected.errors.some((error) => error.includes("Can the project stop now: yes")), 'stop-judge malformed report should be rejected when fail rubric contradicts yes verdict');
   assert(readJsonl(snapshotFiles.stopHistoryPath).length === 1, 'rejected stop-judge report must not append judgment history');
+
+  const auditorYesNoRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-auditor',
+    output: auditorMalformedYesNo,
+    reportFields: parseReportFields(auditorMalformedYesNo),
+    snapshotFiles,
+    headSha: '7777777777777777777777777777777777777777',
+    sliceId: 'slice-audit',
+    recordedAt: 7,
+  });
+  assert(auditorYesNoRejected.errors.some((error) => error.includes("Tracked and unignored worktree is clean")), 'auditor malformed yes/no report should reject invalid worktree cleanliness values');
+  assert(auditorYesNoRejected.errors.some((error) => error.includes("Stale or conflicting canonical state")), 'auditor malformed yes/no report should reject invalid canonical-state values');
+  assert(auditorYesNoRejected.errors.some((error) => error.includes("Plan truthfully captures remaining slice backlog")), 'auditor malformed yes/no report should reject invalid backlog-truth values');
+  assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 2, 'rejected auditor yes/no report must not append history');
+
+  const stopJudgeYesNoRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-stop-judge',
+    output: stopJudgeMalformedYesNo,
+    reportFields: parseReportFields(stopJudgeMalformedYesNo),
+    snapshotFiles,
+    headSha: '8888888888888888888888888888888888888888',
+    recordedAt: 8,
+  });
+  assert(stopJudgeYesNoRejected.errors.some((error) => error.includes("Docs/config/runbooks match shipped behavior")), 'stop-judge malformed yes/no report should reject invalid docs parity values');
+  assert(stopJudgeYesNoRejected.errors.some((error) => error.includes("Tracked and unignored worktree is clean")), 'stop-judge malformed yes/no report should reject invalid worktree cleanliness values');
+  assert(readJsonl(snapshotFiles.stopHistoryPath).length === 1, 'rejected stop-judge yes/no report must not append judgment history');
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 })().catch((error) => {
