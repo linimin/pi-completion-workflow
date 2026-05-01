@@ -1,149 +1,141 @@
 # @linimin/pi-letscook
 
-Pi package for long-running coding workflows with canonical repo-local `.agent/**` state.
+A Pi extension that adds `/cook` for resumable long-running workflows backed by repo-local canonical state in `.agent/**`.
 
-## What it gives you
+`@linimin/pi-letscook` is for work that does not fit in a single chat turn:
 
-- `/cook` as the single workflow command
-- `/cook <goal>` to bootstrap or continue with an explicit goal, enriched by recent discussion before canonical state is written
-- `/cook` with no goal to resume an active canonical `.agent/**` workflow, or propose a new round from recent discussion through the proposal analyst when no active workflow is running
-- model-assisted startup proposal analysis for natural recent discussion, with a live `/cook proposal analyst` overlay; if that analysis is unavailable, use `/cook <goal>` instead of a built-in discussion parser fallback
-- `/cook <new goal>` on an active workflow asks whether to continue the current mission or abandon it for a replacement workflow; on a completed workflow it starts the next round from the new goal instead of reopening continue/refocus choices
-- no duplicate prompt-template aliases for core workflow commands
-- role-based isolated subprocess execution via `completion_role`
-- completion widget sourced from canonical `.agent/**` state when no role is actively running, with no completion status line
-- richer live role observability that keeps tool activity separate from role progress, rationale, next-step, verification, and state-delta output
-- deterministic waiting/stalled signaling for running completion roles
-- custom compaction continuity capsule
-- canonical transcription of reviewer, auditor, regrounder, and stop-judge outputs
-- repo-local verifier scripts and `.gitignore` wiring
+- start from a goal or from recent discussion
+- resume later from repo-local workflow state
+- refocus an active workflow without losing control of the mission
+- drive implementation through isolated completion roles
+- keep verification, review, audit, and stop checks tied to the repo
 
-## Quick start
+## Why use it
 
-In a git repo, after installing the package:
+Use this package when you want `/cook` to behave like a real project workflow command instead of a one-shot prompt.
 
-```text
-/cook build feature X end-to-end with tests and docs
-```
+It gives you:
 
-If you stop and come back later while that workflow is still active:
-
-```text
-/cook
-```
-
-If you want to replace the active workflow with a new goal:
-
-```text
-/cook fix onboarding crash first, with regression tests
-```
-
-If the previous workflow is already done and you want to start the next round from an explicit goal:
-
-```text
-/cook ship the next workflow round for richer /cook startup proposals
-```
+- **one command** for start, resume, and refocus
+- **repo-local canonical state** under `.agent/**`
+- **model-assisted startup proposals** from recent discussion
+- **explicit-goal anchoring** when you want the mission to stay fixed
+- **isolated completion roles** via `completion_role`
+- **deterministic verification** through repo-local scripts and regression checks
 
 ## Install
-
-### Try temporarily from a local checkout
-
-```bash
-pi -e /absolute/path/to/pi-letscook
-```
-
-### Install globally from a local checkout
-
-```bash
-pi install /absolute/path/to/pi-letscook
-```
-
-### Install into a project from a local checkout
-
-```bash
-pi install -l /absolute/path/to/pi-letscook
-```
-
-### Install from npm after publishing
 
 ```bash
 pi install npm:@linimin/pi-letscook
 ```
 
-### Install from git after publishing
+Then run `/reload` in Pi.
 
-For normal installs, prefer the npm package above. Use the git source if you want to install directly from GitHub.
+## Quick start
 
-```bash
-pi install git:github.com/linimin/pi-letscook
-```
-
-You can also pin a specific tag or commit if you want a fixed version, for example `git:github.com/linimin/pi-letscook@vX.Y.Z`.
-
-After install, run `/reload` in pi. For this package, it is safest to reload when pi is idle and no `completion_role` is currently running.
-
-## Usage patterns
-
-### Mental model
-
-`/cook` is the single entrypoint for this package, but its behavior depends on the current canonical workflow state.
-
-| Repo state | `/cook` | `/cook <goal>` |
-|---|---|---|
-| No canonical workflow yet | Proposes a startup plan from recent discussion when the proposal analyst can summarize it, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, enriches it from recent discussion when analyst output is available, then asks for confirmation |
-| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | Asks whether to continue the current workflow or replace it with a new one |
-| Previous workflow is already `done` | Proposes the next workflow round from recent discussion when the proposal analyst can summarize it, then asks for confirmation | Starts the next workflow round from the explicit goal, using recent discussion only as supplemental proposal context when analyst output is available |
-
-### One-step start
+Start from an explicit goal:
 
 ```text
-/cook Build feature X with tests and docs
+/cook build feature X end-to-end with tests and docs
 ```
 
-This bootstraps `.agent/**` if missing, derives a clean initial `MISSION ANCHOR`, builds a startup proposal, lets you confirm or edit it, re-grounds canonical state, creates a slice plan, and drives the workflow.
-
-When a model is available, `/cook` first asks it to summarize the recent natural-language discussion into a structured proposal and shows a live `/cook proposal analyst` progress overlay while that analysis is running. Discussion-only startup now relies on that analyst path only; if analyst output is unavailable, use `/cook <goal>` instead of expecting a built-in rule-based parser fallback. When you pass an explicit goal, that goal still stays the mission anchor. Recent discussion is only used to fill in extra scope, constraints, and acceptance details before canonical state is written when analyst output is available.
-
-### Resume later
+Resume an active workflow:
 
 ```text
 /cook
 ```
 
-If canonical `.agent/**` state already exists and is still active, `/cook` with no goal resumes from that state.
-
-### Replace the active workflow
+Replace the active workflow with a different goal:
 
 ```text
 /cook fix onboarding crash first, with regression tests
 ```
 
-If a workflow is still active, `/cook <goal>` asks whether to:
-
-- continue the current workflow, or
-- abandon the current workflow and start this new one
-
-If you replace the active workflow, `/cook` rebuilds canonical state from the new goal and restarts from `reground`.
-
-### Start the next round after completion
+Start the next round after the previous workflow is already done:
 
 ```text
 /cook ship the next workflow round for richer /cook startup proposals
 ```
 
-If the previous workflow is already `done`, `/cook <goal>` starts the next workflow round directly from that explicit goal. It does not reopen the old continue/refocus choice. Recent discussion is only used as supplemental proposal context.
+## How `/cook` behaves
 
-### Start the next round from discussion only
+`/cook` is the only public workflow command, but it behaves differently depending on the current canonical workflow state.
+
+| Repo state | `/cook` | `/cook <goal>` |
+|---|---|---|
+| No canonical workflow yet | Uses the proposal analyst to summarize recent discussion into a startup proposal, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, optionally enriching it from recent discussion, then asks for confirmation |
+| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | Asks whether to continue the current workflow or replace it |
+| Previous workflow is already `done` | Uses the proposal analyst to summarize recent discussion into the next workflow round, then asks for confirmation | Starts the next workflow round directly from the explicit goal |
+
+## Startup proposal behavior
+
+### `/cook <goal>`
+
+When you provide an explicit goal:
+
+- the explicit goal stays the mission anchor
+- recent discussion is supplemental only
+- recent discussion may enrich scope, constraints, and acceptance details when analyst output is available
+
+Example:
+
+```text
+/cook Build feature X with tests and docs
+```
+
+### `/cook` without a goal
+
+When you do **not** provide a goal:
+
+- `/cook` uses the proposal analyst to summarize recent discussion into a startup proposal
+- the proposal is shown in a custom confirmation UI before canonical state is written
+- if analyst output is unavailable, provide an explicit goal with `/cook <goal>`
+
+Example:
 
 ```text
 /cook
 ```
 
-If the previous workflow is already `done`, `/cook` with no goal tries to infer the next plan from recent discussion through the proposal analyst, asks you to confirm it, and then starts the next workflow round from refreshed canonical state. If analyst output is unavailable, provide an explicit goal with `/cook <goal>` instead.
+## Confirmation UI
 
-## Canonical repo files
+Startup confirmation uses a custom UI that:
 
-This package manages repo-local canonical workflow state under:
+- renders the proposal body separately from the action list
+- keeps Mission / Scope / Constraints / Acceptance readable as a content area
+- presents explicit actions for:
+  - **Start**
+  - **Edit**
+  - **Cancel**
+
+The same confirmation flow is reused across:
+
+- discussion-only startup
+- explicit-goal startup
+- next-round startup after completion
+- replacement-workflow startup
+
+## Observability
+
+When canonical `.agent/**` state exists and no role is actively running, the extension shows a completion widget sourced from that state. The widget summarizes:
+
+- current phase
+- selected slice
+- next mandatory role
+- remaining work counts
+
+There is no completion status line.
+
+While a `completion_role` subprocess is running:
+
+- the non-running widget is suppressed
+- tool activity is shown separately from assistant-reported progress
+- running-role output distinguishes tool work from `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA`
+- waiting and stalled states are surfaced deterministically from timestamps
+
+## Canonical files
+
+This package stores canonical workflow state under:
 
 ```text
 .agent/
@@ -160,43 +152,44 @@ This package manages repo-local canonical workflow state under:
   tmp/
 ```
 
-Canonical truth lives in these files plus current repo truth.
+Canonical truth is the combination of:
 
-### Tracked vs ignored `.agent` files
+- current repo truth, and
+- canonical `.agent/**` state
 
-The `.agent` directory mixes two different kinds of workflow data:
+### Tracked vs ignored files
 
-- **Tracked repo-contract files** define the repo-level workflow contract and should stay in git:
-  - `.agent/README.md`
-  - `.agent/mission.md`
-  - `.agent/profile.json`
-  - `.agent/verify_completion_stop.sh`
-  - `.agent/verify_completion_control_plane.sh`
-- **Ignored execution-state files** are local high-churn workflow state used for resume and recovery and should stay out of git:
-  - `.agent/state.json`
-  - `.agent/plan.json`
-  - `.agent/active-slice.json`
-  - `.agent/slice-history.jsonl`
-  - `.agent/stop-check-history.jsonl`
-  - `.agent/*.log`
-  - `.agent/tmp/`
+Tracked repo-contract files:
 
-In other words: tracked `.agent` files describe the workflow contract for the repo, while ignored `.agent` files are the local control-plane state for the current run.
+- `.agent/README.md`
+- `.agent/mission.md`
+- `.agent/profile.json`
+- `.agent/verify_completion_stop.sh`
+- `.agent/verify_completion_control_plane.sh`
 
-## Live observability surfaces
+Ignored execution-state files:
 
-When canonical `.agent/**` state exists and no role is actively running, the extension shows a completion widget sourced from that state. The non-running widget summarizes the current phase, selected slice, next mandatory role, and remaining work counts; there is no completion status line.
+- `.agent/state.json`
+- `.agent/plan.json`
+- `.agent/active-slice.json`
+- `.agent/slice-history.jsonl`
+- `.agent/stop-check-history.jsonl`
+- `.agent/*.log`
+- `.agent/tmp/`
 
-While a `completion_role` subprocess is running, the widget is intentionally suppressed. Tool execution is rendered separately from assistant-provided `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA` lines so operators can tell the difference between tool work, role judgment, and verification. The running-role display still emits deterministic active/waiting/stalled signaling from the role timestamps instead of silently looking idle.
+In short:
+
+- tracked `.agent` files define the repo-level workflow contract
+- ignored `.agent` files are the local control-plane state for the current run
 
 ## Package layout
 
-- `extensions/completion/index.ts` — workflow extension
-- `skills/completion-protocol/` — shared protocol docs
-- `agents/completion-*.md` — package-local completion roles used by the extension
-- `scripts/` — smoke and release checks
+- `extensions/completion/index.ts` — main extension implementation
+- `skills/completion-protocol/` — shared protocol documentation
+- `agents/completion-*.md` — package-local completion role prompts
+- `scripts/` — smoke, regression, and release checks
 
-## Development and release
+## Development
 
 Run validation from the package root:
 
@@ -208,13 +201,15 @@ npm run observability-status-test
 npm run release-check
 ```
 
-`npm run release-check` is the broader packaged-release verifier. It reruns the smoke, refocus, and context-proposal checks, includes the deterministic observability regression coverage, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks, includes deterministic observability coverage, and finishes with `npm pack --dry-run`.
+
+## Release
 
 See [PUBLISHING.md](https://github.com/linimin/pi-letscook/blob/main/PUBLISHING.md) for GitHub and npm release steps.
 
 ## Notes
 
 - Canonical truth lives in repo-local `.agent/**` files.
-- The main pi session is the workflow driver.
-- Package-local role prompts are loaded directly by the extension; they do not rely on `~/.pi/agent/agents`.
+- The main Pi session is the workflow driver.
+- Package-local role prompts are loaded directly by the extension and do not depend on `~/.pi/agent/agents`.
 - Reviewer, auditor, and stop-judge are enforced as read-only roles.

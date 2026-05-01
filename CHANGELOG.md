@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.29
+
+### Changed
+
+- tightened the README opening description so it correctly presents this package as a Pi extension that adds `/cook`, rather than implying `/cook` is built into Pi itself
+
 ## 0.1.28
 
 ### Changed
