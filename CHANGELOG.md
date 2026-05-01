@@ -1,10 +1,17 @@
 # Changelog
 
-## 0.1.27
+## 0.1.28
 
 ### Changed
 
 - added model-assisted `/cook` startup proposal analysis for natural recent discussion with a live `/cook proposal analyst` progress overlay, removed the built-in discussion-parser fallback for discussion-only startup, and preserved explicit-goal mission anchoring even when analyst output is unavailable
+- replaced the crowded built-in `/cook` startup proposal selector presentation with a custom confirmation UI that separates proposal content from explicit Start, Edit, and Cancel actions
+- fixed `/cook proposal analyst` overlay input handling and improved proposal body readability in the confirmation UI
+
+## 0.1.27
+
+### Changed
+
 - added package metadata for npm and pi.dev discovery, fixed README publishing links for npm rendering, and refined install and workflow guidance after the `v0.1.26` tag
 
 ## 0.1.26

@@ -1029,7 +1029,7 @@ async function promptContextProposalConfirmationAction(
 		container.addChild(new Text(theme.fg("dim", layout.intro), 1, 0));
 		container.addChild(new Text("", 0, 0));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.proposalHeading)), 1, 0));
-		container.addChild(new Text(theme.fg("dim", layout.proposalBody), 1, 0));
+		container.addChild(new Text(layout.proposalBody, 1, 0));
 		container.addChild(new Text("", 0, 0));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.actionsHeading)), 1, 0));
 		const selectList = new SelectList(items, items.length, {
