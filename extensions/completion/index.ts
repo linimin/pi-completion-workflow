@@ -225,6 +225,16 @@ const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const LIVE_ROLE_WAITING_MS = 15_000;
 const LIVE_ROLE_STALLED_MS = 45_000;
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
+const DRIVER_AUTO_CONTINUE_MAX_ATTEMPTS = 2;
+
+type DriverContinuationTracker = {
+	fingerprint: string;
+	attempts: number;
+	inFlight: boolean;
+	warned: boolean;
+};
+
+const driverContinuationByRoot = new Map<string, DriverContinuationTracker>();
 
 function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -527,6 +537,14 @@ function completionTestContextProposalSnapshotPath(): string | undefined {
 
 function completionTestDriverPromptPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_DRIVER_PROMPT_PATH);
+}
+
+function completionTestAutoContinuePromptPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_AUTO_CONTINUE_PROMPT_PATH);
+}
+
+function shouldTestAutoContinueOnSessionStart(): boolean {
+	return process.env.PI_COMPLETION_TEST_AUTO_CONTINUE_ON_SESSION_START === "1";
 }
 
 function completionTestSystemReminderPath(): string | undefined {
@@ -1639,6 +1657,128 @@ function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | u
 		asString(snapshot.plan?.evaluation_profile) ??
 		asString(snapshot.profile?.evaluation_profile)
 	);
+}
+
+function completionContinuationFingerprint(snapshot: CompletionStateSnapshot): string | undefined {
+	if (asString(snapshot.state?.continuation_policy) !== "continue") return undefined;
+	const nextMandatoryRole = asString(snapshot.state?.next_mandatory_role);
+	if (!nextMandatoryRole) return undefined;
+	return JSON.stringify({
+		mission_anchor: asString(snapshot.state?.mission_anchor) ?? asString(snapshot.plan?.mission_anchor) ?? null,
+		task_type: currentTaskType(snapshot) ?? null,
+		evaluation_profile: currentEvaluationProfile(snapshot) ?? null,
+		current_phase: asString(snapshot.state?.current_phase) ?? null,
+		next_mandatory_role: nextMandatoryRole,
+		next_mandatory_action: asString(snapshot.state?.next_mandatory_action) ?? null,
+		active_status: asString(snapshot.active?.status) ?? null,
+		active_slice_id: asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? null,
+		latest_completed_slice: asString(snapshot.state?.latest_completed_slice) ?? null,
+		latest_verified_slice: asString(snapshot.state?.latest_verified_slice) ?? null,
+	});
+}
+
+function noteQueuedDriverPrompt(rootKey: string, fingerprint: string): void {
+	const tracker = driverContinuationByRoot.get(rootKey);
+	if (tracker && tracker.fingerprint === fingerprint) {
+		tracker.attempts += 1;
+		tracker.inFlight = false;
+		tracker.warned = false;
+		return;
+	}
+	driverContinuationByRoot.set(rootKey, {
+		fingerprint,
+		attempts: 1,
+		inFlight: false,
+		warned: false,
+	});
+}
+
+function markQueuedDriverPromptInFlight(rootKey: string, fingerprint: string): void {
+	const tracker = driverContinuationByRoot.get(rootKey);
+	if (!tracker || tracker.fingerprint !== fingerprint) return;
+	tracker.inFlight = true;
+}
+
+function clearDriverContinuationTracker(rootKey: string): void {
+	driverContinuationByRoot.delete(rootKey);
+}
+
+function hasRunningCompletionRole(rootKey: string): boolean {
+	return liveRoleActivityByRoot.get(rootKey)?.status === "running";
+}
+
+function isWorkflowDriverActive(snapshot: CompletionStateSnapshot | undefined): boolean {
+	return Boolean(snapshot) && asString(snapshot?.state?.continuation_policy) === "continue";
+}
+
+function isDriverContinuationStateParked(rootKey: string, fingerprint: string): boolean {
+	const tracker = driverContinuationByRoot.get(rootKey);
+	if (!tracker || tracker.fingerprint !== fingerprint) return false;
+	return tracker.warned;
+}
+
+function rememberParkedDriverContinuation(rootKey: string, fingerprint: string): void {
+	const tracker = driverContinuationByRoot.get(rootKey);
+	if (!tracker || tracker.fingerprint !== fingerprint) return;
+	tracker.warned = true;
+	tracker.inFlight = false;
+}
+
+async function queueCompletionDriverPrompt(
+	pi: ExtensionAPI,
+	ctx: { cwd: string; hasUI: boolean; ui: any },
+	rootKey: string,
+	fingerprint: string,
+	prompt: string,
+	kind: "kickoff" | "resume" | "auto-resume",
+): Promise<boolean> {
+	const snapshotPath = kind === "auto-resume" ? completionTestAutoContinuePromptPath() : completionTestDriverPromptPath();
+	maybeWriteTestSnapshot(snapshotPath, `${prompt}\n`);
+	noteQueuedDriverPrompt(rootKey, fingerprint);
+	if (shouldSkipDriverKickoffForTests()) {
+		emitCommandText(ctx, `Skipped completion workflow ${kind} prompt (test mode)`, "info");
+		return false;
+	}
+	pi.sendUserMessage(prompt);
+	emitCommandText(ctx, `Queued completion workflow ${kind}`, "info");
+	return true;
+}
+
+async function autoContinueWorkflowIfNeeded(pi: ExtensionAPI, ctx: { cwd: string; hasUI: boolean; ui: any }): Promise<void> {
+	if (roleFromEnv()) return;
+	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
+	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
+	if (!snapshot) {
+		clearDriverContinuationTracker(rootKey);
+		return;
+	}
+	const fingerprint = completionContinuationFingerprint(snapshot);
+	if (!fingerprint) {
+		clearDriverContinuationTracker(rootKey);
+		return;
+	}
+	if (!isWorkflowDriverActive(snapshot) || hasRunningCompletionRole(rootKey)) return;
+	const tracker = driverContinuationByRoot.get(rootKey);
+	if (tracker && tracker.fingerprint === fingerprint) {
+		if (tracker.inFlight) {
+			tracker.inFlight = false;
+			if (tracker.attempts >= DRIVER_AUTO_CONTINUE_MAX_ATTEMPTS) {
+				if (!isDriverContinuationStateParked(rootKey, fingerprint)) {
+					rememberParkedDriverContinuation(rootKey, fingerprint);
+					emitCommandText(
+						ctx,
+						`Completion workflow is parked before mandatory role dispatch: ${asString(snapshot.state?.next_mandatory_role) ?? "(unknown)"}. Rerun /cook to continue from canonical state.`,
+						"warning",
+					);
+				}
+				return;
+			}
+		} else {
+			return;
+		}
+	}
+	const resumePrompt = completionResumePrompt(currentTaskType(snapshot) ?? "(missing)", currentEvaluationProfile(snapshot) ?? "(missing)");
+	await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, "auto-resume");
 }
 
 function isRubricEvaluationRole(role: string | undefined): role is RubricEvaluationRole {
@@ -3020,6 +3160,9 @@ function completionResumePrompt(taskType: string, evaluationProfile: string): st
 export default function completionExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		await refreshStatus(ctx);
+		if (shouldTestAutoContinueOnSessionStart()) {
+			await autoContinueWorkflowIfNeeded(pi, ctx);
+		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -3032,10 +3175,16 @@ export default function completionExtension(pi: ExtensionAPI) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
 		await refreshStatus(ctx);
+		await autoContinueWorkflowIfNeeded(pi, ctx);
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
+		if (loaded) {
+			const rootKey = completionRootKey(loaded.snapshot, getCtxCwd(ctx));
+			const fingerprint = completionContinuationFingerprint(loaded.snapshot);
+			if (fingerprint) markQueuedDriverPromptInFlight(rootKey, fingerprint);
+		}
 		if (!loaded) return;
 		const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
 		let marker: JsonRecord | undefined;
@@ -3538,13 +3687,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 						currentTaskType(snapshot) ?? "(missing)",
 						currentEvaluationProfile(snapshot) ?? "(missing)",
 					);
-					maybeWriteTestSnapshot(completionTestDriverPromptPath(), `${resumePrompt}\n`);
-					if (shouldSkipDriverKickoffForTests()) {
-						emitCommandText(ctx, "Skipped completion workflow resume kickoff (test mode)", "info");
-						return;
-					}
-					pi.sendUserMessage(resumePrompt);
-					emitCommandText(ctx, "Queued completion workflow resume", "info");
+					const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
+					const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
+						kind: "resume",
+						mission_anchor: currentMissionAnchor(snapshot),
+						current_phase: asString(snapshot.state?.current_phase) ?? null,
+						next_mandatory_role: asString(snapshot.state?.next_mandatory_role) ?? null,
+					});
+					await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, "resume");
 					return;
 				}
 			}
@@ -3613,13 +3763,16 @@ export default function completionExtension(pi: ExtensionAPI) {
 				kickoffIntent,
 				kickoffMissionAnchor,
 			);
-			maybeWriteTestSnapshot(completionTestDriverPromptPath(), `${kickoffPrompt}\n`);
-			if (shouldSkipDriverKickoffForTests()) {
-				emitCommandText(ctx, "Skipped completion workflow kickoff (test mode)", "info");
-				return;
-			}
-			pi.sendUserMessage(kickoffPrompt);
-			emitCommandText(ctx, "Queued completion workflow kickoff", "info");
+			const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
+			const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
+				kind: "kickoff",
+				mission_anchor: kickoffMissionAnchor,
+				goal,
+				intent: kickoffIntent,
+				task_type: currentTaskType(snapshot) ?? "(missing)",
+				evaluation_profile: currentEvaluationProfile(snapshot) ?? "(missing)",
+			});
+			await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, kickoffPrompt, "kickoff");
 		},
 	});
 }

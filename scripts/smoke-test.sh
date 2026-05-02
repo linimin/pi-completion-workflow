@@ -8,6 +8,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 ROOT="$TMPDIR/repo"
 KICKOFF_PROMPT="$TMPDIR/kickoff-prompt.txt"
 RESUME_PROMPT="$TMPDIR/resume-prompt.txt"
+AUTO_RESUME_PROMPT="$TMPDIR/auto-resume-prompt.txt"
 
 mkdir -p "$ROOT"
 cd "$ROOT"
@@ -70,6 +71,26 @@ resume = Path(sys.argv[1]).read_text()
 assert 'Canonical routing profile:' in resume, 'resume prompt should expose canonical routing profile'
 assert f'- task_type: {expected_task_type}' in resume, 'resume prompt missing canonical task_type'
 assert f'- evaluation_profile: {expected_eval_profile}' in resume, 'resume prompt missing canonical evaluation_profile'
+PY
+
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_AUTO_CONTINUE_ON_SESSION_START=1 \
+PI_COMPLETION_TEST_AUTO_CONTINUE_PROMPT_PATH="$AUTO_RESUME_PROMPT" \
+pi -e "$PKG_ROOT" -p "/cook" \
+  >"$TMPDIR/pi-completion-smoke-auto-resume.out" 2>"$TMPDIR/pi-completion-smoke-auto-resume.err"
+
+python3 - "$AUTO_RESUME_PROMPT" <<'PY'
+import sys
+from pathlib import Path
+
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
+auto_resume = Path(sys.argv[1]).read_text()
+
+assert 'Resume the completion workflow from canonical state.' in auto_resume, 'auto-resume prompt should use the canonical resume workflow prompt'
+assert 'Canonical routing profile:' in auto_resume, 'auto-resume prompt should expose canonical routing profile'
+assert f'- task_type: {expected_task_type}' in auto_resume, 'auto-resume prompt missing canonical task_type'
+assert f'- evaluation_profile: {expected_eval_profile}' in auto_resume, 'auto-resume prompt missing canonical evaluation_profile'
 PY
 
 python3 - <<'PY'
