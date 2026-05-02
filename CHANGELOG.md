@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.32
+
+### Changed
+
+- made `/cook` auto-continue workflows from canonical state when `continuation_policy == continue`, so the primary driver re-queues the canonical resume prompt after intermediate role turns instead of parking silently on known mandatory steps
+- added smoke coverage for the new auto-resume driver prompt behavior and a guarded parked-state warning path to avoid infinite requeue loops on an unchanged mandatory state
+
 ## 0.1.31
 
 ### Changed
