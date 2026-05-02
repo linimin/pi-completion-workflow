@@ -203,7 +203,7 @@ class StartupAnalystOverlay extends Container {
 
 	private updateDisplay(): void {
 		this.title.setText(this.theme.fg("accent", this.theme.bold("/cook proposal analyst")));
-		this.body.setText(this.theme.fg("dim", this.lines.join("\n")));
+		this.body.setText(formatInlineRunningText(this.theme, this.lines, { primaryAssistant: true }));
 		this.footer.setText(this.theme.fg("muted", "Esc cancel • This analysis runs before /cook writes canonical workflow state"));
 	}
 
@@ -2938,6 +2938,53 @@ function collapseRecentActivity(items: string[], maxItems = 4): string[] {
 	return collapsed.slice(-maxItems);
 }
 
+function formatInlineRunningText(theme: any, lines: string[], options?: { primaryAssistant?: boolean }): string {
+	let text = "";
+	for (const [index, line] of lines.entries()) {
+		if (index > 0) text += "\n";
+		if (index === 0) {
+			const [prefix, ...rest] = line.split(" ");
+			text += theme.fg("warning", prefix);
+			if (rest.length > 0) text += ` ${theme.fg("accent", rest.join(" "))}`;
+			continue;
+		}
+		if (line.startsWith("tool:") || line.startsWith("progress:")) {
+			text += theme.fg("toolOutput", line);
+			continue;
+		}
+		if (line.startsWith("activity:")) {
+			text += theme.fg(line.includes("stalled") ? "warning" : "dim", line);
+			continue;
+		}
+		if (line === "recent tools:") {
+			text += theme.fg("muted", line);
+			continue;
+		}
+		if (line.startsWith("- ")) {
+			text += `${theme.fg("muted", "- ")}${theme.fg("muted", line.slice(2))}`;
+			continue;
+		}
+		if (line.startsWith("elapsed:")) {
+			text += theme.fg("dim", line);
+			continue;
+		}
+		if (line.startsWith("assistant:")) {
+			text += options?.primaryAssistant ? line : theme.fg("muted", line);
+			continue;
+		}
+		if (line.startsWith("next:") || line.startsWith("verifying:")) {
+			text += theme.fg("muted", line);
+			continue;
+		}
+		if (line.startsWith("rationale:") || line.startsWith("state-delta:")) {
+			text += theme.fg("dim", line);
+			continue;
+		}
+		text += theme.fg("muted", line);
+	}
+	return text;
+}
+
 function buildInlineRunningLines(details: {
 	role?: string;
 	startedAt?: number;
@@ -3501,34 +3548,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			};
 			if (isPartial) {
 				const lines = buildInlineRunningLines(details);
-				let text = "";
-				for (const [index, line] of lines.entries()) {
-					if (index > 0) text += "\n";
-					if (index === 0) {
-						const [prefix, ...rest] = line.split(" ");
-						text += theme.fg("warning", prefix);
-						if (rest.length > 0) text += ` ${theme.fg("accent", rest.join(" "))}`;
-						continue;
-					}
-					if (line.startsWith("tool:") || line.startsWith("progress:")) {
-						text += theme.fg("toolOutput", line);
-						continue;
-					}
-					if (line.startsWith("activity:")) {
-						text += theme.fg(line.includes("stalled") ? "warning" : "dim", line);
-						continue;
-					}
-					if (line === "recent tools:") {
-						text += theme.fg("dim", line);
-						continue;
-					}
-					if (line.startsWith("- ")) {
-						text += `${theme.fg("muted", "- ")}${theme.fg("dim", line.slice(2))}`;
-						continue;
-					}
-					text += theme.fg("dim", line);
-				}
-				return new Text(text, 0, 0);
+				return new Text(formatInlineRunningText(theme, lines), 0, 0);
 			}
 			const role = details.role ?? "completion-role";
 			const ok = details.status === "ok" && !result.isError;
@@ -3536,10 +3556,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (details.startedAt !== undefined) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(nowMs() - details.startedAt)}`)}`;
 			if (details.toolActivity) text += `\n${theme.fg("toolOutput", `tool: ${details.toolActivity}`)}`;
 			if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
-			else if (details.assistantSummary) text += `\n${theme.fg("dim", `assistant: ${details.assistantSummary}`)}`;
+			else if (details.assistantSummary) text += `\nassistant: ${details.assistantSummary}`;
 			if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
-			if (details.nextStep) text += `\n${theme.fg("dim", `next: ${details.nextStep}`)}`;
-			if (details.verifying) text += `\n${theme.fg("dim", `verifying: ${details.verifying}`)}`;
+			if (details.nextStep) text += `\n${theme.fg("muted", `next: ${details.nextStep}`)}`;
+			if (details.verifying) text += `\n${theme.fg("muted", `verifying: ${details.verifying}`)}`;
 			if (details.stateDeltas?.length) {
 				for (const delta of details.stateDeltas.slice(-4)) text += `\n${theme.fg("dim", `state-delta: ${delta}`)}`;
 			}
