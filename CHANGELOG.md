@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.33
+
+### Changed
+
+- kept full mission text in `/cook` confirmation instead of truncating mission anchors during derivation
+- refined `/cook` activity and completion-role text contrast by reducing overuse of `dim` styling in high-value status surfaces
+
 ## 0.1.32
 
 ### Changed
