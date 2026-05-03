@@ -25,12 +25,35 @@ const assertIncludes = (file, snippet) => {
     throw new Error(`${file} is missing required canonical-evidence text: ${snippet}`);
   }
 };
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const readSection = (file, heading) => {
+  const text = read(file);
+  const match = text.match(new RegExp(`^${escapeRegex(heading)}\\s*$\\n([\\s\\S]*?)(?=^##\\s+|\\Z)`, 'm'));
+  if (!match) {
+    throw new Error(`${file} is missing required section: ${heading}`);
+  }
+  return match[1];
+};
+const assertSectionIncludes = (file, heading, snippet) => {
+  const section = readSection(file, heading);
+  if (!section.includes(snippet)) {
+    throw new Error(`${file} section ${heading} is missing required canonical-evidence text: ${snippet}`);
+  }
+};
 
 assertIncludes('README.md', '.agent/verification-evidence.json');
 assertIncludes('README.md', 'Fresh scaffolds create an idle placeholder');
 assertIncludes('README.md', 'bash scripts/canonical-evidence-artifact-test.sh');
 assertIncludes('.agent/README.md', '.agent/verification-evidence.json');
 assertIncludes('.agent/README.md', 'durable canonical record of deterministic verification');
+assertSectionIncludes('skills/completion-protocol/SKILL.md', '## Canonical Files', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/SKILL.md', '## Canonical Inputs', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/SKILL.md', '## Compaction And Recovery', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/SKILL.md', '## Compaction And Recovery', '`completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, `.agent/active-slice.json`, and `.agent/verification-evidence.json` before resuming work.');
+assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Ignored Canonical Execution State', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Canonical Inputs', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Compaction And Recovery', '- `.agent/verification-evidence.json`');
+assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Compaction And Recovery', '`completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, `.agent/active-slice.json`, and `.agent/verification-evidence.json` before resuming work.');
 assertIncludes('extensions/completion/index.ts', 'Verification evidence artifact: ${evidence.path}');
 assertIncludes('extensions/completion/index.ts', 'Verification evidence summary: ${evidence.summary}');
 assertIncludes('extensions/completion/index.ts', 'Canonical verification evidence artifact is currently: ${evidence.path} (${evidence.status})');

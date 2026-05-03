@@ -17,7 +17,28 @@
 - `.agent/active-slice.json`
 - `.agent/slice-history.jsonl`
 - `.agent/stop-check-history.jsonl`
+- `.agent/verification-evidence.json`
 - `.agent/*.log`
+
+## Canonical Inputs
+
+Read these when making completion decisions:
+
+- `.agent/mission.md`
+- `.agent/README.md`
+- `.agent/profile.json`
+- `.agent/state.json`
+- `.agent/plan.json`
+- `.agent/active-slice.json`
+- `.agent/slice-history.jsonl`
+- `.agent/stop-check-history.jsonl`
+- `.agent/verification-evidence.json`
+
+Optional context only:
+
+- `.agent/backlog.md`
+- `.agent/handoff.md`
+- `.agent/compact.md`
 
 ## Scratch Space
 
@@ -332,6 +353,7 @@ After context compaction, suspected memory loss, stalled-role recovery, or any a
 - `.agent/state.json`
 - `.agent/plan.json`
 - `.agent/active-slice.json`
+- `.agent/verification-evidence.json`
 
 The workflow root must invoke `completion-regrounder` before continuing whenever any of the following is true:
 
@@ -343,6 +365,8 @@ The workflow root must invoke `completion-regrounder` before continuing whenever
 - the exact implementer handoff snapshot in `.agent/active-slice.json` is missing, stale, or contradictory
 
 The workflow root must not continue implementation, review, audit, or stop evaluation from compacted conversation memory alone.
+
+After compaction or recovery, `completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, `.agent/active-slice.json`, and `.agent/verification-evidence.json` before resuming work. If `.agent/active-slice.json` still contains a truthful exact handoff snapshot, continue from canonical state rather than asking the user to resend the original caller payload.
 
 ## Default Priority Policy
 

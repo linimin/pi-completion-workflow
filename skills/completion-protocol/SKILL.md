@@ -101,6 +101,7 @@ Ignored canonical execution-state files:
 - `.agent/active-slice.json`
 - `.agent/slice-history.jsonl`
 - `.agent/stop-check-history.jsonl`
+- `.agent/verification-evidence.json`
 - `.agent/*.log`
 
 ## Canonical Inputs
@@ -115,6 +116,7 @@ Read these when making completion decisions:
 - `.agent/active-slice.json`
 - `.agent/slice-history.jsonl`
 - `.agent/stop-check-history.jsonl`
+- `.agent/verification-evidence.json`
 
 Optional context only:
 
@@ -138,6 +140,7 @@ After context compaction, suspected memory loss, stalled-role recovery, or any a
 - `.agent/state.json`
 - `.agent/plan.json`
 - `.agent/active-slice.json`
+- `.agent/verification-evidence.json`
 
 The workflow driver must invoke `completion-regrounder` before continuing whenever any of the following is true:
 
@@ -152,7 +155,7 @@ The exact implementer handoff now includes implementation-scope surfaces and exp
 
 The workflow driver must not continue implementation, review, audit, or stop evaluation from compacted conversation memory alone.
 
-After compaction or recovery, `completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json` before resuming work. If `.agent/active-slice.json` still contains a truthful exact handoff snapshot, continue from canonical state rather than asking the user to resend the original caller payload.
+After compaction or recovery, `completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, `.agent/active-slice.json`, and `.agent/verification-evidence.json` before resuming work. If `.agent/active-slice.json` still contains a truthful exact handoff snapshot, continue from canonical state rather than asking the user to resend the original caller payload.
 
 ## Shared Report Header
 
