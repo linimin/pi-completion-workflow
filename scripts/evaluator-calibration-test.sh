@@ -25,10 +25,10 @@ assertIncludes('scripts/release-check.sh', 'npm run evaluator-calibration-test')
 assertIncludes('.agent/verify_completion_stop.sh', 'npm run evaluator-calibration-test >/dev/null');
 assertIncludes('README.md', 'Evaluator calibration now also fails closed on semantically lenient but well-formed reports.');
 assertIncludes('README.md', '`npm run evaluator-calibration-test` drives the packaged transcription path through reviewer yes-with-follow-up, auditor open-contracts-with-`Next mandatory slice: none`, and stop-judge yes-with-open-contracts fixtures while still accepting truthful passing reports.');
-assertIncludes('README.md', 'It also rejects the reproducible `none; ...` bypass family for reviewer follow-up, auditor worktree blockers, and stop-judge open-contract reporting, while still accepting truthful reviewer routing text like `Smallest follow-up slice: none; proceed to completion-auditor.`');
+assertIncludes('README.md', 'It also rejects the reproducible `none; ...` bypass family for reviewer follow-up, auditor worktree blockers, and stop-judge open-contract reporting, while still accepting only the exact reviewer routing text `Smallest follow-up slice: none; proceed to completion-auditor.` with terminal punctuation or whitespace only.');
 assertIncludes('README.md', 'includes deterministic observability coverage plus evaluator calibration and the rubric-contract regression');
 assertIncludes('CHANGELOG.md', 'added evaluator calibration fixtures for semantically lenient but well-formed reviewer/auditor/stop-judge reports');
-assertIncludes('CHANGELOG.md', 'tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting truthful reviewer `none; proceed to completion-auditor` routing guidance');
+assertIncludes('CHANGELOG.md', 'tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting only the exact reviewer `none; proceed to completion-auditor` routing allowance with terminal punctuation or whitespace only');
 assertIncludes('CHANGELOG.md', 'wired `npm run evaluator-calibration-test` into `npm run release-check` and `.agent/verify_completion_stop.sh`');
 assertIncludes('CHANGELOG.md', 'fixed the smoke auto-resume prompt regression');
 assertIncludes('extensions/completion/role-reporting.js', 'Reviewer output cannot mark \'Acceptable as-is: yes\' while naming a follow-up slice other than none.');
@@ -89,6 +89,17 @@ Rubric:
 Findings: none.
 Acceptable as-is: yes
 Smallest follow-up slice: none; tighten docs before audit.`;
+
+const reviewerTrailingTextAfterRoutingLenient = `MISSION ANCHOR: test mission
+Remaining contract IDs: TEST-CONTRACT
+Rubric:
+- Contract coverage: pass - Locked acceptance criteria match the committed slice.
+- Correctness risk: pass - No blocking regression is evident.
+- Verification evidence: pass - Deterministic proof was rerun successfully.
+- Docs/state parity: pass - Docs and canonical state are aligned.
+Findings: none.
+Acceptable as-is: yes
+Smallest follow-up slice: none; proceed to completion-auditor; tighten docs before audit.`;
 
 const auditorPass = `MISSION ANCHOR: test mission
 Remaining contract IDs: TEST-CONTRACT
@@ -232,6 +243,21 @@ Brief justification: This should be rejected because remaining contracts still e
     `reviewer none-prefixed lenient fixture should be rejected for a yes verdict with contradictory routing text: ${reviewerNonePrefixedRejected.errors.join(' | ')}`,
   );
   assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 1, 'rejected none-prefixed reviewer fixture must not append history');
+
+  const reviewerTrailingTextAfterRoutingRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-reviewer',
+    output: reviewerTrailingTextAfterRoutingLenient,
+    reportFields: parseReportFields(reviewerTrailingTextAfterRoutingLenient),
+    snapshotFiles,
+    headSha: '1010101010101010101010101010101010101010',
+    sliceId: 'slice-review',
+    recordedAt: 10,
+  });
+  assert(
+    reviewerTrailingTextAfterRoutingRejected.errors.some((error) => error.includes('follow-up slice other than none')),
+    `reviewer routing-trailing-text fixture should be rejected for extra text after the exact completion-auditor allowance: ${reviewerTrailingTextAfterRoutingRejected.errors.join(' | ')}`,
+  );
+  assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 1, 'rejected reviewer routing-trailing-text fixture must not append history');
 
   const audited = await transcribeCanonicalRoleReport({
     role: 'completion-auditor',

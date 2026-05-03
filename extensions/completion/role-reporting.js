@@ -112,12 +112,14 @@ function isPureNoneLike(value) {
   return parsed.noneLike && normalizeNoneLikeSuffix(parsed.suffix).length === 0;
 }
 
+function isReviewerProceedToAuditorRoutingValue(value) {
+  const raw = asString(value);
+  if (!raw) return false;
+  return /^none\s*;\s*proceed to completion-auditor(?:[\p{P}\s]*)$/iu.test(raw);
+}
+
 function isReviewerNoFollowUpValue(value) {
-  const parsed = parseNoneLikeValue(value);
-  if (!parsed.noneLike) return false;
-  const normalizedSuffix = normalizeNoneLikeSuffix(parsed.suffix).toLowerCase();
-  if (!normalizedSuffix) return true;
-  return /^proceed to completion-auditor\b/.test(normalizedSuffix);
+  return isPureNoneLike(value) || isReviewerProceedToAuditorRoutingValue(value);
 }
 
 function rubricVerdicts(reportFields) {
