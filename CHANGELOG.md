@@ -1,15 +1,22 @@
 # Changelog
 
+## 0.1.34
+
+### Changed
+
+- added evaluator calibration fixtures for semantically lenient but well-formed reviewer/auditor/stop-judge reports and made packaged transcription reject those cases fail closed while still accepting truthful passing fixtures
+- tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting only the exact reviewer `none; proceed to completion-auditor` routing allowance with terminal punctuation or whitespace only
+- wired `npm run evaluator-calibration-test` into `npm run release-check` and `.agent/verify_completion_stop.sh` as part of the packaged release gate
+- fixed the smoke auto-resume prompt regression so the packaged release check writes `auto-resume-prompt.txt` again and passes on clean HEAD
+- promoted `.agent/active-slice.json` to implementation-contract v2 across implementer instructions, fail-closed active-vs-plan parity checks, recovery/reminder surfaces, and a dedicated release-gated regression
+- added durable canonical verification evidence at `.agent/verification-evidence.json`, threaded it through docs and recovery surfaces, and made release/stop verification fail closed on missing, stale, wrong-head, or protocol-doc-drift evidence artifacts
+
 ## 0.1.33
 
 ### Changed
 
 - kept full mission text in `/cook` confirmation instead of truncating mission anchors during derivation
 - refined `/cook` activity and completion-role text contrast by reducing overuse of `dim` styling in high-value status surfaces
-- added evaluator calibration fixtures for semantically lenient but well-formed reviewer/auditor/stop-judge reports and made packaged transcription reject those cases fail closed while still accepting truthful passing fixtures
-- tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting only the exact reviewer `none; proceed to completion-auditor` routing allowance with terminal punctuation or whitespace only
-- wired `npm run evaluator-calibration-test` into `npm run release-check` and `.agent/verify_completion_stop.sh` as part of the packaged release gate
-- fixed the smoke auto-resume prompt regression so the packaged release check writes `auto-resume-prompt.txt` again and passes on clean HEAD
 
 ## 0.1.32
 
