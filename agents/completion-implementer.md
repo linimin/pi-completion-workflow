@@ -10,6 +10,8 @@ Load `completion-protocol` before acting. Use it as the shared protocol source o
 
 You execute one exact slice chosen either by `completion-regrounder` or directly by the workflow root from canonical `.agent` state.
 
+For selected, in-progress, committed, and done slices, `.agent/active-slice.json` is the canonical implementation contract. Treat prose summaries as continuity help only, and stop instead of guessing if that contract is stale, incomplete, or out of parity with `.agent/plan.json`.
+
 Required exact handoff from canonical `.agent` state:
 
 - blocker count before the slice
@@ -20,10 +22,17 @@ Required exact handoff from canonical `.agent` state:
 - one exact slice goal
 - the exact acceptance criteria for that slice
 - the exact contract IDs for that slice
+- the exact `priority` and `why_now` for that slice
+- the exact `implementation_surfaces`
+- the exact `verification_commands`
+- the exact `basis_commit`
+- the exact `remaining_contract_ids_before`
+- the exact `release_blocker_count_before`
+- the exact `high_value_gap_count_before`
 - any locked notes or caller-selected-slice notes captured in `.agent/active-slice.json`
 - any must-fix review findings captured in `.agent/active-slice.json` if this is a follow-up slice
 
-If the exact slice ID, exact slice goal, or exact acceptance criteria are missing, stale, or ambiguous in canonical state, stop and report that blocker instead of guessing.
+If the exact slice ID, exact slice goal, exact acceptance criteria, or any required implementation-contract v2 field are missing, stale, or ambiguous in canonical state, stop and report that blocker instead of guessing.
 
 You are the only role allowed to:
 
@@ -52,7 +61,7 @@ These lines are for workflow observability, not hidden reasoning. Keep them brie
 
 1. Read canonical `.agent` inputs before touching tracked files.
 2. After compaction or recovery, re-read canonical `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json` before resuming.
-3. Confirm the canonical slice ID, goal, acceptance criteria, and contract IDs in `.agent/active-slice.json` match canonical `.agent/plan.json`. If they do not match, stop and report the mismatch instead of guessing.
+3. Confirm the canonical slice ID, goal, acceptance criteria, contract IDs, priority, why_now, implementation_surfaces, verification_commands, locked notes, must-fix findings, basis_commit, and before-slice counters in `.agent/active-slice.json` match canonical `.agent/plan.json`. If they do not match, stop and report the mismatch instead of guessing.
 4. Make truthful `.agent/state.json` and `.agent/active-slice.json` updates before implementation if needed.
 5. If implementation reveals roadmap-level drift — for example a missing prerequisite slice, invalid slice boundary, dependency reorder, or blocker that changes the current slice contract — do not silently redesign the plan. Report the discrepancy explicitly, make only the minimal truthful local state updates needed for the current slice, and hand control back for canonical re-grounding by `completion-regrounder`.
 6. Make the smallest correct tracked-file change.

@@ -2107,6 +2107,8 @@ const requireKeys = (object, required, label) => {
     assert(Object.prototype.hasOwnProperty.call(object, key), label + ': missing required field: ' + key);
   }
 };
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const sameStringArrays = (left, right) => left.length === right.length && left.every((item, index) => item === right[index]);
 
 for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {
   readJson(file);
@@ -2151,6 +2153,8 @@ assert(isStringArray(state.release_blocker_ids), '.agent/state.json: release_blo
 
 const requiredPlan = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'last_reground_at', 'plan_basis', 'candidate_slices'];
 const requiredSlice = ['slice_id', 'goal', 'acceptance_criteria', 'contract_ids', 'priority', 'status', 'why_now', 'blocked_on', 'evidence'];
+const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+const allowedSlice = [...requiredSlice, ...planMirrorFields];
 const sliceStatuses = ['planned', 'selected', 'in_progress', 'blocked', 'done', 'cancelled'];
 requireKeys(plan, requiredPlan, '.agent/plan.json');
 hasOnlyKeys(plan, requiredPlan, '.agent/plan.json');
@@ -2161,7 +2165,7 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   const label = '.agent/plan.json candidate_slices[' + index + ']';
   assert(isObject(slice), label + ' must be an object');
   requireKeys(slice, requiredSlice, label);
-  hasOnlyKeys(slice, requiredSlice, label);
+  hasOnlyKeys(slice, allowedSlice, label);
   assert(isString(slice.slice_id) && slice.slice_id.length > 0, label + ': slice_id must be a non-empty string');
   assert(isString(slice.goal) && slice.goal.length > 0, label + ': goal must be a non-empty string');
   assert(Array.isArray(slice.acceptance_criteria) && slice.acceptance_criteria.length > 0 && slice.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), label + ': acceptance_criteria must be a non-empty array of strings');
@@ -2171,6 +2175,14 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   assert(isString(slice.why_now) && slice.why_now.length > 0, label + ': why_now must be a non-empty string');
   assert(isStringArray(slice.blocked_on), label + ': blocked_on must be an array of strings');
   assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
+  if (hasOwn(slice, 'locked_notes')) assert(isStringArray(slice.locked_notes), label + ': locked_notes must be an array of strings when present');
+  if (hasOwn(slice, 'must_fix_findings')) assert(isStringArray(slice.must_fix_findings), label + ': must_fix_findings must be an array of strings when present');
+  if (hasOwn(slice, 'implementation_surfaces')) assert(isStringArray(slice.implementation_surfaces), label + ': implementation_surfaces must be an array of strings when present');
+  if (hasOwn(slice, 'verification_commands')) assert(isStringArray(slice.verification_commands), label + ': verification_commands must be an array of strings when present');
+  if (hasOwn(slice, 'basis_commit')) assert(isNonEmptyString(slice.basis_commit), label + ': basis_commit must be a non-empty string when present');
+  if (hasOwn(slice, 'remaining_contract_ids_before')) assert(isStringArray(slice.remaining_contract_ids_before), label + ': remaining_contract_ids_before must be an array of strings when present');
+  if (hasOwn(slice, 'release_blocker_count_before')) assert(typeof slice.release_blocker_count_before === 'number' && Number.isFinite(slice.release_blocker_count_before), label + ': release_blocker_count_before must be a finite number when present');
+  if (hasOwn(slice, 'high_value_gap_count_before')) assert(typeof slice.high_value_gap_count_before === 'number' && Number.isFinite(slice.high_value_gap_count_before), label + ': high_value_gap_count_before must be a finite number when present');
 }
 
 const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
@@ -2208,6 +2220,36 @@ if (requiresExactHandoff) {
   assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
   assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
   assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');
+
+  const planSlice = plan.candidate_slices.find((slice) => isObject(slice) && slice.slice_id === active.slice_id);
+  assert(isObject(planSlice), '.agent/active-slice.json: slice_id must match a slice in .agent/plan.json when status carries an exact handoff');
+  const drift = [];
+  if (planSlice.goal !== active.goal) drift.push('goal');
+  if (!sameStringArrays(planSlice.contract_ids, active.contract_ids)) drift.push('contract_ids');
+  if (!sameStringArrays(planSlice.acceptance_criteria, active.acceptance_criteria)) drift.push('acceptance_criteria');
+  if (!sameStringArrays(planSlice.blocked_on, active.blocked_on)) drift.push('blocked_on');
+  if (planSlice.priority !== active.priority) drift.push('priority');
+  if (planSlice.why_now !== active.why_now) drift.push('why_now');
+
+  const expectPlanArrayMirror = (field) => {
+    if (!hasOwn(planSlice, field) || !sameStringArrays(planSlice[field], active[field])) drift.push(field);
+  };
+  const expectPlanStringMirror = (field) => {
+    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
+  };
+  const expectPlanNumberMirror = (field) => {
+    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
+  };
+
+  expectPlanArrayMirror('implementation_surfaces');
+  expectPlanArrayMirror('verification_commands');
+  expectPlanArrayMirror('locked_notes');
+  expectPlanArrayMirror('must_fix_findings');
+  expectPlanStringMirror('basis_commit');
+  expectPlanArrayMirror('remaining_contract_ids_before');
+  expectPlanNumberMirror('release_blocker_count_before');
+  expectPlanNumberMirror('high_value_gap_count_before');
+  assert(drift.length === 0, '.agent/active-slice.json must match the selected .agent/plan.json slice across: ' + Array.from(new Set(drift)).join(', '));
 } else {
   assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
   assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
@@ -2309,10 +2351,72 @@ function historyCounts(sliceHistory: JsonRecord[], stopHistory: JsonRecord[]) {
 	};
 }
 
+function sameStringArrays(left: string[], right: string[]): boolean {
+	return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function hasOwnField(record: JsonRecord | undefined, field: string): boolean {
+	return !!record && Object.prototype.hasOwnProperty.call(record, field);
+}
+
+function activeCarriesExactHandoff(active: JsonRecord | undefined): boolean {
+	const status = asString(active?.status);
+	return status === "selected" || status === "in_progress" || status === "committed" || status === "done";
+}
+
+function activeSliceContractDriftFields(snapshot: CompletionStateSnapshot): string[] | undefined {
+	const active = snapshot.active;
+	const planSlice = snapshot.activeSlice;
+	const activeId = asString(active?.slice_id);
+	if (!activeId || !planSlice) return undefined;
+	const drift: string[] = [];
+	const expectPlanArrayMirror = (field: string) => {
+		if (!hasOwnField(planSlice, field) || !sameStringArrays(asStringArray(planSlice[field]), asStringArray(active?.[field]))) {
+			drift.push(field);
+		}
+	};
+	const expectPlanStringMirror = (field: string) => {
+		if (!hasOwnField(planSlice, field) || asString(planSlice[field]) !== asString(active?.[field])) {
+			drift.push(field);
+		}
+	};
+	const expectPlanNumberMirror = (field: string) => {
+		if (!hasOwnField(planSlice, field) || asNumber(planSlice[field]) !== asNumber(active?.[field])) {
+			drift.push(field);
+		}
+	};
+	if (asString(planSlice.slice_id) !== activeId) drift.push("slice_id");
+	if (asString(planSlice.goal) !== asString(active?.goal)) drift.push("goal");
+	if (!sameStringArrays(asStringArray(planSlice.contract_ids), asStringArray(active?.contract_ids))) drift.push("contract_ids");
+	if (!sameStringArrays(asStringArray(planSlice.acceptance_criteria), asStringArray(active?.acceptance_criteria))) drift.push("acceptance_criteria");
+	if (!sameStringArrays(asStringArray(planSlice.blocked_on), asStringArray(active?.blocked_on))) drift.push("blocked_on");
+	if (asNumber(planSlice.priority) !== asNumber(active?.priority)) drift.push("priority");
+	if (asString(planSlice.why_now) !== asString(active?.why_now)) drift.push("why_now");
+	expectPlanArrayMirror("implementation_surfaces");
+	expectPlanArrayMirror("verification_commands");
+	expectPlanArrayMirror("locked_notes");
+	expectPlanArrayMirror("must_fix_findings");
+	expectPlanStringMirror("basis_commit");
+	expectPlanArrayMirror("remaining_contract_ids_before");
+	expectPlanNumberMirror("release_blocker_count_before");
+	expectPlanNumberMirror("high_value_gap_count_before");
+	return Array.from(new Set(drift));
+}
+
+function activeSliceContractDriftSummary(snapshot: CompletionStateSnapshot): string {
+	const activeId = asString(snapshot.active?.slice_id);
+	if (!activeId) return "unknown";
+	if (!snapshot.activeSlice) return "slice_id (no matching plan slice)";
+	const drift = activeSliceContractDriftFields(snapshot);
+	return drift && drift.length > 0 ? drift.join(", ") : "none";
+}
+
 function activeSliceMatchesPlan(snapshot: CompletionStateSnapshot): "yes" | "no" | "unknown" {
 	const activeId = asString(snapshot.active?.slice_id);
 	if (!activeId) return "unknown";
-	return snapshot.activeSlice ? "yes" : "no";
+	const drift = activeSliceContractDriftFields(snapshot);
+	if (!snapshot.activeSlice || drift === undefined) return "no";
+	return drift.length === 0 ? "yes" : "no";
 }
 
 function handoffSnapshotState(active: JsonRecord | undefined): "present" | "missing_or_unclear" {
@@ -2332,7 +2436,7 @@ function handoffSnapshotState(active: JsonRecord | undefined): "present" | "miss
 		active?.release_blocker_count_before,
 		active?.high_value_gap_count_before,
 	];
-	return exactArrays.every((items) => items.length > 0) && required.every((value) => value !== undefined && value !== null)
+	return activeCarriesExactHandoff(active) && exactArrays.every((items) => items.length > 0) && required.every((value) => value !== undefined && value !== null)
 		? "present"
 		: "missing_or_unclear";
 }
@@ -2344,6 +2448,8 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	const activePriority = asNumber(snapshot.active?.priority);
 	const activeWhyNow = asString(snapshot.active?.why_now);
 	const nextRole = asString(snapshot.state?.next_mandatory_role);
+	const exactActiveContract = activeCarriesExactHandoff(snapshot.active);
+	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
 	const lines = [
 		"Completion workflow detected.",
 		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
@@ -2364,6 +2470,10 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
 		"When recovering from compaction, prefer a deterministic restart from canonical files over conversational inference.",
 	];
+	if (exactActiveContract) {
+		lines.push("Selected/in-progress/committed/done .agent/active-slice.json is the canonical implementation contract.");
+		lines.push(`Active slice contract drift: ${activeContractDrift}`);
+	}
 	if (activePriority !== undefined) lines.push(`Active slice priority: ${activePriority}`);
 	if (activeWhyNow) lines.push(`Active slice why_now: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${implementationSurfaces.join(", ")}`);
@@ -2384,6 +2494,8 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const activePriority = asNumber(snapshot.active?.priority);
 	const activeWhyNow = asString(snapshot.active?.why_now);
+	const exactActiveContract = activeCarriesExactHandoff(snapshot.active);
+	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
 	const lines = [
 		"POST-COMPACTION RECOVERY MODE is active.",
 		`Compaction marker time: ${markerAt}`,
@@ -2400,6 +2512,10 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 		"If continuation_policy == continue and canonical state is coherent, continue dispatching the mandatory role directly without asking the user whether to continue.",
 		"If you are about to implement after compaction, confirm the active slice snapshot still matches .agent/plan.json before doing any work.",
 	];
+	if (exactActiveContract) {
+		lines.push("For selected/in-progress/committed/done slices, .agent/active-slice.json is the canonical implementation contract.");
+		lines.push(`Canonical active-slice contract drift is currently: ${activeContractDrift}`);
+	}
 	if (activePriority !== undefined) lines.push(`Canonical active-slice priority is currently: ${activePriority}`);
 	if (activeWhyNow) lines.push(`Canonical active-slice why_now is currently: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Canonical implementation surfaces are currently: ${implementationSurfaces.join(", ")}`);
@@ -2484,6 +2600,7 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const remainingBefore = asStringArray(snapshot.active?.remaining_contract_ids_before);
+	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
 	const lines = [
 		"Authoritative completion resume capsule:",
 		"",
@@ -2500,6 +2617,7 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		`remaining_slice_count: ${remainingSliceCount(snapshot.plan)}`,
 		`remaining_stop_judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
 		`active_slice_matches_plan: ${activeSliceMatchesPlan(snapshot)}`,
+		`active_slice_contract_drift_fields: ${activeContractDrift}`,
 		`implementer_handoff_snapshot: ${handoffSnapshotState(snapshot.active)}`,
 		`history_counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}`,
 		"",
@@ -2527,14 +2645,15 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		"",
 		"Rules:",
 		"- Treat this block as continuity support derived from canonical .agent state.",
-		"- Preserve exact slice_id, contract_ids, acceptance criteria, priority, why_now, implementation surfaces, verification commands, locked notes, and must-fix findings where still true.",
+		"- For selected/in-progress/committed/done slices, .agent/active-slice.json is the canonical implementation contract and the selected plan slice must mirror it exactly.",
+		"- Preserve exact slice_id, goal, contract_ids, acceptance criteria, blocked_on, priority, why_now, implementation surfaces, verification commands, locked notes, must-fix findings, basis_commit, and before-slice counters where still true.",
 		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl before resuming long-running completion work.",
 		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
 		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",
-		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no or implementer_handoff_snapshot is missing_or_unclear.",
+		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no, active_slice_contract_drift_fields is not none, or implementer_handoff_snapshot is missing_or_unclear.",
 		"- If continuation_policy is continue, do not stop after a slice or ask whether to continue. Dispatch the next mandatory role directly.",
 		"- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
-		"- If you are completion-implementer after compaction, resume from the canonical active-slice handoff instead of asking the user to resend the original caller payload.",
+		"- If you are completion-implementer after compaction, resume from the canonical active-slice implementation contract instead of asking the user to resend the original caller payload.",
 		"- Do not replace canonical .agent state with summary inference.",
 		"</completion-state>",
 	);
@@ -3203,11 +3322,11 @@ function completionKickoff(
 			: intent === "refocus" && missionAnchor
 				? `Updated canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- The user explicitly refocused the workflow before this kickoff.\n- Re-read canonical .agent/** state and continue from the refocused mission.\n\n`
 				: "";
-	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 function completionResumePrompt(taskType: string, evaluationProfile: string): string {
-	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 export default function completionExtension(pi: ExtensionAPI) {

@@ -167,6 +167,34 @@ active.pop('why_now', None)
 path.write_text(json.dumps(active, indent=2) + '\n')
 PY
 
+python3 - <<'PY'
+import json
+from pathlib import Path
+active = json.loads(Path('.agent/active-slice.json').read_text())
+plan_path = Path('.agent/plan.json')
+plan = json.loads(plan_path.read_text())
+plan['candidate_slices'] = [{
+    'slice_id': active['slice_id'],
+    'goal': active['goal'],
+    'acceptance_criteria': active['acceptance_criteria'],
+    'contract_ids': active['contract_ids'],
+    'priority': 1,
+    'status': 'selected',
+    'why_now': 'smoke test exact handoff',
+    'blocked_on': active['blocked_on'],
+    'evidence': [],
+    'locked_notes': active['locked_notes'],
+    'must_fix_findings': active['must_fix_findings'],
+    'implementation_surfaces': ['extensions/completion/index.ts', '.agent/verify_completion_control_plane.sh'],
+    'verification_commands': ['bash .agent/verify_completion_control_plane.sh', 'npm run smoke-test'],
+    'basis_commit': active['basis_commit'],
+    'remaining_contract_ids_before': active['remaining_contract_ids_before'],
+    'release_blocker_count_before': active['release_blocker_count_before'],
+    'high_value_gap_count_before': active['high_value_gap_count_before'],
+}]
+plan_path.write_text(json.dumps(plan, indent=2) + '\n')
+PY
+
 if bash .agent/verify_completion_control_plane.sh >/dev/null 2>&1; then
   echo "expected control-plane verification to fail when selected active-slice omits priority/why_now" >&2
   exit 1

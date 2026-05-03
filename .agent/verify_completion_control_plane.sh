@@ -36,6 +36,8 @@ const requireKeys = (object, required, label) => {
     assert(Object.prototype.hasOwnProperty.call(object, key), label + ': missing required field: ' + key);
   }
 };
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const sameStringArrays = (left, right) => left.length === right.length && left.every((item, index) => item === right[index]);
 
 for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {
   readJson(file);
@@ -80,6 +82,8 @@ assert(isStringArray(state.release_blocker_ids), '.agent/state.json: release_blo
 
 const requiredPlan = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'last_reground_at', 'plan_basis', 'candidate_slices'];
 const requiredSlice = ['slice_id', 'goal', 'acceptance_criteria', 'contract_ids', 'priority', 'status', 'why_now', 'blocked_on', 'evidence'];
+const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+const allowedSlice = [...requiredSlice, ...planMirrorFields];
 const sliceStatuses = ['planned', 'selected', 'in_progress', 'blocked', 'done', 'cancelled'];
 requireKeys(plan, requiredPlan, '.agent/plan.json');
 hasOnlyKeys(plan, requiredPlan, '.agent/plan.json');
@@ -90,7 +94,7 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   const label = '.agent/plan.json candidate_slices[' + index + ']';
   assert(isObject(slice), label + ' must be an object');
   requireKeys(slice, requiredSlice, label);
-  hasOnlyKeys(slice, requiredSlice, label);
+  hasOnlyKeys(slice, allowedSlice, label);
   assert(isString(slice.slice_id) && slice.slice_id.length > 0, label + ': slice_id must be a non-empty string');
   assert(isString(slice.goal) && slice.goal.length > 0, label + ': goal must be a non-empty string');
   assert(Array.isArray(slice.acceptance_criteria) && slice.acceptance_criteria.length > 0 && slice.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), label + ': acceptance_criteria must be a non-empty array of strings');
@@ -100,6 +104,14 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
   assert(isString(slice.why_now) && slice.why_now.length > 0, label + ': why_now must be a non-empty string');
   assert(isStringArray(slice.blocked_on), label + ': blocked_on must be an array of strings');
   assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
+  if (hasOwn(slice, 'locked_notes')) assert(isStringArray(slice.locked_notes), label + ': locked_notes must be an array of strings when present');
+  if (hasOwn(slice, 'must_fix_findings')) assert(isStringArray(slice.must_fix_findings), label + ': must_fix_findings must be an array of strings when present');
+  if (hasOwn(slice, 'implementation_surfaces')) assert(isStringArray(slice.implementation_surfaces), label + ': implementation_surfaces must be an array of strings when present');
+  if (hasOwn(slice, 'verification_commands')) assert(isStringArray(slice.verification_commands), label + ': verification_commands must be an array of strings when present');
+  if (hasOwn(slice, 'basis_commit')) assert(isNonEmptyString(slice.basis_commit), label + ': basis_commit must be a non-empty string when present');
+  if (hasOwn(slice, 'remaining_contract_ids_before')) assert(isStringArray(slice.remaining_contract_ids_before), label + ': remaining_contract_ids_before must be an array of strings when present');
+  if (hasOwn(slice, 'release_blocker_count_before')) assert(typeof slice.release_blocker_count_before === 'number' && Number.isFinite(slice.release_blocker_count_before), label + ': release_blocker_count_before must be a finite number when present');
+  if (hasOwn(slice, 'high_value_gap_count_before')) assert(typeof slice.high_value_gap_count_before === 'number' && Number.isFinite(slice.high_value_gap_count_before), label + ': high_value_gap_count_before must be a finite number when present');
 }
 
 const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
@@ -137,6 +149,36 @@ if (requiresExactHandoff) {
   assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
   assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
   assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');
+
+  const planSlice = plan.candidate_slices.find((slice) => isObject(slice) && slice.slice_id === active.slice_id);
+  assert(isObject(planSlice), '.agent/active-slice.json: slice_id must match a slice in .agent/plan.json when status carries an exact handoff');
+  const drift = [];
+  if (planSlice.goal !== active.goal) drift.push('goal');
+  if (!sameStringArrays(planSlice.contract_ids, active.contract_ids)) drift.push('contract_ids');
+  if (!sameStringArrays(planSlice.acceptance_criteria, active.acceptance_criteria)) drift.push('acceptance_criteria');
+  if (!sameStringArrays(planSlice.blocked_on, active.blocked_on)) drift.push('blocked_on');
+  if (planSlice.priority !== active.priority) drift.push('priority');
+  if (planSlice.why_now !== active.why_now) drift.push('why_now');
+
+  const expectPlanArrayMirror = (field) => {
+    if (!hasOwn(planSlice, field) || !sameStringArrays(planSlice[field], active[field])) drift.push(field);
+  };
+  const expectPlanStringMirror = (field) => {
+    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
+  };
+  const expectPlanNumberMirror = (field) => {
+    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
+  };
+
+  expectPlanArrayMirror('implementation_surfaces');
+  expectPlanArrayMirror('verification_commands');
+  expectPlanArrayMirror('locked_notes');
+  expectPlanArrayMirror('must_fix_findings');
+  expectPlanStringMirror('basis_commit');
+  expectPlanArrayMirror('remaining_contract_ids_before');
+  expectPlanNumberMirror('release_blocker_count_before');
+  expectPlanNumberMirror('high_value_gap_count_before');
+  assert(drift.length === 0, '.agent/active-slice.json must match the selected .agent/plan.json slice across: ' + Array.from(new Set(drift)).join(', '));
 } else {
   assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
   assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
