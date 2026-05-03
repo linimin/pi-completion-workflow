@@ -275,6 +275,35 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus 
 assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal replacement'
 PY
 
+# Active workflow: cancelling the replacement proposal should keep the current workflow and redirect
+# the user back to the main chat before rerunning /cook.
+SESSION_THREE_CANCEL="$TMPDIR/session-three-cancel.jsonl"
+DISCUSSION_THREE_CANCEL=$'Scope:\n- Keep the current workflow unchanged when replacement confirmation is cancelled.\nConstraints:\n- Do not rewrite canonical state after cancel.\nAcceptance:\n- Print rerun guidance.'
+write_session "$SESSION_THREE_CANCEL" "$ROOT" "$DISCUSSION_THREE_CANCEL"
+
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_THREE_CANCEL" -e "$PKG_ROOT" -p "/cook Cancelled replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-replacement-cancel.out" 2>"$TMPDIR/pi-completion-context-proposal-replacement-cancel.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-replacement-cancel.out" "$TMPDIR/pi-completion-context-proposal-replacement-cancel.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Explicit replacement mission for the active workflow.'
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+
+assert state['mission_anchor'] == mission, 'replacement proposal cancel should keep the existing mission anchor'
+assert plan['mission_anchor'] == mission, 'replacement proposal cancel should keep plan.json unchanged'
+assert active['mission_anchor'] == mission, 'replacement proposal cancel should keep active-slice.json unchanged'
+assert 'Discuss changes in the main chat and rerun /cook.' in output, 'replacement proposal cancel should redirect back to the main chat and rerun /cook'
+PY
+
 # Completed workflow again: /cook <goal> should start the next round directly from the explicit goal
 # even when analyst output is unavailable, without merging session-derived scope, constraints, or acceptance.
 mark_done
@@ -393,15 +422,15 @@ assert 'critique outcome=accepted critique=none' in continuation_reason, 'analys
 assert 'Keep explicit goals anchored.' in continuation_reason, 'analyst-derived scope should be preserved'
 PY
 
-# Custom confirmation UI: start should render proposal content separately from explicit Start/Edit/Cancel actions.
+# Custom confirmation UI: start should render proposal content separately from approval-only Start/Cancel actions.
 UI_ROOT_START="$TMPDIR/ui-root-start"
 mkdir -p "$UI_ROOT_START"
 cd "$UI_ROOT_START"
 git init -q
 
 UI_SESSION_START="$TMPDIR/ui-session-start.jsonl"
-UI_DISCUSSION_START=$'Mission: Replace the crowded selector with a clearer action layout.\nScope:\n- Separate proposal text from actions.\nConstraints:\n- Preserve Start/Edit/Cancel behavior.\nAcceptance:\n- Add regression coverage.'
-UI_ANALYST_OUTPUT_START='{"mission":"Replace the crowded selector with a clearer action layout.","scope":["Separate proposal text from actions."],"constraints":["Preserve Start/Edit/Cancel behavior."],"acceptance":["Add regression coverage."],"critique":["Keep critique details separate from the editable proposal body."],"risks":["Bundling critique into the action list would make the confirmation harder to scan."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","possible_noise":["old selector wording"],"confidence":0.95}'
+UI_DISCUSSION_START=$'Mission: Replace the crowded selector with a clearer action layout.\nScope:\n- Separate proposal text from actions.\nConstraints:\n- Preserve approval-only Start/Cancel behavior.\nAcceptance:\n- Add regression coverage.'
+UI_ANALYST_OUTPUT_START='{"mission":"Replace the crowded selector with a clearer action layout.","scope":["Separate proposal text from actions."],"constraints":["Preserve approval-only Start/Cancel behavior."],"acceptance":["Add regression coverage."],"critique":["Keep critique details separate from the approval-only proposal summary."],"risks":["Bundling critique into the action list would make the confirmation harder to scan."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","possible_noise":["old selector wording"],"confidence":0.95}'
 UI_SNAPSHOT_START="$TMPDIR/context-proposal-ui-start.json"
 write_session "$UI_SESSION_START" "$UI_ROOT_START" "$UI_DISCUSSION_START"
 
@@ -422,70 +451,37 @@ state = json.loads(Path('.agent/state.json').read_text())
 assert snapshot['proposalHeading'] == 'Proposed workflow', 'custom confirmation snapshot should expose a dedicated proposal section'
 assert snapshot['critiqueHeading'] == 'Critique and risks', 'custom confirmation snapshot should expose critique separately from the proposal body'
 assert snapshot['routingHeading'] == 'Routing recommendations', 'custom confirmation snapshot should expose routing recommendations separately from the proposal body'
+assert 'approval-only' in snapshot['intro'], 'custom confirmation intro should explain the approval-only gate'
 assert state['task_type'] == 'completion-workflow', 'start action should preserve canonical task_type'
 assert state['evaluation_profile'] == 'completion-rubric-v1', 'start action should preserve canonical evaluation_profile'
 assert 'Mission\nReplace the crowded selector with a clearer action layout.' in snapshot['proposalBody'], 'proposal body should be captured separately from the action list'
-assert 'Keep critique details separate from the editable proposal body.' not in snapshot['proposalBody'], 'critique notes should not be embedded in the proposal body'
-assert 'Critique\n- Keep critique details separate from the editable proposal body.' in snapshot['critiqueBody'], 'critique section should render accepted critique notes separately'
+assert 'Keep critique details separate from the approval-only proposal summary.' not in snapshot['proposalBody'], 'critique notes should not be embedded in the proposal body'
+assert 'Critique\n- Keep critique details separate from the approval-only proposal summary.' in snapshot['critiqueBody'], 'critique section should render accepted critique notes separately'
 assert 'Risks\n- Bundling critique into the action list would make the confirmation harder to scan.' in snapshot['critiqueBody'], 'critique section should render risk notes separately'
 assert 'Possible noise\n- old selector wording' in snapshot['critiqueBody'], 'critique section should render possible-noise notes separately'
 assert '- task_type: completion-workflow' in snapshot['routingBody'], 'routing section should render the recommended task_type'
 assert '- evaluation_profile: completion-rubric-v1' in snapshot['routingBody'], 'routing section should render the recommended evaluation_profile'
-assert [action['id'] for action in snapshot['actions']] == ['start', 'edit', 'cancel'], 'custom confirmation actions should stay Start/Edit/Cancel'
-assert [action['label'] for action in snapshot['actions']] == ['Start', 'Edit', 'Cancel'], 'custom confirmation action labels should be concise'
+assert [action['id'] for action in snapshot['actions']] == ['start', 'cancel'], 'custom confirmation actions should stay Start/Cancel only'
+assert [action['label'] for action in snapshot['actions']] == ['Start', 'Cancel'], 'custom confirmation action labels should be concise'
+assert 'Discuss changes in the main chat and rerun /cook.' in snapshot['actions'][1]['description'], 'cancel action should redirect users back to the main chat and rerun /cook'
 for action in snapshot['actions']:
     assert 'Replace the crowded selector with a clearer action layout.' not in action['label'], 'proposal mission should not be embedded in action labels'
     assert 'Separate proposal text from actions.' not in action['description'], 'proposal scope should not be embedded in action descriptions'
 assert state['mission_anchor'] == 'Replace the crowded selector with a clearer action layout.', 'start action should still accept the proposed mission'
 assert state['continuation_reason'].startswith('User started workflow via /cook:'), 'start action should persist the startup routing outcome in continuation_reason'
-assert 'Keep critique details separate from the editable proposal body.' in state['continuation_reason'], 'start action should persist the accepted critique outcome canonically'
+assert 'Keep critique details separate from the approval-only proposal summary.' in state['continuation_reason'], 'start action should persist the accepted critique outcome canonically'
 PY
 
-# Custom confirmation UI: edit should keep the existing editor/parsing flow when the action comes from the new layout.
-UI_ROOT_EDIT="$TMPDIR/ui-root-edit"
-mkdir -p "$UI_ROOT_EDIT"
-cd "$UI_ROOT_EDIT"
-git init -q
-
-UI_SESSION_EDIT="$TMPDIR/ui-session-edit.jsonl"
-UI_DISCUSSION_EDIT=$'Mission: Keep editing support in the custom confirmation UI.\nScope:\n- Preserve the proposal editor.\nConstraints:\n- Keep parsing structured proposal text.\nAcceptance:\n- Update the mission anchor after edit.'
-UI_ANALYST_OUTPUT_EDIT='{"mission":"Keep editing support in the custom confirmation UI.","scope":["Preserve the proposal editor."],"constraints":["Keep parsing structured proposal text."],"acceptance":["Update the mission anchor after edit."],"critique":["Keep critique persistence even when the operator edits the proposal body."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.94}'
-UI_EDIT_TEXT=$'Mission: Edited mission from the custom confirmation UI.\nScope:\n- Preserve parsing after edit.\nConstraints:\n- Keep the shared confirmation flow.\nAcceptance:\n- Start the workflow from the edited proposal.'
-write_session "$UI_SESSION_EDIT" "$UI_ROOT_EDIT" "$UI_DISCUSSION_EDIT"
-
-PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_ACTION=edit \
-PI_COMPLETION_CONTEXT_PROPOSAL_EDIT_TEXT="$UI_EDIT_TEXT" \
-PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$UI_ANALYST_OUTPUT_EDIT" \
-PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$UI_SESSION_EDIT" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-ui-edit.out" 2>"$TMPDIR/pi-completion-context-proposal-ui-edit.err"
-
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-state = json.loads(Path('.agent/state.json').read_text())
-plan = json.loads(Path('.agent/plan.json').read_text())
-active = json.loads(Path('.agent/active-slice.json').read_text())
-mission = 'Edited mission from the custom confirmation UI.'
-
-assert state['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update state.json'
-assert state['task_type'] == 'completion-workflow', 'edit action should preserve canonical task_type'
-assert state['evaluation_profile'] == 'completion-rubric-v1', 'edit action should preserve canonical evaluation_profile'
-assert plan['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update plan.json'
-assert active['mission_anchor'] == mission, 'edit action should still route through the proposal parser and update active-slice.json'
-assert state['current_phase'] == 'reground', 'edit action should still bootstrap/reground the workflow'
-assert 'Keep critique persistence even when the operator edits the proposal body.' in state['continuation_reason'], 'edit action should preserve the accepted critique outcome canonically'
-PY
-
-# Custom confirmation UI: cancel should exit without writing canonical state.
+# Custom confirmation UI: cancel should exit without writing canonical state and should tell the user
+# to discuss changes in the main chat before rerunning /cook.
 UI_ROOT_CANCEL="$TMPDIR/ui-root-cancel"
 mkdir -p "$UI_ROOT_CANCEL"
 cd "$UI_ROOT_CANCEL"
 git init -q
 
 UI_SESSION_CANCEL="$TMPDIR/ui-session-cancel.jsonl"
-UI_DISCUSSION_CANCEL=$'Mission: Cancel from the custom confirmation UI without writing state.\nScope:\n- Show the proposal separately from the actions.\nConstraints:\n- Keep cancellation side-effect free.\nAcceptance:\n- Leave .agent absent after cancel.'
-UI_ANALYST_OUTPUT_CANCEL='{"mission":"Cancel from the custom confirmation UI without writing state.","scope":["Show the proposal separately from the actions."],"constraints":["Keep cancellation side-effect free."],"acceptance":["Leave .agent absent after cancel."],"confidence":0.92}'
+UI_DISCUSSION_CANCEL=$'Mission: Cancel from the custom confirmation UI without writing state.\nScope:\n- Show the proposal separately from the approval-only actions.\nConstraints:\n- Keep cancellation side-effect free.\nAcceptance:\n- Leave .agent absent after cancel.'
+UI_ANALYST_OUTPUT_CANCEL='{"mission":"Cancel from the custom confirmation UI without writing state.","scope":["Show the proposal separately from the approval-only actions."],"constraints":["Keep cancellation side-effect free."],"acceptance":["Leave .agent absent after cancel."],"confidence":0.92}'
 UI_SNAPSHOT_CANCEL="$TMPDIR/context-proposal-ui-cancel.json"
 write_session "$UI_SESSION_CANCEL" "$UI_ROOT_CANCEL" "$UI_DISCUSSION_CANCEL"
 
@@ -495,13 +491,18 @@ PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$UI_ANALYST_OUTPUT_CANCEL" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$UI_SESSION_CANCEL" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-ui-cancel.out" 2>"$TMPDIR/pi-completion-context-proposal-ui-cancel.err"
 
-python3 - "$UI_SNAPSHOT_CANCEL" <<'PY'
+python3 - "$UI_SNAPSHOT_CANCEL" "$TMPDIR/pi-completion-context-proposal-ui-cancel.out" "$TMPDIR/pi-completion-context-proposal-ui-cancel.err" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 snapshot = json.loads(Path(sys.argv[1]).read_text())
-assert [action['id'] for action in snapshot['actions']] == ['start', 'edit', 'cancel'], 'cancel snapshot should still expose Start/Edit/Cancel actions'
+output = Path(sys.argv[2]).read_text() + Path(sys.argv[3]).read_text()
+assert 'approval-only' in snapshot['intro'], 'cancel snapshot should keep the approval-only intro'
+assert [action['id'] for action in snapshot['actions']] == ['start', 'cancel'], 'cancel snapshot should expose Start/Cancel actions only'
+assert [action['label'] for action in snapshot['actions']] == ['Start', 'Cancel'], 'cancel snapshot should keep concise Start/Cancel labels'
+assert 'Discuss changes in the main chat and rerun /cook.' in snapshot['actions'][1]['description'], 'cancel action copy should redirect users back to the main chat and rerun /cook'
+assert 'Discuss changes in the main chat and rerun /cook.' in output, 'cancel command output should redirect users back to the main chat and rerun /cook'
 assert not Path('.agent').exists(), 'cancel action should not write canonical workflow state'
 PY
 

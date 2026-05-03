@@ -10,6 +10,8 @@
 - fixed the smoke auto-resume prompt regression so the packaged release check writes `auto-resume-prompt.txt` again and passes on clean HEAD
 - promoted `.agent/active-slice.json` to implementation-contract v2 across implementer instructions, fail-closed active-vs-plan parity checks, recovery/reminder surfaces, and a dedicated release-gated regression
 - added durable canonical verification evidence at `.agent/verification-evidence.json`, threaded it through docs and recovery surfaces, and made release/stop verification fail closed on missing, stale, wrong-head, or protocol-doc-drift evidence artifacts
+- made `/cook` startup and replacement confirmation approval-only by removing inline Edit and mission-anchor editing paths; the proposal gate now offers only Start or Cancel, and cancel points users back to the main chat before rerunning `/cook`
+- kept the separate existing-workflow chooser (`Continue current workflow` / `Abandon current workflow and start this new one` / `Cancel`) while updating the replacement path, README, and deterministic context/refocus regressions to match the new approval-only gate truthfully
 
 ## 0.1.33
 

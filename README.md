@@ -65,7 +65,7 @@ Start the next round after the previous workflow is already done:
 | Repo state | `/cook` | `/cook <goal>` |
 |---|---|---|
 | No canonical workflow yet | Uses the proposal analyst to summarize recent discussion into a startup proposal, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, optionally enriching it from recent discussion, then asks for confirmation |
-| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | Asks whether to continue the current workflow or replace it |
+| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | First asks whether to continue the current workflow or replace it, then uses a final Start/Cancel approval gate before any replacement state is written |
 | Previous workflow is already `done` | Uses the proposal analyst to summarize recent discussion into the next workflow round, then asks for confirmation | Starts the next workflow round directly from the explicit goal |
 
 ## Startup proposal behavior
@@ -89,7 +89,7 @@ Example:
 When you do **not** provide a goal:
 
 - `/cook` uses the proposal analyst to summarize recent discussion into a startup proposal
-- the proposal is shown in a custom confirmation UI before canonical state is written
+- the proposal is shown in a custom approval-only confirmation UI before canonical state is written
 - if analyst output is unavailable, provide an explicit goal with `/cook <goal>`
 
 Example:
@@ -100,20 +100,28 @@ Example:
 
 ## Confirmation UI
 
-Startup confirmation uses a custom UI that:
+Startup and replacement confirmation use a custom approval-only UI that:
 
 - renders the proposal body separately from the action list
 - keeps Mission / Scope / Constraints / Acceptance readable as a content area
-- renders analyst-derived **Critique and risks** separately from the editable proposal body
+- renders analyst-derived **Critique and risks** separately from the non-editable proposal body
 - renders recommended `task_type` / `evaluation_profile` routing hints separately from both the proposal body and the action list
 - presents explicit actions for:
   - **Start**
-  - **Edit**
   - **Cancel**
+- treats the proposal as approval-only: if it needs changes, Cancel, discuss them in the main chat, and rerun `/cook`
+
+When an active workflow already exists and you run `/cook <goal>`, `/cook` still shows a separate chooser first:
+
+- **Continue current workflow**
+- **Abandon current workflow and start this new one**
+- **Cancel**
+
+Only the follow-on startup/replacement proposal uses the approval-only Start/Cancel gate.
 
 When you accept startup or refocus from that flow, `/cook` now persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
 
-The same confirmation flow is reused across:
+The same approval-only confirmation flow is reused across:
 
 - discussion-only startup
 - explicit-goal startup

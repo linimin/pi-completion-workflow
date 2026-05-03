@@ -34,6 +34,37 @@ print(state['mission_anchor'])
 PY
 )"
 
+CHOOSER_SNAPSHOT="$TMPDIR/existing-workflow-chooser.json"
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$CHOOSER_SNAPSHOT" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi -e "$PKG_ROOT" -p "/cook replacement mission that should stay in the main chat" \
+  >/tmp/pi-completion-refocus-cancel.out 2>/tmp/pi-completion-refocus-cancel.err
+
+python3 - "$CHOOSER_SNAPSHOT" "/tmp/pi-completion-refocus-cancel.out" "/tmp/pi-completion-refocus-cancel.err" "$INITIAL_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+chooser = json.loads(Path(sys.argv[1]).read_text())
+output = Path(sys.argv[2]).read_text() + Path(sys.argv[3]).read_text()
+initial_mission = sys.argv[4]
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert state['mission_anchor'] == initial_mission, 'cancelled chooser should keep the current mission anchor'
+assert plan['mission_anchor'] == initial_mission, 'cancelled chooser should keep plan.json unchanged'
+assert active['mission_anchor'] == initial_mission, 'cancelled chooser should keep active-slice.json unchanged'
+assert chooser['title'].startswith('Existing completion workflow found'), 'chooser snapshot should describe the existing-workflow prompt'
+assert chooser['choices'][0].startswith('Continue current workflow'), 'chooser should keep the continue option'
+assert chooser['choices'][1].startswith('Abandon current workflow and start this new one'), 'chooser should keep the refocus option'
+assert 'Start/Cancel confirmation' in chooser['choices'][1], 'chooser should mention the approval-only replacement confirmation'
+assert chooser['choices'][2].startswith('Cancel'), 'chooser should keep the cancel option'
+assert 'Discuss changes in the main chat and rerun /cook.' in chooser['choices'][2], 'chooser cancel copy should redirect users back to the main chat and rerun /cook'
+assert 'Discuss changes in the main chat and rerun /cook.' in output, 'chooser cancel output should redirect users back to the main chat and rerun /cook'
+PY
+
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi -e "$PKG_ROOT" -p "/cook refocused smoke-test mission with tests and docs" \

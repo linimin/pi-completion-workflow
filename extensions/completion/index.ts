@@ -148,7 +148,7 @@ type ContextProposalDecision = {
 	analysis: ContextProposalAnalysis;
 };
 
-type ContextProposalConfirmAction = "start" | "edit" | "cancel";
+type ContextProposalConfirmAction = "start" | "cancel";
 
 type ContextProposalConfirmationActionItem = {
 	id: ContextProposalConfirmAction;
@@ -173,7 +173,6 @@ type ContextProposalConfirmationLayout = {
 type ContextProposalConfirmOptions = {
 	title: string;
 	nonInteractiveBehavior?: "accept" | "cancel";
-	editorPrompt?: string;
 };
 
 class StartupAnalystOverlay extends Container {
@@ -454,92 +453,37 @@ function isWeakMissionAnchor(value: string): boolean {
 
 type MissionAnchorAssessment = {
 	derived: string;
-	needsConfirmation: boolean;
-	reason?: string;
 };
 
 function assessMissionAnchor(rawGoal: string, projectName: string): MissionAnchorAssessment {
-	const normalized = normalizeMissionAnchorText(rawGoal);
-	const derived = deriveMissionAnchor(rawGoal, projectName);
-	if (!normalized) {
-		return {
-			derived,
-			needsConfirmation: true,
-			reason: "No meaningful goal text was provided.",
-		};
-	}
-	if (isWeakMissionAnchor(normalized)) {
-		return {
-			derived,
-			needsConfirmation: true,
-			reason: "The goal is too short or vague for stable canonical workflow state.",
-		};
-	}
-	const vaguePronouns = /\b(this|that|it|things|stuff|something)\b/i.test(normalized);
-	const fallback = derived === `Drive ${projectName} to truthful, verifiable completion.`;
-	if (fallback || vaguePronouns) {
-		return {
-			derived,
-			needsConfirmation: true,
-			reason: fallback
-				? "The initial goal was too ambiguous, so the workflow fell back to a generic repo-based mission."
-				: "The goal still contains ambiguous references that are better confirmed before writing canonical state.",
-		};
-	}
-	return { derived, needsConfirmation: false };
-}
-
-async function confirmMissionAnchor(
-	ctx: { hasUI: boolean; ui: any },
-	assessment: MissionAnchorAssessment,
-): Promise<string | undefined> {
-	if (!getCtxHasUI(ctx)) return assessment.derived;
-	const ui = getCtxUi(ctx);
-	if (!ui) return assessment.derived;
-	if (!assessment.needsConfirmation) return assessment.derived;
-	const title = "Confirm mission anchor";
-	const reason = assessment.reason ? `${assessment.reason}\n\n` : "";
-	const choice = await ui.select(
-		title,
-		[
-			`${reason}Proposed mission anchor:\n${assessment.derived}\n\nUse proposed mission anchor`,
-			"Edit mission anchor",
-			"Cancel",
-		],
-	);
-	if (!choice || choice === "Cancel") return undefined;
-	if (choice === "Edit mission anchor") {
-		const edited = await ui.editor(title, assessment.derived);
-		return edited?.trim() ? edited.trim() : undefined;
-	}
-	return assessment.derived;
+	return { derived: deriveMissionAnchor(rawGoal, projectName) };
 }
 
 type ExistingWorkflowDecision =
 	| { action: "continue"; currentMissionAnchor: string }
 	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string };
 
-function completionTestWorkflowActionOverride(): "continue" | "refocus" | undefined {
+function completionTestWorkflowActionOverride(): "continue" | "refocus" | "cancel" | undefined {
 	const raw = process.env.PI_COMPLETION_EXISTING_WORKFLOW_ACTION?.trim().toLowerCase();
-	return raw === "continue" || raw === "refocus" ? raw : undefined;
+	return raw === "continue" || raw === "refocus" || raw === "cancel" ? raw : undefined;
 }
 
 function shouldSkipDriverKickoffForTests(): boolean {
 	return process.env.PI_COMPLETION_SKIP_DRIVER_KICKOFF === "1";
 }
 
-function completionTestContextProposalActionOverride(): "accept" | "edit" | "cancel" | undefined {
+function completionTestContextProposalActionOverride(): "accept" | "cancel" | undefined {
 	const raw = process.env.PI_COMPLETION_CONTEXT_PROPOSAL_ACTION?.trim().toLowerCase();
-	return raw === "accept" || raw === "edit" || raw === "cancel" ? raw : undefined;
-}
-
-function completionTestContextProposalEditText(): string | undefined {
-	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_EDIT_TEXT);
+	return raw === "accept" || raw === "cancel" ? raw : undefined;
 }
 
 function completionTestContextProposalUiActionOverride(): ContextProposalConfirmAction | undefined {
 	const raw = process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_ACTION?.trim().toLowerCase();
-	return raw === "start" || raw === "edit" || raw === "cancel" ? raw : undefined;
+	return raw === "start" || raw === "cancel" ? raw : undefined;
+}
+
+function completionTestExistingWorkflowChooserSnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH);
 }
 
 function completionTestContextProposalUiSnapshotPath(): string | undefined {
@@ -574,6 +518,12 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 	} catch {
 		// ignore malformed or unwritable test snapshot paths
 	}
+}
+
+const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
+
+function buildCookCancellationMessage(prefix: string): string {
+	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
 }
 
 function shouldDisableContextProposalAnalyst(): boolean {
@@ -1226,14 +1176,9 @@ function buildContextProposalConfirmationActions(): ContextProposalConfirmationA
 			description: "Accept this proposal and let /cook write or refocus canonical workflow state.",
 		},
 		{
-			id: "edit",
-			label: "Edit",
-			description: "Open the existing proposal editor before starting the workflow.",
-		},
-		{
 			id: "cancel",
 			label: "Cancel",
-			description: "Exit without changing canonical workflow state.",
+			description: `Stop here without changing canonical workflow state. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`,
 		},
 	];
 }
@@ -1245,7 +1190,7 @@ function buildContextProposalConfirmationLayout(
 	const analysis = finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]);
 	return {
 		title,
-		intro: "Review the proposed mission, scope, constraints, acceptance, critique, and routing details before /cook writes canonical workflow state.",
+		intro: "Review the proposed mission, scope, constraints, acceptance, critique, and routing details before /cook writes canonical workflow state. This gate is approval-only: either Start it as-is or Cancel, discuss changes in the main chat, and rerun /cook.",
 		proposalHeading: "Proposed workflow",
 		proposalBody: buildContextProposalDisplayText(proposal),
 		critiqueHeading: "Critique and risks",
@@ -1341,60 +1286,16 @@ async function promptContextProposalConfirmationAction(
 	});
 }
 
-async function resolveEditedContextProposalDecision(
-	ctx: { hasUI: boolean; ui: any },
-	projectName: string,
-	editedText: string,
-	confirmMissionWhenNeeded: boolean,
-	fallbackAnalysis?: ContextProposalAnalysis,
-): Promise<ContextProposalDecision | undefined> {
-	if (!editedText.trim()) return undefined;
-	const editedProposal = parseContextProposal(editedText, projectName);
-	if (editedProposal) {
-		return {
-			missionAnchor: editedProposal.mission,
-			goalText: editedProposal.goalText,
-			analysis: finalizeContextProposalAnalysis(
-				mergeContextProposalAnalysis([editedProposal.analysis, fallbackAnalysis], [editedText, editedProposal.mission]),
-				[editedText, editedProposal.mission],
-			),
-		};
-	}
-	const assessment = assessMissionAnchor(editedText, projectName);
-	const analysis = finalizeContextProposalAnalysis(fallbackAnalysis, [editedText, assessment.derived]);
-	if (!confirmMissionWhenNeeded) {
-		return { missionAnchor: assessment.derived, goalText: editedText.trim(), analysis };
-	}
-	const missionAnchor = await confirmMissionAnchor(ctx, assessment);
-	if (!missionAnchor) return undefined;
-	return { missionAnchor, goalText: editedText.trim(), analysis };
-}
-
 async function resolveContextProposalConfirmationAction(
-	ctx: { hasUI: boolean; ui: any },
 	proposal: ContextProposal,
-	projectName: string,
-	options: ContextProposalConfirmOptions,
 	action: ContextProposalConfirmAction,
-	editedTextOverride?: string,
 ): Promise<ContextProposalDecision | undefined> {
 	if (action === "cancel") return undefined;
-	const analysis = finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]);
-	if (action === "start") {
-		return { missionAnchor: proposal.mission, goalText: proposal.goalText, analysis };
-	}
-	const editedText =
-		editedTextOverride ??
-		(await getCtxUi(ctx)?.editor(
-			options.editorPrompt ?? `${options.title}\n\nEdit the proposed mission, scope, constraints, and acceptance details below.`,
-			buildContextProposalEditorText(proposal),
-		));
-	if (!editedText?.trim()) return undefined;
-	return await resolveEditedContextProposalDecision(ctx, projectName, editedText, editedTextOverride === undefined, analysis);
-}
-
-function buildContextProposalEditorText(proposal: ContextProposal): string {
-	return buildContextProposalGoalText(proposal);
+	return {
+		missionAnchor: proposal.mission,
+		goalText: proposal.goalText,
+		analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
+	};
 }
 
 function parseContextProposal(text: string, projectName: string): ContextProposal | undefined {
@@ -1586,65 +1487,34 @@ async function buildGoalAnchoredContextProposal(
 async function confirmContextProposal(
 	ctx: { hasUI: boolean; ui: any },
 	proposal: ContextProposal,
-	projectName: string,
 	options: ContextProposalConfirmOptions,
 ): Promise<ContextProposalDecision | undefined> {
 	maybeWriteContextProposalSnapshot(proposal);
 	const actionOverride = completionTestContextProposalActionOverride();
 	if (actionOverride === "cancel") return undefined;
 	if (actionOverride === "accept") {
-		return {
-			missionAnchor: proposal.mission,
-			goalText: proposal.goalText,
-			analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
-		};
-	}
-	if (actionOverride === "edit") {
-		const editedText = completionTestContextProposalEditText();
-		if (!editedText) return undefined;
-		return await resolveEditedContextProposalDecision(
-			ctx,
-			projectName,
-			editedText,
-			false,
-			finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
-		);
+		return await resolveContextProposalConfirmationAction(proposal, "start");
 	}
 	const layout = buildContextProposalConfirmationLayout(options.title, proposal);
 	maybeWriteContextProposalConfirmationSnapshot(layout);
 	const uiActionOverride = completionTestContextProposalUiActionOverride();
 	if (uiActionOverride) {
-		return await resolveContextProposalConfirmationAction(
-			ctx,
-			proposal,
-			projectName,
-			options,
-			uiActionOverride,
-			uiActionOverride === "edit" ? completionTestContextProposalEditText() : undefined,
-		);
+		return await resolveContextProposalConfirmationAction(proposal, uiActionOverride);
 	}
 	if (!getCtxHasUI(ctx)) {
 		return options.nonInteractiveBehavior === "accept"
-			? {
-				missionAnchor: proposal.mission,
-				goalText: proposal.goalText,
-				analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
-			}
+			? await resolveContextProposalConfirmationAction(proposal, "start")
 			: undefined;
 	}
 	const ui = getCtxUi(ctx);
 	if (!ui) {
 		return options.nonInteractiveBehavior === "accept"
-			? {
-				missionAnchor: proposal.mission,
-				goalText: proposal.goalText,
-				analysis: finalizeContextProposalAnalysis(proposal.analysis, [proposal.goalText, proposal.mission]),
-			}
+			? await resolveContextProposalConfirmationAction(proposal, "start")
 			: undefined;
 	}
 	const choice = await promptContextProposalConfirmationAction(ui, layout);
 	if (!choice) return undefined;
-	return await resolveContextProposalConfirmationAction(ctx, proposal, projectName, options, choice);
+	return await resolveContextProposalConfirmationAction(proposal, choice);
 }
 
 function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
@@ -1897,20 +1767,6 @@ async function confirmExistingWorkflowGoal(
 	if (!normalizedGoal || normalizedGoal === normalizedCurrent || normalizedProposed === normalizedCurrent) {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
-	const actionOverride = completionTestWorkflowActionOverride();
-	if (actionOverride === "continue") {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	if (actionOverride === "refocus") {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
-	}
-	if (!getCtxHasUI(ctx)) {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	const ui = getCtxUi(ctx);
-	if (!ui) {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
 	const title = [
 		"Existing completion workflow found",
 		"",
@@ -1923,14 +1779,32 @@ async function confirmExistingWorkflowGoal(
 		assessment.derived,
 	].join("\n");
 	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new goal as extra direction only.";
-	const refocusChoice = "Abandon current workflow and start this new one\n\nReplace the current mission with the new goal, then rebuild canonical state from that new direction.";
-	const cancelChoice = "Cancel\n\nExit without changing the current workflow.";
+	const refocusChoice =
+		"Abandon current workflow and start this new one\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.";
+	const cancelChoice = `Cancel\n\nKeep the current workflow unchanged. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
+	maybeWriteTestSnapshot(
+		completionTestExistingWorkflowChooserSnapshotPath(),
+		`${JSON.stringify({ title, choices: [continueChoice, refocusChoice, cancelChoice] }, null, 2)}\n`,
+	);
+	const actionOverride = completionTestWorkflowActionOverride();
+	if (actionOverride === "continue") {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	if (actionOverride === "refocus") {
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
+	}
+	if (actionOverride === "cancel") return undefined;
+	if (!getCtxHasUI(ctx)) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	const ui = getCtxUi(ctx);
+	if (!ui) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
 	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
 	if (!choice || choice === cancelChoice) return undefined;
 	if (choice === refocusChoice) {
-		const missionAnchor = await confirmMissionAnchor(ctx, assessment);
-		if (!missionAnchor) return undefined;
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor };
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
 	}
 	return { action: "continue", currentMissionAnchor: currentMission };
 }
@@ -3903,13 +3777,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 						);
 						return;
 					}
-					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "Start a completion workflow from the recent discussion?",
-						editorPrompt:
-							"Start a completion workflow from the recent discussion?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
 					});
 					if (!decision) {
-						emitCommandText(ctx, "Cancelled recent-discussion workflow proposal", "info");
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal"), "info");
 						return;
 					}
 					goal = decision.goalText;
@@ -3917,14 +3789,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					kickoffAnalysis = decision.analysis;
 				} else {
 					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
-					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "Start a completion workflow from this goal?",
 						nonInteractiveBehavior: "accept",
-						editorPrompt:
-							"Start a completion workflow from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
 					});
 					if (!decision) {
-						emitCommandText(ctx, "Cancelled workflow startup proposal", "info");
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled workflow startup proposal"), "info");
 						return;
 					}
 					goal = decision.goalText;
@@ -3963,13 +3833,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 						);
 						return;
 					}
-					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
-						editorPrompt:
-							"The previous completion workflow is done. Start the next workflow round from the recent discussion?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
 					});
 					if (!decision) {
-						emitCommandText(ctx, "Cancelled next workflow round proposal", "info");
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal"), "info");
 						return;
 					}
 					goal = decision.goalText;
@@ -4003,14 +3871,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
 					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
-					const decision = await confirmContextProposal(ctx, proposal, projectName, {
+					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "Start the next workflow round from this goal?",
 						nonInteractiveBehavior: "accept",
-						editorPrompt:
-							"Start the next workflow round from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
 					});
 					if (!decision) {
-						emitCommandText(ctx, "Cancelled next workflow round proposal", "info");
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal"), "info");
 						return;
 					}
 					goal = decision.goalText;
@@ -4022,7 +3888,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				} else {
 					const decision = await confirmExistingWorkflowGoal(ctx, snapshot, goal);
 					if (!decision) {
-						emitCommandText(ctx, "Cancelled existing workflow confirmation", "info");
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
 						return;
 					}
 					kickoffIntent = decision.action;
@@ -4030,14 +3896,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 					if (decision.action === "refocus") {
 						const projectName = path.basename(snapshot.files.root);
 						const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
-						const proposalDecision = await confirmContextProposal(ctx, proposal, projectName, {
+						const proposalDecision = await confirmContextProposal(ctx, proposal, {
 							title: "Start the replacement workflow from this goal?",
 							nonInteractiveBehavior: "accept",
-							editorPrompt:
-								"Start the replacement workflow from this goal?\n\nEdit the proposed mission, scope, constraints, and acceptance details below.",
 						});
 						if (!proposalDecision) {
-							emitCommandText(ctx, "Cancelled replacement workflow proposal", "info");
+							emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
 							return;
 						}
 						goal = proposalDecision.goalText;
