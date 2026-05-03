@@ -3516,7 +3516,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const task = typeof args.task === "string" ? args.task.trim() : "";
 			let text = theme.fg("toolTitle", theme.bold("completion_role ")) + theme.fg("accent", role);
 			if (task) {
-				text += `\n${theme.fg("dim", task)}`;
+				text += `\n${theme.fg("muted", task)}`;
 			}
 			return new Text(text, 0, 0);
 		},
@@ -3549,21 +3549,21 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const role = details.role ?? "completion-role";
 			const ok = details.status === "ok" && !result.isError;
 			let text = `${theme.fg(ok ? "success" : "error", ok ? "done" : "error")} ${theme.fg("toolTitle", theme.bold(role))}`;
-			if (details.startedAt !== undefined) text += `\n${theme.fg("dim", `elapsed: ${formatElapsed(nowMs() - details.startedAt)}`)}`;
+			if (details.startedAt !== undefined) text += `\n${theme.fg("muted", `elapsed: ${formatElapsed(nowMs() - details.startedAt)}`)}`;
 			if (details.toolActivity) text += `\n${theme.fg("toolOutput", `tool: ${details.toolActivity}`)}`;
 			if (details.progress) text += `\n${theme.fg("toolOutput", `progress: ${details.progress}`)}`;
 			else if (details.assistantSummary) text += `\nassistant: ${details.assistantSummary}`;
-			if (details.rationale) text += `\n${theme.fg("dim", `rationale: ${details.rationale}`)}`;
+			if (details.rationale) text += `\n${theme.fg("muted", `rationale: ${details.rationale}`)}`;
 			if (details.nextStep) text += `\n${theme.fg("muted", `next: ${details.nextStep}`)}`;
 			if (details.verifying) text += `\n${theme.fg("muted", `verifying: ${details.verifying}`)}`;
 			if (details.stateDeltas?.length) {
-				for (const delta of details.stateDeltas.slice(-4)) text += `\n${theme.fg("dim", `state-delta: ${delta}`)}`;
+				for (const delta of details.stateDeltas.slice(-4)) text += `\n${theme.fg("muted", `state-delta: ${delta}`)}`;
 			}
 			if (details.transcription?.appended?.length) {
 				text += `\n${theme.fg("success", `transcribed: ${details.transcription.appended.join(", ")}`)}`;
 			}
 			if (details.transcription?.skipped?.length && expanded) {
-				text += `\n${theme.fg("dim", `skipped: ${details.transcription.skipped.join(" | ")}`)}`;
+				text += `\n${theme.fg("muted", `skipped: ${details.transcription.skipped.join(" | ")}`)}`;
 			}
 			if (details.transcription?.errors?.length) {
 				text += `\n${theme.fg("warning", `warnings: ${details.transcription.errors.join(" | ")}`)}`;
@@ -3581,14 +3581,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 			for (const key of summaryKeys) {
 				const value = reportFields[key];
 				if (!value) continue;
-				text += `\n${theme.fg("dim", `${key}: `)}${value}`;
+				text += `\n${theme.fg("muted", `${key}: `)}${value}`;
 			}
 			const body = result.content.find((item) => item.type === "text");
 			if (expanded && body?.type === "text") {
 				text += `\n\n${body.text}`;
 			} else if (!expanded && body?.type === "text") {
 				const preview = body.text.split("\n").slice(0, 4).join("\n");
-				text += `\n${theme.fg("dim", preview)}`;
+				text += `\n${theme.fg("muted", preview)}`;
 			}
 			if (details.stderr && expanded) text += `\n${theme.fg("error", details.stderr)}`;
 			return new Text(text, 0, 0);
