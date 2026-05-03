@@ -1946,10 +1946,6 @@ function deriveMissionAnchor(rawGoal: string, projectName: string): string {
 		.replace(/\bwith docs\b/gi, "with docs parity")
 		.trim();
 
-	if (mission.length > 120) {
-		mission = `${mission.slice(0, 117).trimEnd()}...`;
-	}
-
 	if (!/[.!?。！？]$/u.test(mission)) mission += ".";
 	return mission;
 }
