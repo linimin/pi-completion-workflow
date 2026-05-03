@@ -167,6 +167,20 @@ active = {
 Path('.agent/state.json').write_text(json.dumps(state, indent=2) + '\n')
 Path('.agent/plan.json').write_text(json.dumps(plan, indent=2) + '\n')
 Path('.agent/active-slice.json').write_text(json.dumps(active, indent=2) + '\n')
+Path('.agent/verification-evidence.json').write_text(json.dumps({
+    'schema_version': 1,
+    'artifact_type': 'completion-verification-evidence',
+    'subject_type': 'selected_slice',
+    'slice_id': active['slice_id'],
+    'goal': active['goal'],
+    'contract_ids': active['contract_ids'],
+    'basis_commit': active['basis_commit'],
+    'head_sha': active['basis_commit'],
+    'verification_commands': verification_commands,
+    'outcome': 'passed',
+    'recorded_at': '2026-05-03T00:00:00Z',
+    'summary': 'Fixture evidence matches the selected active-slice contract.',
+}, indent=2) + '\n')
 PY
 
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \

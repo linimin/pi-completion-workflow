@@ -18,6 +18,7 @@ It gives you:
 
 - **one command** for start, resume, and refocus
 - **repo-local canonical state** under `.agent/**`
+- **durable canonical verification evidence** in `.agent/verification-evidence.json`
 - **model-assisted startup proposals** from recent discussion
 - **explicit-goal anchoring** when you want the mission to stay fixed
 - **isolated completion roles** via `completion_role`
@@ -177,6 +178,8 @@ The selected plan slice must mirror that exact contract across goal, contract ID
 
 Reviewer, auditor, and stop-judge dispatch/reminder surfaces now also thread the current active-slice implementation contract (`implementation_surfaces`, `verification_commands`, locked notes, must-fix findings, `basis_commit`, and before-slice counters) alongside the canonical `evaluation_profile` so those read-only roles can reason from canonical state after compaction.
 
+Deterministic verification now also persists a durable canonical artifact in `.agent/verification-evidence.json`. Fresh scaffolds create an idle placeholder, implementers update it for the selected slice or current HEAD, reminder/recovery/evaluation surfaces thread its path and summary, and `.agent/verify_completion_control_plane.sh`, `bash scripts/canonical-evidence-artifact-test.sh`, `npm run release-check`, and `bash .agent/verify_completion_stop.sh` fail closed when that artifact is missing, stale, or out of parity with the selected slice or current HEAD.
+
 Canonical reviewer/auditor/stop-judge transcription now fails closed on malformed rubric-bearing reports: the shared rubric heading plus all four rubric dimensions must be present, required role fields must remain intact, and reviewer/stop-judge yes/no verdicts cannot contradict rubric `fail` lines.
 
 Evaluator calibration now also fails closed on semantically lenient but well-formed reports. `npm run evaluator-calibration-test` drives the packaged transcription path through reviewer yes-with-follow-up, auditor open-contracts-with-`Next mandatory slice: none`, and stop-judge yes-with-open-contracts fixtures while still accepting truthful passing reports. It also rejects the reproducible `none; ...` bypass family for reviewer follow-up, auditor worktree blockers, and stop-judge open-contract reporting, while still accepting only the exact reviewer routing text `Smallest follow-up slice: none; proceed to completion-auditor.` with terminal punctuation or whitespace only. Both `npm run release-check` and `bash .agent/verify_completion_stop.sh` include this calibration gate.
@@ -201,6 +204,7 @@ This package stores canonical workflow state under:
   active-slice.json
   slice-history.jsonl
   stop-check-history.jsonl
+  verification-evidence.json
   tmp/
 ```
 
@@ -226,6 +230,7 @@ Ignored execution-state files:
 - `.agent/active-slice.json`
 - `.agent/slice-history.jsonl`
 - `.agent/stop-check-history.jsonl`
+- `.agent/verification-evidence.json`
 - `.agent/*.log`
 - `.agent/tmp/`
 
@@ -249,13 +254,14 @@ Run validation from the package root:
 npm run smoke-test
 npm run refocus-test
 npm run context-proposal-test
+bash scripts/canonical-evidence-artifact-test.sh
 npm run observability-status-test
 npm run evaluator-calibration-test
 npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 ## Release
 

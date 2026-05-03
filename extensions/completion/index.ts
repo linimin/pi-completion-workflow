@@ -50,6 +50,7 @@ type CompletionFiles = {
 	activePath: string;
 	sliceHistoryPath: string;
 	stopHistoryPath: string;
+	verificationEvidencePath: string;
 	compactionMarkerPath: string;
 };
 
@@ -59,6 +60,7 @@ type CompletionStateSnapshot = {
 	state?: JsonRecord;
 	plan?: JsonRecord;
 	active?: JsonRecord;
+	verificationEvidence?: JsonRecord;
 	activeSlice?: JsonRecord;
 };
 
@@ -275,6 +277,7 @@ function resolveFiles(root: string): CompletionFiles {
 		activePath: path.join(agentDir, "active-slice.json"),
 		sliceHistoryPath: path.join(agentDir, "slice-history.jsonl"),
 		stopHistoryPath: path.join(agentDir, "stop-check-history.jsonl"),
+		verificationEvidencePath: path.join(agentDir, "verification-evidence.json"),
 		compactionMarkerPath: path.join(tmpDir, "post-compaction-recovery.json"),
 	};
 }
@@ -364,12 +367,14 @@ async function loadCompletionSnapshot(startCwd: string): Promise<CompletionState
 	const state = await readJson(files.statePath);
 	const plan = await readJson(files.planPath);
 	const active = await readJson(files.activePath);
+	const verificationEvidence = await readJson(files.verificationEvidencePath);
 	return {
 		files,
 		profile,
 		state,
 		plan,
 		active,
+		verificationEvidence,
 		activeSlice: findActiveSlice(plan, active),
 	};
 }
@@ -1819,8 +1824,29 @@ function activeSliceContext(snapshot: CompletionStateSnapshot) {
 	};
 }
 
+function verificationEvidenceContext(snapshot: CompletionStateSnapshot) {
+	const evidence = snapshot.verificationEvidence;
+	return {
+		path: path.relative(snapshot.files.root, snapshot.files.verificationEvidencePath) || ".agent/verification-evidence.json",
+		status: evidence ? "present" : "missing",
+		subjectType: asString(evidence?.subject_type),
+		sliceId: asString(evidence?.slice_id),
+		goal: asString(evidence?.goal),
+		contractIds: asStringArray(evidence?.contract_ids),
+		basisCommit: asString(evidence?.basis_commit),
+		headSha: asString(evidence?.head_sha),
+		verificationCommands: asStringArray(evidence?.verification_commands),
+		outcome: asString(evidence?.outcome),
+		recordedAt: asString(evidence?.recorded_at),
+		summary:
+			asString(evidence?.summary) ??
+			(evidence ? "Canonical verification evidence is present but its summary is missing." : "Canonical verification evidence is missing."),
+	};
+}
+
 function buildEvaluationRoleContextLines(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string[] {
 	const context = activeSliceContext(snapshot);
+	const evidence = verificationEvidenceContext(snapshot);
 	const lines = [
 		`Canonical evaluation handoff for ${role}:`,
 		`- task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
@@ -1839,6 +1865,17 @@ function buildEvaluationRoleContextLines(snapshot: CompletionStateSnapshot, role
 		`- remaining_contract_ids_before: ${context.remainingBefore.length > 0 ? context.remainingBefore.join(", ") : "(none)"}`,
 		`- release_blocker_count_before: ${context.releaseBlockerCountBefore ?? "(unknown)"}`,
 		`- high_value_gap_count_before: ${context.highValueGapCountBefore ?? "(unknown)"}`,
+		`- verification_evidence_path: ${evidence.path}`,
+		`- verification_evidence_status: ${evidence.status}`,
+		`- verification_evidence_subject_type: ${evidence.subjectType ?? "(missing)"}`,
+		`- verification_evidence_slice_id: ${evidence.sliceId ?? "(none)"}`,
+		`- verification_evidence_contract_ids: ${evidence.contractIds.length > 0 ? evidence.contractIds.join(", ") : "(none)"}`,
+		`- verification_evidence_outcome: ${evidence.outcome ?? "(missing)"}`,
+		`- verification_evidence_recorded_at: ${evidence.recordedAt ?? "(missing)"}`,
+		`- verification_evidence_head_sha: ${evidence.headSha ?? "(missing)"}`,
+		`- verification_evidence_basis_commit: ${evidence.basisCommit ?? "(missing)"}`,
+		`- verification_evidence_commands: ${evidence.verificationCommands.length > 0 ? evidence.verificationCommands.join(" | ") : "(none)"}`,
+		`- verification_evidence_summary: ${evidence.summary}`,
 	];
 	return lines;
 }
@@ -1936,6 +1973,7 @@ async function refocusCompletionMission(
 		writeJsonFile(snapshot.files.statePath, nextState),
 		writeJsonFile(snapshot.files.planPath, nextPlan),
 		writeJsonFile(snapshot.files.activePath, nextActive),
+		writeJsonFile(snapshot.files.verificationEvidencePath, defaultVerificationEvidence()),
 	]);
 }
 
@@ -2053,8 +2091,25 @@ function defaultActiveSlice(
 	};
 }
 
+function defaultVerificationEvidence(): JsonRecord {
+	return {
+		schema_version: 1,
+		artifact_type: "completion-verification-evidence",
+		subject_type: "none",
+		slice_id: null,
+		goal: null,
+		contract_ids: [],
+		basis_commit: null,
+		head_sha: null,
+		verification_commands: [],
+		outcome: "not_recorded",
+		recorded_at: null,
+		summary: "No deterministic verification evidence is recorded yet because no selected slice or current-HEAD verification subject exists.",
+	};
+}
+
 function buildAgentReadme(projectName: string): string {
-	return `# Completion Control Plane\n\nThis repository uses the \`completion\` workflow for long-running coding tasks.\n\n## Canonical tracked contract files\n\n- \`.agent/README.md\`\n- \`.agent/mission.md\`\n- \`.agent/profile.json\`\n- \`.agent/verify_completion_stop.sh\`\n- \`.agent/verify_completion_control_plane.sh\`\n\n## Ignored canonical execution state\n\n- \`.agent/state.json\`\n- \`.agent/plan.json\`\n- \`.agent/active-slice.json\`\n- \`.agent/slice-history.jsonl\`\n- \`.agent/stop-check-history.jsonl\`\n- \`.agent/*.log\`\n- \`.agent/tmp/\`\n\nThe source of truth for long-running completion work is canonical \`.agent/**\` state plus current repo truth.\n\nProject: ${projectName}\n`;
+	return `# Completion Control Plane\n\nThis repository uses the \`completion\` workflow for long-running coding tasks.\n\n## Canonical tracked contract files\n\n- \`.agent/README.md\`\n- \`.agent/mission.md\`\n- \`.agent/profile.json\`\n- \`.agent/verify_completion_stop.sh\`\n- \`.agent/verify_completion_control_plane.sh\`\n\n## Ignored canonical execution state\n\n- \`.agent/state.json\`\n- \`.agent/plan.json\`\n- \`.agent/active-slice.json\`\n- \`.agent/slice-history.jsonl\`\n- \`.agent/stop-check-history.jsonl\`\n- \`.agent/verification-evidence.json\`\n- \`.agent/*.log\`\n- \`.agent/tmp/\`\n\n\`.agent/verification-evidence.json\` is the durable canonical record of deterministic verification for the selected slice or current HEAD. Recovery, review, audit, and stop-check reminder surfaces consume it instead of temp-only artifacts or conversational summaries when it is populated.\n\nThe source of truth for long-running completion work is canonical \`.agent/**\` state plus current repo truth.\n\nProject: ${projectName}\n`;
 }
 
 function buildMission(projectName: string, missionAnchor: string): string {
@@ -2080,11 +2135,13 @@ for file in \
   .agent/verify_completion_control_plane.sh \
   .agent/state.json \
   .agent/plan.json \
-  .agent/active-slice.json; do
+  .agent/active-slice.json \
+  .agent/verification-evidence.json; do
   [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }
 done
 
 node <<'NODE'
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -2110,7 +2167,7 @@ const requireKeys = (object, required, label) => {
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const sameStringArrays = (left, right) => left.length === right.length && left.every((item, index) => item === right[index]);
 
-for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {
+for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json', '.agent/verification-evidence.json']) {
   readJson(file);
 }
 
@@ -2118,11 +2175,13 @@ const profile = readJson('.agent/profile.json');
 const state = readJson('.agent/state.json');
 const plan = readJson('.agent/plan.json');
 const active = readJson('.agent/active-slice.json');
+const evidence = readJson('.agent/verification-evidence.json');
 
 assert(isObject(profile), '.agent/profile.json must be an object');
 assert(isObject(state), '.agent/state.json must be an object');
 assert(isObject(plan), '.agent/plan.json must be an object');
 assert(isObject(active), '.agent/active-slice.json must be an object');
+assert(isObject(evidence), '.agent/verification-evidence.json must be an object');
 
 const requiredProfile = ['schema_version', 'protocol_id', 'project_name', 'required_stop_judges', 'priority_policy_id', 'task_type', 'evaluation_profile', 'docs_surfaces'];
 requireKeys(profile, requiredProfile, '.agent/profile.json');
@@ -2203,6 +2262,23 @@ assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json:
 assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
 assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
 
+const requiredEvidence = ['schema_version', 'artifact_type', 'subject_type', 'slice_id', 'goal', 'contract_ids', 'basis_commit', 'head_sha', 'verification_commands', 'outcome', 'recorded_at', 'summary'];
+const evidenceSubjectTypes = ['none', 'selected_slice', 'current_head'];
+const evidenceOutcomes = ['not_recorded', 'passed', 'failed'];
+requireKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
+hasOnlyKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
+assert(evidence.artifact_type === 'completion-verification-evidence', '.agent/verification-evidence.json: artifact_type must be completion-verification-evidence');
+assert(evidenceSubjectTypes.includes(evidence.subject_type), '.agent/verification-evidence.json: invalid subject_type');
+assert(evidence.slice_id === null || isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be null or a non-empty string');
+assert(evidence.goal === null || isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be null or a non-empty string');
+assert(isStringArray(evidence.contract_ids), '.agent/verification-evidence.json: contract_ids must be an array of strings');
+assert(evidence.basis_commit === null || isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be null or a non-empty string');
+assert(evidence.head_sha === null || isNonEmptyString(evidence.head_sha), '.agent/verification-evidence.json: head_sha must be null or a non-empty string');
+assert(isStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be an array of strings');
+assert(evidenceOutcomes.includes(evidence.outcome), '.agent/verification-evidence.json: invalid outcome');
+assert(evidence.recorded_at === null || (isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at))), '.agent/verification-evidence.json: recorded_at must be null or an ISO-8601 string');
+assert(isNonEmptyString(evidence.summary), '.agent/verification-evidence.json: summary must be a non-empty string');
+
 assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
 assert(plan.task_type === profile.task_type, '.agent/plan.json: task_type must match .agent/profile.json');
 assert(active.task_type === profile.task_type, '.agent/active-slice.json: task_type must match .agent/profile.json');
@@ -2250,7 +2326,50 @@ if (requiresExactHandoff) {
   expectPlanNumberMirror('release_blocker_count_before');
   expectPlanNumberMirror('high_value_gap_count_before');
   assert(drift.length === 0, '.agent/active-slice.json must match the selected .agent/plan.json slice across: ' + Array.from(new Set(drift)).join(', '));
+}
+
+const currentHead = (() => {
+  try {
+    return childProcess.execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return null;
+  }
+})();
+
+if (requiresExactHandoff) {
+  assert(evidence.subject_type === 'selected_slice', '.agent/verification-evidence.json: subject_type must be selected_slice when active slice exact handoff requires verification evidence');
+  assert(evidence.slice_id === active.slice_id, '.agent/verification-evidence.json: slice_id must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.goal === active.goal, '.agent/verification-evidence.json: goal must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(sameStringArrays(evidence.contract_ids, active.contract_ids), '.agent/verification-evidence.json: contract_ids must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.basis_commit === active.basis_commit, '.agent/verification-evidence.json: basis_commit must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(sameStringArrays(evidence.verification_commands, active.verification_commands), '.agent/verification-evidence.json: verification_commands must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when active slice exact handoff requires verification evidence');
+  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when active slice exact handoff requires verification evidence');
+  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when active slice exact handoff requires verification evidence');
+} else if (evidence.subject_type === 'none') {
+  assert(evidence.slice_id === null, '.agent/verification-evidence.json: slice_id must be null when subject_type is none');
+  assert(evidence.goal === null, '.agent/verification-evidence.json: goal must be null when subject_type is none');
+  assert(evidence.contract_ids.length === 0, '.agent/verification-evidence.json: contract_ids must be empty when subject_type is none');
+  assert(evidence.basis_commit === null, '.agent/verification-evidence.json: basis_commit must be null when subject_type is none');
+  assert(evidence.head_sha === null, '.agent/verification-evidence.json: head_sha must be null when subject_type is none');
+  assert(evidence.verification_commands.length === 0, '.agent/verification-evidence.json: verification_commands must be empty when subject_type is none');
+  assert(evidence.outcome === 'not_recorded', '.agent/verification-evidence.json: outcome must be not_recorded when subject_type is none');
+  assert(evidence.recorded_at === null, '.agent/verification-evidence.json: recorded_at must be null when subject_type is none');
 } else {
+  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when verification evidence is recorded');
+  assert(isNonEmptyStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be a non-empty array when verification evidence is recorded');
+  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when verification evidence is recorded');
+  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when verification evidence is recorded');
+  if (evidence.subject_type === 'selected_slice') {
+    assert(isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be a non-empty string when subject_type is selected_slice');
+    assert(isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be a non-empty string when subject_type is selected_slice');
+    assert(isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be a non-empty string when subject_type is selected_slice');
+  } else {
+    assert(evidence.subject_type === 'current_head', '.agent/verification-evidence.json: only current_head or selected_slice may carry recorded verification evidence');
+  }
+}
+
+if (!requiresExactHandoff) {
   assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
   assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
 }
@@ -2321,6 +2440,7 @@ async function scaffoldCompletionFiles(
 		},
 		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
 		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
+		{ path: files.verificationEvidencePath, content: `${JSON.stringify(defaultVerificationEvidence(), null, 2)}\n` },
 		{ path: files.sliceHistoryPath, content: "" },
 		{ path: files.stopHistoryPath, content: "" },
 	];
@@ -2450,9 +2570,10 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	const nextRole = asString(snapshot.state?.next_mandatory_role);
 	const exactActiveContract = activeCarriesExactHandoff(snapshot.active);
 	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
+	const evidence = verificationEvidenceContext(snapshot);
 	const lines = [
 		"Completion workflow detected.",
-		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl.",
+		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json.",
 		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
 		`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`,
 		`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
@@ -2478,6 +2599,12 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	if (activeWhyNow) lines.push(`Active slice why_now: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${implementationSurfaces.join(", ")}`);
 	if (verificationCommands.length > 0) lines.push(`Active verification commands: ${verificationCommands.join(" | ")}`);
+	lines.push(`Verification evidence artifact: ${evidence.path} (${evidence.status})`);
+	if (evidence.subjectType) lines.push(`Verification evidence subject: ${evidence.subjectType}`);
+	if (evidence.outcome) lines.push(`Verification evidence outcome: ${evidence.outcome}`);
+	if (evidence.recordedAt) lines.push(`Verification evidence recorded_at: ${evidence.recordedAt}`);
+	if (evidence.verificationCommands.length > 0) lines.push(`Verification evidence commands: ${evidence.verificationCommands.join(" | ")}`);
+	lines.push(`Verification evidence summary: ${evidence.summary}`);
 	if (isRubricEvaluationRole(nextRole)) lines.push(buildEvaluationRoleReminderText(snapshot, nextRole));
 	return lines.join(" ");
 }
@@ -2496,17 +2623,19 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	const activeWhyNow = asString(snapshot.active?.why_now);
 	const exactActiveContract = activeCarriesExactHandoff(snapshot.active);
 	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
+	const evidence = verificationEvidenceContext(snapshot);
 	const lines = [
 		"POST-COMPACTION RECOVERY MODE is active.",
 		`Compaction marker time: ${markerAt}`,
 		"Treat the previous conversation as lossy continuity support only.",
-		"Before taking any substantive action, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl from disk.",
+		"Before taking any substantive action, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json from disk.",
 		`Canonical task_type is currently: ${taskType}`,
 		`Canonical evaluation_profile is currently: ${evaluationProfile}`,
 		`Canonical next mandatory role is currently: ${nextRole}`,
 		`Canonical next mandatory action is currently: ${nextAction}`,
 		`Canonical continuation policy is currently: ${continuation}`,
 		`Canonical active slice is currently: ${activeSliceId}`,
+		`Canonical verification evidence artifact is currently: ${evidence.path} (${evidence.status})`,
 		"Do not trust pre-compaction memory over canonical files.",
 		"If the canonical state is ambiguous, inconsistent, missing, or stale after re-reading it, your first mandatory action is to dispatch completion-regrounder rather than guessing.",
 		"If continuation_policy == continue and canonical state is coherent, continue dispatching the mandatory role directly without asking the user whether to continue.",
@@ -2520,6 +2649,15 @@ function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot
 	if (activeWhyNow) lines.push(`Canonical active-slice why_now is currently: ${activeWhyNow}`);
 	if (implementationSurfaces.length > 0) lines.push(`Canonical implementation surfaces are currently: ${implementationSurfaces.join(", ")}`);
 	if (verificationCommands.length > 0) lines.push(`Canonical verification commands are currently: ${verificationCommands.join(" | ")}`);
+	if (evidence.subjectType) lines.push(`Canonical verification evidence subject is currently: ${evidence.subjectType}`);
+	if (evidence.outcome) lines.push(`Canonical verification evidence outcome is currently: ${evidence.outcome}`);
+	if (evidence.recordedAt) lines.push(`Canonical verification evidence recorded_at is currently: ${evidence.recordedAt}`);
+	if (evidence.headSha) lines.push(`Canonical verification evidence head_sha is currently: ${evidence.headSha}`);
+	if (evidence.basisCommit) lines.push(`Canonical verification evidence basis_commit is currently: ${evidence.basisCommit}`);
+	if (evidence.verificationCommands.length > 0) {
+		lines.push(`Canonical verification evidence commands are currently: ${evidence.verificationCommands.join(" | ")}`);
+	}
+	lines.push(`Canonical verification evidence summary is currently: ${evidence.summary}`);
 	if (isRubricEvaluationRole(nextRole)) lines.push(buildEvaluationRoleReminderText(snapshot, nextRole));
 	return lines.join(" ");
 }
@@ -2601,6 +2739,7 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const remainingBefore = asStringArray(snapshot.active?.remaining_contract_ids_before);
 	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
+	const evidence = verificationEvidenceContext(snapshot);
 	const lines = [
 		"Authoritative completion resume capsule:",
 		"",
@@ -2620,6 +2759,19 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		`active_slice_contract_drift_fields: ${activeContractDrift}`,
 		`implementer_handoff_snapshot: ${handoffSnapshotState(snapshot.active)}`,
 		`history_counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}`,
+		"",
+		"verification_evidence:",
+		`- path: ${evidence.path}`,
+		`- status: ${evidence.status}`,
+		`- subject_type: ${evidence.subjectType ?? "(missing)"}`,
+		`- slice_id: ${evidence.sliceId ?? "(none)"}`,
+		`- contract_ids: ${evidence.contractIds.length > 0 ? evidence.contractIds.join(", ") : "(none)"}`,
+		`- outcome: ${evidence.outcome ?? "(missing)"}`,
+		`- recorded_at: ${evidence.recordedAt ?? "(missing)"}`,
+		`- head_sha: ${evidence.headSha ?? "(missing)"}`,
+		`- basis_commit: ${evidence.basisCommit ?? "(missing)"}`,
+		`- verification_commands: ${evidence.verificationCommands.length > 0 ? evidence.verificationCommands.join(" | ") : "(none)"}`,
+		`- summary: ${evidence.summary}`,
 		"",
 		"active_slice:",
 		`- slice_id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
@@ -2647,7 +2799,8 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 		"- Treat this block as continuity support derived from canonical .agent state.",
 		"- For selected/in-progress/committed/done slices, .agent/active-slice.json is the canonical implementation contract and the selected plan slice must mirror it exactly.",
 		"- Preserve exact slice_id, goal, contract_ids, acceptance criteria, blocked_on, priority, why_now, implementation surfaces, verification commands, locked notes, must-fix findings, basis_commit, and before-slice counters where still true.",
-		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, and .agent/stop-check-history.jsonl before resuming long-running completion work.",
+		"- When populated, .agent/verification-evidence.json is the durable canonical verification record for the selected slice or current HEAD and should be consumed instead of temp-only artifacts or conversational summaries.",
+		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json before resuming long-running completion work.",
 		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
 		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",
 		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no, active_slice_contract_drift_fields is not none, or implementer_handoff_snapshot is missing_or_unclear.",
@@ -3322,11 +3475,11 @@ function completionKickoff(
 			: intent === "refocus" && missionAnchor
 				? `Updated canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- The user explicitly refocused the workflow before this kickoff.\n- Re-read canonical .agent/** state and continue from the refocused mission.\n\n`
 				: "";
-	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 function completionResumePrompt(taskType: string, evaluationProfile: string): string {
-	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, and .agent/active-slice.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 export default function completionExtension(pi: ExtensionAPI) {

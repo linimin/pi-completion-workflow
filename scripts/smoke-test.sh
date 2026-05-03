@@ -19,7 +19,7 @@ PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$KICKOFF_PROMPT" \
 pi -e "$PKG_ROOT" -p "/cook smoke-test mission" \
   >"$TMPDIR/pi-completion-smoke-bootstrap.out" 2>"$TMPDIR/pi-completion-smoke-bootstrap.err"
 
-for file in .agent/profile.json .agent/state.json .agent/plan.json .agent/active-slice.json; do
+for file in .agent/profile.json .agent/state.json .agent/plan.json .agent/active-slice.json .agent/verification-evidence.json; do
   [[ -f "$file" ]] || { echo "missing canonical bootstrap file: $file" >&2; exit 1; }
 done
 
@@ -38,6 +38,7 @@ profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
+evidence = json.loads(Path('.agent/verification-evidence.json').read_text())
 kickoff = Path(sys.argv[1]).read_text()
 
 assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after bootstrap'
@@ -50,6 +51,10 @@ assert active['task_type'] == expected_task_type, 'active-slice.json task_type m
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after bootstrap'
 assert active['implementation_surfaces'] == [], 'active-slice.json should scaffold empty implementation_surfaces'
 assert active['verification_commands'] == [], 'active-slice.json should scaffold empty verification_commands'
+assert evidence['artifact_type'] == 'completion-verification-evidence', 'verification-evidence.json artifact_type mismatch after bootstrap'
+assert evidence['subject_type'] == 'none', 'verification-evidence.json should scaffold idle subject_type'
+assert evidence['verification_commands'] == [], 'verification-evidence.json should scaffold empty verification_commands'
+assert evidence['outcome'] == 'not_recorded', 'verification-evidence.json should scaffold not_recorded outcome'
 assert 'Canonical routing profile:' in kickoff, 'kickoff prompt should expose canonical routing profile'
 assert f'- task_type: {expected_task_type}' in kickoff, 'kickoff prompt missing canonical task_type'
 assert f'- evaluation_profile: {expected_eval_profile}' in kickoff, 'kickoff prompt missing canonical evaluation_profile'
@@ -193,6 +198,28 @@ plan['candidate_slices'] = [{
     'high_value_gap_count_before': active['high_value_gap_count_before'],
 }]
 plan_path.write_text(json.dumps(plan, indent=2) + '\n')
+PY
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+active = json.loads(Path('.agent/active-slice.json').read_text())
+evidence = {
+    'schema_version': 1,
+    'artifact_type': 'completion-verification-evidence',
+    'subject_type': 'selected_slice',
+    'slice_id': active['slice_id'],
+    'goal': active['goal'],
+    'contract_ids': active['contract_ids'],
+    'basis_commit': active['basis_commit'],
+    'head_sha': active['basis_commit'],
+    'verification_commands': ['bash .agent/verify_completion_control_plane.sh', 'npm run smoke-test'],
+    'outcome': 'passed',
+    'recorded_at': '2026-05-03T00:00:00Z',
+    'summary': 'Smoke selected-slice evidence matches the temporary active-slice fixture.',
+}
+Path('.agent/verification-evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
 PY
 
 if bash .agent/verify_completion_control_plane.sh >/dev/null 2>&1; then

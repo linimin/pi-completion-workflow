@@ -9,11 +9,13 @@ for file in \
   .agent/verify_completion_control_plane.sh \
   .agent/state.json \
   .agent/plan.json \
-  .agent/active-slice.json; do
+  .agent/active-slice.json \
+  .agent/verification-evidence.json; do
   [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }
 done
 
 node <<'NODE'
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -39,7 +41,7 @@ const requireKeys = (object, required, label) => {
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const sameStringArrays = (left, right) => left.length === right.length && left.every((item, index) => item === right[index]);
 
-for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json']) {
+for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json', '.agent/verification-evidence.json']) {
   readJson(file);
 }
 
@@ -47,11 +49,13 @@ const profile = readJson('.agent/profile.json');
 const state = readJson('.agent/state.json');
 const plan = readJson('.agent/plan.json');
 const active = readJson('.agent/active-slice.json');
+const evidence = readJson('.agent/verification-evidence.json');
 
 assert(isObject(profile), '.agent/profile.json must be an object');
 assert(isObject(state), '.agent/state.json must be an object');
 assert(isObject(plan), '.agent/plan.json must be an object');
 assert(isObject(active), '.agent/active-slice.json must be an object');
+assert(isObject(evidence), '.agent/verification-evidence.json must be an object');
 
 const requiredProfile = ['schema_version', 'protocol_id', 'project_name', 'required_stop_judges', 'priority_policy_id', 'task_type', 'evaluation_profile', 'docs_surfaces'];
 requireKeys(profile, requiredProfile, '.agent/profile.json');
@@ -132,6 +136,23 @@ assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json:
 assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
 assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
 
+const requiredEvidence = ['schema_version', 'artifact_type', 'subject_type', 'slice_id', 'goal', 'contract_ids', 'basis_commit', 'head_sha', 'verification_commands', 'outcome', 'recorded_at', 'summary'];
+const evidenceSubjectTypes = ['none', 'selected_slice', 'current_head'];
+const evidenceOutcomes = ['not_recorded', 'passed', 'failed'];
+requireKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
+hasOnlyKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
+assert(evidence.artifact_type === 'completion-verification-evidence', '.agent/verification-evidence.json: artifact_type must be completion-verification-evidence');
+assert(evidenceSubjectTypes.includes(evidence.subject_type), '.agent/verification-evidence.json: invalid subject_type');
+assert(evidence.slice_id === null || isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be null or a non-empty string');
+assert(evidence.goal === null || isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be null or a non-empty string');
+assert(isStringArray(evidence.contract_ids), '.agent/verification-evidence.json: contract_ids must be an array of strings');
+assert(evidence.basis_commit === null || isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be null or a non-empty string');
+assert(evidence.head_sha === null || isNonEmptyString(evidence.head_sha), '.agent/verification-evidence.json: head_sha must be null or a non-empty string');
+assert(isStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be an array of strings');
+assert(evidenceOutcomes.includes(evidence.outcome), '.agent/verification-evidence.json: invalid outcome');
+assert(evidence.recorded_at === null || (isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at))), '.agent/verification-evidence.json: recorded_at must be null or an ISO-8601 string');
+assert(isNonEmptyString(evidence.summary), '.agent/verification-evidence.json: summary must be a non-empty string');
+
 assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
 assert(plan.task_type === profile.task_type, '.agent/plan.json: task_type must match .agent/profile.json');
 assert(active.task_type === profile.task_type, '.agent/active-slice.json: task_type must match .agent/profile.json');
@@ -179,7 +200,50 @@ if (requiresExactHandoff) {
   expectPlanNumberMirror('release_blocker_count_before');
   expectPlanNumberMirror('high_value_gap_count_before');
   assert(drift.length === 0, '.agent/active-slice.json must match the selected .agent/plan.json slice across: ' + Array.from(new Set(drift)).join(', '));
+}
+
+const currentHead = (() => {
+  try {
+    return childProcess.execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return null;
+  }
+})();
+
+if (requiresExactHandoff) {
+  assert(evidence.subject_type === 'selected_slice', '.agent/verification-evidence.json: subject_type must be selected_slice when active slice exact handoff requires verification evidence');
+  assert(evidence.slice_id === active.slice_id, '.agent/verification-evidence.json: slice_id must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.goal === active.goal, '.agent/verification-evidence.json: goal must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(sameStringArrays(evidence.contract_ids, active.contract_ids), '.agent/verification-evidence.json: contract_ids must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.basis_commit === active.basis_commit, '.agent/verification-evidence.json: basis_commit must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(sameStringArrays(evidence.verification_commands, active.verification_commands), '.agent/verification-evidence.json: verification_commands must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
+  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when active slice exact handoff requires verification evidence');
+  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when active slice exact handoff requires verification evidence');
+  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when active slice exact handoff requires verification evidence');
+} else if (evidence.subject_type === 'none') {
+  assert(evidence.slice_id === null, '.agent/verification-evidence.json: slice_id must be null when subject_type is none');
+  assert(evidence.goal === null, '.agent/verification-evidence.json: goal must be null when subject_type is none');
+  assert(evidence.contract_ids.length === 0, '.agent/verification-evidence.json: contract_ids must be empty when subject_type is none');
+  assert(evidence.basis_commit === null, '.agent/verification-evidence.json: basis_commit must be null when subject_type is none');
+  assert(evidence.head_sha === null, '.agent/verification-evidence.json: head_sha must be null when subject_type is none');
+  assert(evidence.verification_commands.length === 0, '.agent/verification-evidence.json: verification_commands must be empty when subject_type is none');
+  assert(evidence.outcome === 'not_recorded', '.agent/verification-evidence.json: outcome must be not_recorded when subject_type is none');
+  assert(evidence.recorded_at === null, '.agent/verification-evidence.json: recorded_at must be null when subject_type is none');
 } else {
+  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when verification evidence is recorded');
+  assert(isNonEmptyStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be a non-empty array when verification evidence is recorded');
+  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when verification evidence is recorded');
+  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when verification evidence is recorded');
+  if (evidence.subject_type === 'selected_slice') {
+    assert(isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be a non-empty string when subject_type is selected_slice');
+    assert(isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be a non-empty string when subject_type is selected_slice');
+    assert(isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be a non-empty string when subject_type is selected_slice');
+  } else {
+    assert(evidence.subject_type === 'current_head', '.agent/verification-evidence.json: only current_head or selected_slice may carry recorded verification evidence');
+  }
+}
+
+if (!requiresExactHandoff) {
   assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
   assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
 }
