@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.35
+
+### Changed
+
+- brightened the remaining `/cook` completion UI helper text by removing the last `dim` styling from proposal intro/footer/scroll hints and running activity metadata, using plain/default text for higher contrast while keeping stalled activity as warning-colored
+
 ## 0.1.34
 
 ### Changed
