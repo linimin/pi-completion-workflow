@@ -1242,7 +1242,7 @@ async function promptContextProposalConfirmationAction(
 		const container = new Container();
 		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.title)), 1, 0));
-		container.addChild(new Text(theme.fg("dim", layout.intro), 1, 0));
+		container.addChild(new Text(layout.intro, 1, 0));
 		container.addChild(new Text("", 0, 0));
 		container.addChild(new Text(theme.fg("accent", theme.bold(layout.proposalHeading)), 1, 0));
 		container.addChild(new Text(layout.proposalBody, 1, 0));
@@ -1262,13 +1262,13 @@ async function promptContextProposalConfirmationAction(
 			selectedPrefix: (text) => theme.fg("accent", text),
 			selectedText: (text) => theme.fg("accent", text),
 			description: (text) => theme.fg("muted", text),
-			scrollInfo: (text) => theme.fg("dim", text),
+			scrollInfo: (text) => text,
 			noMatch: (text) => theme.fg("warning", text),
 		});
 		selectList.onSelect = (item) => done(item.value as ContextProposalConfirmAction);
 		selectList.onCancel = () => done(undefined);
 		container.addChild(selectList);
-		container.addChild(new Text(theme.fg("dim", layout.footer), 1, 0));
+		container.addChild(new Text(layout.footer, 1, 0));
 		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
 		return {
@@ -3105,7 +3105,7 @@ function formatInlineRunningText(theme: any, lines: string[], options?: { primar
 			continue;
 		}
 		if (line.startsWith("activity:")) {
-			text += theme.fg(line.includes("stalled") ? "warning" : "dim", line);
+			text += line.includes("stalled") ? theme.fg("warning", line) : line;
 			continue;
 		}
 		if (line === "recent tools:") {
@@ -3117,7 +3117,7 @@ function formatInlineRunningText(theme: any, lines: string[], options?: { primar
 			continue;
 		}
 		if (line.startsWith("elapsed:")) {
-			text += theme.fg("dim", line);
+			text += line;
 			continue;
 		}
 		if (line.startsWith("assistant:")) {
@@ -3129,7 +3129,7 @@ function formatInlineRunningText(theme: any, lines: string[], options?: { primar
 			continue;
 		}
 		if (line.startsWith("rationale:") || line.startsWith("state-delta:")) {
-			text += theme.fg("dim", line);
+			text += line;
 			continue;
 		}
 		text += theme.fg("muted", line);
