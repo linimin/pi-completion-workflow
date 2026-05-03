@@ -290,14 +290,24 @@ function walkUpForDir(startCwd: string, segments: string[]): string | undefined 
 	}
 }
 
+function completionSearchRoots(startCwd: string): string[] {
+	return [...new Set([path.resolve(startCwd), path.resolve(process.cwd())])];
+}
+
 function findCompletionRoot(startCwd: string): string | undefined {
-	const profilePath = walkUpForDir(startCwd, [".agent", "profile.json"]);
-	return profilePath ? path.dirname(path.dirname(profilePath)) : undefined;
+	for (const candidateRoot of completionSearchRoots(startCwd)) {
+		const profilePath = walkUpForDir(candidateRoot, [".agent", "profile.json"]);
+		if (profilePath) return path.dirname(path.dirname(profilePath));
+	}
+	return undefined;
 }
 
 function findRepoRoot(startCwd: string): string | undefined {
-	const gitPath = walkUpForDir(startCwd, [".git"]);
-	return gitPath ? path.dirname(gitPath) : undefined;
+	for (const candidateRoot of completionSearchRoots(startCwd)) {
+		const gitPath = walkUpForDir(candidateRoot, [".git"]);
+		if (gitPath) return path.dirname(gitPath);
+	}
+	return undefined;
 }
 
 async function readJson(filePath: string): Promise<JsonRecord | undefined> {
@@ -3710,7 +3720,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 						current_phase: asString(snapshot.state?.current_phase) ?? null,
 						next_mandatory_role: asString(snapshot.state?.next_mandatory_role) ?? null,
 					});
-					await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, "resume");
+					const resumeKind =
+						shouldTestAutoContinueOnSessionStart() && completionTestAutoContinuePromptPath() ? "auto-resume" : "resume";
+					await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, resumeKind);
 					return;
 				}
 			}

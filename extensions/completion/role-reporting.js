@@ -76,6 +76,22 @@ function parseFirstNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function normalizeInlineValue(value) {
+  return asString(value)?.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isNoneLike(value) {
+  const normalized = normalizeInlineValue(value);
+  if (!normalized) return false;
+  return (
+    normalized.startsWith("none") ||
+    normalized.startsWith("(none)") ||
+    normalized.startsWith("n/a") ||
+    normalized === "na" ||
+    normalized.startsWith("not applicable")
+  );
+}
+
 function rubricVerdicts(reportFields) {
   return RUBRIC_DIMENSIONS.map((dimension) => {
     const value = reportFields[dimension];
@@ -138,22 +154,26 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
   if (role === "completion-reviewer") {
     validateRequiredFields(reportFields, REVIEWER_REQUIRED_FIELDS, errors, role);
     const acceptable = parseYesNo(reportFields["Acceptable as-is"]);
+    const followUpSlice = asString(reportFields["Smallest follow-up slice"]);
     if (acceptable === undefined) errors.push("Reviewer output must answer 'Acceptable as-is' with yes or no.");
     if (anyFail && acceptable === true) {
       errors.push("Reviewer output cannot mark 'Acceptable as-is: yes' when any rubric line is fail.");
     }
-    if (acceptable === false && !asString(reportFields["Smallest follow-up slice"])) {
-      errors.push("Reviewer output must include a smallest follow-up slice when acceptance is no.");
+    if (acceptable === true && followUpSlice && !isNoneLike(followUpSlice)) {
+      errors.push("Reviewer output cannot mark 'Acceptable as-is: yes' while naming a follow-up slice other than none.");
+    }
+    if (acceptable === false) {
+      if (!followUpSlice) {
+        errors.push("Reviewer output must include a smallest follow-up slice when acceptance is no.");
+      } else if (isNoneLike(followUpSlice)) {
+        errors.push("Reviewer output must name a non-none smallest follow-up slice when acceptance is no.");
+      }
     }
   } else if (role === "completion-auditor") {
     validateRequiredFields(reportFields, AUDITOR_REQUIRED_FIELDS, errors, role);
-    if (parseFirstNumber(reportFields["Blocker count"]) === undefined) {
-      errors.push("Auditor output must include a numeric Blocker count.");
-    }
-    if (parseFirstNumber(reportFields["High-value gap count"]) === undefined) {
-      errors.push("Auditor output must include a numeric High-value gap count.");
-    }
-    validateYesNoField(
+    const blockerCount = parseFirstNumber(reportFields["Blocker count"]);
+    const highValueGapCount = parseFirstNumber(reportFields["High-value gap count"]);
+    const worktreeClean = validateYesNoField(
       reportFields,
       "Tracked and unignored worktree is clean",
       errors,
@@ -171,6 +191,25 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
       errors,
       "Auditor output must answer 'Plan truthfully captures remaining slice backlog' with yes or no.",
     );
+    if (blockerCount === undefined) {
+      errors.push("Auditor output must include a numeric Blocker count.");
+    }
+    if (highValueGapCount === undefined) {
+      errors.push("Auditor output must include a numeric High-value gap count.");
+    }
+    const worktreeBlockers = asString(reportFields["Worktree blockers"]);
+    const nextMandatorySlice = asString(reportFields["Next mandatory slice"]);
+    const openContractIds = asString(reportFields["Open top-level contract IDs"]);
+    const hasRemainingWork = !isNoneLike(openContractIds) || (blockerCount ?? 0) > 0 || (highValueGapCount ?? 0) > 0;
+    if (worktreeClean === true && worktreeBlockers && !isNoneLike(worktreeBlockers)) {
+      errors.push("Auditor output cannot mark 'Tracked and unignored worktree is clean: yes' while listing worktree blockers.");
+    }
+    if (worktreeClean === false && (!worktreeBlockers || isNoneLike(worktreeBlockers))) {
+      errors.push("Auditor output must describe worktree blockers when 'Tracked and unignored worktree is clean: no'.");
+    }
+    if (hasRemainingWork && nextMandatorySlice && isNoneLike(nextMandatorySlice)) {
+      errors.push("Auditor output cannot leave 'Next mandatory slice' as none while open contracts, blockers, or high-value gaps remain.");
+    }
   } else if (role === "completion-stop-judge") {
     validateRequiredFields(reportFields, STOP_JUDGE_REQUIRED_FIELDS, errors, role);
     const canStop = validateYesNoField(
@@ -179,27 +218,45 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
       errors,
       "Stop-judge output must answer 'Can the project stop now' with yes or no.",
     );
-    if (anyFail && canStop === true) {
-      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when any rubric line is fail.");
-    }
-    if (parseFirstNumber(reportFields["Blocker count"]) === undefined) {
-      errors.push("Stop-judge output must include a numeric Blocker count.");
-    }
-    if (parseFirstNumber(reportFields["High-value gap count"]) === undefined) {
-      errors.push("Stop-judge output must include a numeric High-value gap count.");
-    }
-    validateYesNoField(
+    const blockerCount = parseFirstNumber(reportFields["Blocker count"]);
+    const highValueGapCount = parseFirstNumber(reportFields["High-value gap count"]);
+    const docsParity = validateYesNoField(
       reportFields,
       "Docs/config/runbooks match shipped behavior",
       errors,
       "Stop-judge output must answer 'Docs/config/runbooks match shipped behavior' with yes or no.",
     );
-    validateYesNoField(
+    const worktreeClean = validateYesNoField(
       reportFields,
       "Tracked and unignored worktree is clean",
       errors,
       "Stop-judge output must answer 'Tracked and unignored worktree is clean' with yes or no.",
     );
+    if (anyFail && canStop === true) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when any rubric line is fail.");
+    }
+    if (blockerCount === undefined) {
+      errors.push("Stop-judge output must include a numeric Blocker count.");
+    }
+    if (highValueGapCount === undefined) {
+      errors.push("Stop-judge output must include a numeric High-value gap count.");
+    }
+    const openContractIds = asString(reportFields["Exact remaining open top-level contract IDs"]);
+    if (canStop === true && openContractIds && !isNoneLike(openContractIds)) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' while naming remaining open top-level contract IDs.");
+    }
+    if (canStop === true && (blockerCount ?? 0) > 0) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when Blocker count is greater than 0.");
+    }
+    if (canStop === true && (highValueGapCount ?? 0) > 0) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when High-value gap count is greater than 0.");
+    }
+    if (canStop === true && docsParity === false) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when docs/config/runbooks do not match shipped behavior.");
+    }
+    if (canStop === true && worktreeClean === false) {
+      errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' when the tracked and unignored worktree is not clean.");
+    }
   }
 
   return { valid: errors.length === 0, errors, reportFields, rubric };

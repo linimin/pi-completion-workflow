@@ -176,6 +176,8 @@ Reviewer, auditor, and stop-judge dispatch/reminder surfaces now also thread the
 
 Canonical reviewer/auditor/stop-judge transcription now fails closed on malformed rubric-bearing reports: the shared rubric heading plus all four rubric dimensions must be present, required role fields must remain intact, and reviewer/stop-judge yes/no verdicts cannot contradict rubric `fail` lines.
 
+Evaluator calibration now also fails closed on semantically lenient but well-formed reports. `npm run evaluator-calibration-test` drives the packaged transcription path through reviewer yes-with-follow-up, auditor open-contracts-with-`Next mandatory slice: none`, and stop-judge yes-with-open-contracts fixtures while still accepting truthful passing reports. Both `npm run release-check` and `bash .agent/verify_completion_stop.sh` include this calibration gate.
+
 Deterministic verification for this packaged contract lives in `npm run rubric-contract-test`, which now exercises reviewer, auditor, and stop-judge transcription paths while the bootstrap/refocus/context regressions plus control-plane verifier fail closed when required canonical signaling is missing.
 
 ## Canonical files
@@ -243,11 +245,12 @@ npm run smoke-test
 npm run refocus-test
 npm run context-proposal-test
 npm run observability-status-test
+npm run evaluator-calibration-test
 npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression — includes deterministic observability coverage plus the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic observability coverage plus evaluator calibration and the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 ## Release
 
