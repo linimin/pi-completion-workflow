@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.36
+
+### Changed
+
+- simplified the README opening so first-time users can understand the problem `/cook` solves, what the extension provides, and how to start using it without reading the full control-plane details first
+
 ## 0.1.35
 
 ### Changed

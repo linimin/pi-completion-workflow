@@ -1,28 +1,25 @@
 # @linimin/pi-letscook
 
-A Pi extension that adds `/cook` for resumable long-running workflows backed by repo-local canonical state in `.agent/**`.
+A Pi extension that turns `/cook` into a repo-local workflow command for long-running coding work.
 
-`@linimin/pi-letscook` is for work that does not fit in a single chat turn:
+## Why this exists
 
-- start from a goal or from recent discussion
-- resume later from repo-local workflow state
-- refocus an active workflow without losing control of the mission
-- drive implementation through isolated completion roles
-- keep verification, review, audit, and stop checks tied to the repo
+Normal chat is good for one-off tasks. It is much worse for work that needs to:
 
-## Why use it
+- continue across sessions
+- stay anchored to one mission
+- resume from repo state instead of chat memory
+- keep review, audit, and verification tied to the repo
 
-Use this package when you want `/cook` to behave like a real project workflow command instead of a one-shot prompt.
+`@linimin/pi-letscook` solves that by storing canonical workflow state in `.agent/**` and using `/cook` to start, resume, or refocus the workflow.
 
-It gives you:
+## What you get
 
-- **one command** for start, resume, and refocus
-- **repo-local canonical state** under `.agent/**`
-- **durable canonical verification evidence** in `.agent/verification-evidence.json`
-- **model-assisted startup proposals** from recent discussion
-- **explicit-goal anchoring** when you want the mission to stay fixed
-- **isolated completion roles** via `completion_role`
-- **deterministic verification** through repo-local scripts and regression checks
+- one command: `/cook`
+- repo-local canonical state in `.agent/**`
+- resumable long-running workflows
+- startup proposals from an explicit goal or recent discussion
+- deterministic verification, review, audit, and stop checks
 
 ## Install
 
@@ -52,64 +49,23 @@ Replace the active workflow with a different goal:
 /cook fix onboarding crash first, with regression tests
 ```
 
-Start the next round after the previous workflow is already done:
+## How `/cook` works
 
-```text
-/cook improve startup proposal confirmation UX
-```
-
-## How `/cook` behaves
-
-`/cook` is the only public workflow command, but it behaves differently depending on the current canonical workflow state.
+`/cook` is the only public workflow command, but it reacts to canonical workflow state:
 
 | Repo state | `/cook` | `/cook <goal>` |
 |---|---|---|
-| No canonical workflow yet | Uses the proposal analyst to summarize recent discussion into a startup proposal, then asks for confirmation | Builds a startup proposal anchored on the explicit goal, optionally enriching it from recent discussion, then asks for confirmation |
-| Active workflow exists | Resumes the active workflow from canonical `.agent/**` state | First asks whether to continue the current workflow or replace it, then uses a final Start/Cancel approval gate before any replacement state is written |
-| Previous workflow is already `done` | Uses the proposal analyst to summarize recent discussion into the next workflow round, then asks for confirmation | Starts the next workflow round directly from the explicit goal |
+| No workflow yet | Summarizes recent discussion into a startup proposal, then asks for approval | Builds a proposal anchored on the explicit goal, then asks for approval |
+| Active workflow exists | Resumes from canonical `.agent/**` state | First asks whether to continue or replace the current workflow |
+| Previous workflow is `done` | Starts the next round from recent discussion | Starts the next round from the explicit goal |
 
-## Startup proposal behavior
+## Startup confirmation
 
-### `/cook <goal>`
+Startup and replacement proposals are **approval-only**:
 
-When you provide an explicit goal:
-
-- the explicit goal stays the mission anchor
-- recent discussion is supplemental only
-- recent discussion may enrich scope, constraints, and acceptance details when analyst output is available
-
-Example:
-
-```text
-/cook Build feature X with tests and docs
-```
-
-### `/cook` without a goal
-
-When you do **not** provide a goal:
-
-- `/cook` uses the proposal analyst to summarize recent discussion into a startup proposal
-- the proposal is shown in a custom approval-only confirmation UI before canonical state is written
-- if analyst output is unavailable, provide an explicit goal with `/cook <goal>`
-
-Example:
-
-```text
-/cook
-```
-
-## Confirmation UI
-
-Startup and replacement confirmation use a custom approval-only UI that:
-
-- renders the proposal body separately from the action list
-- keeps Mission / Scope / Constraints / Acceptance readable as a content area
-- renders analyst-derived **Critique and risks** separately from the non-editable proposal body
-- renders recommended `task_type` / `evaluation_profile` routing hints separately from both the proposal body and the action list
-- presents explicit actions for:
-  - **Start**
-  - **Cancel**
-- treats the proposal as approval-only: if it needs changes, Cancel, discuss them in the main chat, and rerun `/cook`
+- the proposal body is shown separately from actions
+- actions are only **Start** and **Cancel**
+- if the proposal needs changes, **Cancel**, discuss them in the main chat, and rerun `/cook`
 
 When an active workflow already exists and you run `/cook <goal>`, `/cook` still shows a separate chooser first:
 
@@ -119,14 +75,7 @@ When an active workflow already exists and you run `/cook <goal>`, `/cook` still
 
 Only the follow-on startup/replacement proposal uses the approval-only Start/Cancel gate.
 
-When you accept startup or refocus from that flow, `/cook` now persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
-
-The same approval-only confirmation flow is reused across:
-
-- discussion-only startup
-- explicit-goal startup
-- next-round startup after completion
-- replacement-workflow startup
+When you accept startup or refocus from that flow, `/cook` persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
 
 ## Observability
 
