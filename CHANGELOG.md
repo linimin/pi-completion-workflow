@@ -7,6 +7,7 @@
 - kept full mission text in `/cook` confirmation instead of truncating mission anchors during derivation
 - refined `/cook` activity and completion-role text contrast by reducing overuse of `dim` styling in high-value status surfaces
 - added evaluator calibration fixtures for semantically lenient but well-formed reviewer/auditor/stop-judge reports and made packaged transcription reject those cases fail closed while still accepting truthful passing fixtures
+- tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting truthful reviewer `none; proceed to completion-auditor` routing guidance
 - wired `npm run evaluator-calibration-test` into `npm run release-check` and `.agent/verify_completion_stop.sh` as part of the packaged release gate
 - fixed the smoke auto-resume prompt regression so the packaged release check writes `auto-resume-prompt.txt` again and passes on clean HEAD
 

@@ -76,20 +76,48 @@ function parseFirstNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeInlineValue(value) {
-  return asString(value)?.replace(/\s+/g, " ").trim().toLowerCase();
+function parseNoneLikeValue(value) {
+  const raw = asString(value);
+  if (!raw) return { noneLike: false, suffix: "" };
+  const trimmed = raw.trim();
+  const patterns = [
+    /^\(none\)(.*)$/i,
+    /^none(?:\b|$)(.*)$/i,
+    /^n\/a(?:\b|$)(.*)$/i,
+    /^na(?:\b|$)(.*)$/i,
+    /^not applicable(?:\b|$)(.*)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      return {
+        noneLike: true,
+        suffix: match[1] ?? "",
+      };
+    }
+  }
+  return { noneLike: false, suffix: "" };
+}
+
+function normalizeNoneLikeSuffix(suffix) {
+  return suffix.replace(/^[\s,.;:/-]+/, "").trim();
 }
 
 function isNoneLike(value) {
-  const normalized = normalizeInlineValue(value);
-  if (!normalized) return false;
-  return (
-    normalized.startsWith("none") ||
-    normalized.startsWith("(none)") ||
-    normalized.startsWith("n/a") ||
-    normalized === "na" ||
-    normalized.startsWith("not applicable")
-  );
+  return parseNoneLikeValue(value).noneLike;
+}
+
+function isPureNoneLike(value) {
+  const parsed = parseNoneLikeValue(value);
+  return parsed.noneLike && normalizeNoneLikeSuffix(parsed.suffix).length === 0;
+}
+
+function isReviewerNoFollowUpValue(value) {
+  const parsed = parseNoneLikeValue(value);
+  if (!parsed.noneLike) return false;
+  const normalizedSuffix = normalizeNoneLikeSuffix(parsed.suffix).toLowerCase();
+  if (!normalizedSuffix) return true;
+  return /^proceed to completion-auditor\b/.test(normalizedSuffix);
 }
 
 function rubricVerdicts(reportFields) {
@@ -159,7 +187,7 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
     if (anyFail && acceptable === true) {
       errors.push("Reviewer output cannot mark 'Acceptable as-is: yes' when any rubric line is fail.");
     }
-    if (acceptable === true && followUpSlice && !isNoneLike(followUpSlice)) {
+    if (acceptable === true && followUpSlice && !isReviewerNoFollowUpValue(followUpSlice)) {
       errors.push("Reviewer output cannot mark 'Acceptable as-is: yes' while naming a follow-up slice other than none.");
     }
     if (acceptable === false) {
@@ -201,7 +229,7 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
     const nextMandatorySlice = asString(reportFields["Next mandatory slice"]);
     const openContractIds = asString(reportFields["Open top-level contract IDs"]);
     const hasRemainingWork = !isNoneLike(openContractIds) || (blockerCount ?? 0) > 0 || (highValueGapCount ?? 0) > 0;
-    if (worktreeClean === true && worktreeBlockers && !isNoneLike(worktreeBlockers)) {
+    if (worktreeClean === true && worktreeBlockers && !isPureNoneLike(worktreeBlockers)) {
       errors.push("Auditor output cannot mark 'Tracked and unignored worktree is clean: yes' while listing worktree blockers.");
     }
     if (worktreeClean === false && (!worktreeBlockers || isNoneLike(worktreeBlockers))) {
@@ -242,7 +270,7 @@ function validateRoleReport(role, output, reportFields = parseReportFields(outpu
       errors.push("Stop-judge output must include a numeric High-value gap count.");
     }
     const openContractIds = asString(reportFields["Exact remaining open top-level contract IDs"]);
-    if (canStop === true && openContractIds && !isNoneLike(openContractIds)) {
+    if (canStop === true && openContractIds && !isPureNoneLike(openContractIds)) {
       errors.push("Stop-judge output cannot mark 'Can the project stop now: yes' while naming remaining open top-level contract IDs.");
     }
     if (canStop === true && (blockerCount ?? 0) > 0) {

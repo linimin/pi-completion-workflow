@@ -25,8 +25,10 @@ assertIncludes('scripts/release-check.sh', 'npm run evaluator-calibration-test')
 assertIncludes('.agent/verify_completion_stop.sh', 'npm run evaluator-calibration-test >/dev/null');
 assertIncludes('README.md', 'Evaluator calibration now also fails closed on semantically lenient but well-formed reports.');
 assertIncludes('README.md', '`npm run evaluator-calibration-test` drives the packaged transcription path through reviewer yes-with-follow-up, auditor open-contracts-with-`Next mandatory slice: none`, and stop-judge yes-with-open-contracts fixtures while still accepting truthful passing reports.');
+assertIncludes('README.md', 'It also rejects the reproducible `none; ...` bypass family for reviewer follow-up, auditor worktree blockers, and stop-judge open-contract reporting, while still accepting truthful reviewer routing text like `Smallest follow-up slice: none; proceed to completion-auditor.`');
 assertIncludes('README.md', 'includes deterministic observability coverage plus evaluator calibration and the rubric-contract regression');
 assertIncludes('CHANGELOG.md', 'added evaluator calibration fixtures for semantically lenient but well-formed reviewer/auditor/stop-judge reports');
+assertIncludes('CHANGELOG.md', 'tightened the reproducible `none; ...` reviewer/auditor/stop-judge bypass checks while still accepting truthful reviewer `none; proceed to completion-auditor` routing guidance');
 assertIncludes('CHANGELOG.md', 'wired `npm run evaluator-calibration-test` into `npm run release-check` and `.agent/verify_completion_stop.sh`');
 assertIncludes('CHANGELOG.md', 'fixed the smoke auto-resume prompt regression');
 assertIncludes('extensions/completion/role-reporting.js', 'Reviewer output cannot mark \'Acceptable as-is: yes\' while naming a follow-up slice other than none.');
@@ -77,6 +79,17 @@ Findings: none.
 Acceptable as-is: yes
 Smallest follow-up slice: tighten docs before audit.`;
 
+const reviewerNonePrefixedLenient = `MISSION ANCHOR: test mission
+Remaining contract IDs: TEST-CONTRACT
+Rubric:
+- Contract coverage: pass - Locked acceptance criteria match the committed slice.
+- Correctness risk: pass - No blocking regression is evident.
+- Verification evidence: pass - Deterministic proof was rerun successfully.
+- Docs/state parity: pass - Docs and canonical state are aligned.
+Findings: none.
+Acceptable as-is: yes
+Smallest follow-up slice: none; tighten docs before audit.`;
+
 const auditorPass = `MISSION ANCHOR: test mission
 Remaining contract IDs: TEST-CONTRACT
 Rubric:
@@ -108,6 +121,23 @@ High-value gap count: 1
 Tracked and unignored worktree is clean: yes
 Worktree blockers: modified README.md
 Next mandatory slice: none.
+Stale or conflicting canonical state: no
+Plan truthfully captures remaining slice backlog: yes - one planned slice remains.`;
+
+const auditorNonePrefixedLenient = `MISSION ANCHOR: test mission
+Remaining contract IDs: TEST-CONTRACT
+Rubric:
+- Contract coverage: pass - The accepted slice remains satisfied on HEAD.
+- Correctness risk: concern - One planned contract still keeps the project open.
+- Verification evidence: pass - Verification was rerun for the accepted slice.
+- Docs/state parity: pass - Canonical state can be reconciled truthfully.
+Why the project is still not done: One planned contract remains after this accepted slice.
+Open top-level contract IDs: TEST-CONTRACT
+Blocker count: 0
+High-value gap count: 1
+Tracked and unignored worktree is clean: yes
+Worktree blockers: none; modified README.md
+Next mandatory slice: next-slice
 Stale or conflicting canonical state: no
 Plan truthfully captures remaining slice backlog: yes - one planned slice remains.`;
 
@@ -143,6 +173,22 @@ Docs/config/runbooks match shipped behavior: yes
 Tracked and unignored worktree is clean: yes
 Brief justification: This should be rejected because remaining contracts and blockers still exist.`;
 
+const stopJudgeNonePrefixedLenient = `MISSION ANCHOR: test mission
+Remaining contract IDs: none
+Rubric:
+- Contract coverage: pass - All implementation slices are accepted on HEAD.
+- Correctness risk: pass - No additional risk was found.
+- Verification evidence: pass - Final verification passes for the current head.
+- Docs/state parity: pass - Docs, config, and canonical state match shipped behavior.
+Can the project stop now: yes
+Exact remaining open top-level contract IDs: none; TEST-CONTRACT
+Blocker count: 0
+High-value gap count: 0
+Latest completed slice commit: abcdef1234567890abcdef1234567890abcdef12
+Docs/config/runbooks match shipped behavior: yes
+Tracked and unignored worktree is clean: yes
+Brief justification: This should be rejected because remaining contracts still exist behind a none-prefixed field.`;
+
 (async () => {
   const reviewed = await transcribeCanonicalRoleReport({
     role: 'completion-reviewer',
@@ -171,6 +217,21 @@ Brief justification: This should be rejected because remaining contracts and blo
     `reviewer lenient fixture should be rejected for a yes verdict with a follow-up slice: ${reviewerRejected.errors.join(' | ')}`,
   );
   assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 1, 'rejected reviewer fixture must not append history');
+
+  const reviewerNonePrefixedRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-reviewer',
+    output: reviewerNonePrefixedLenient,
+    reportFields: parseReportFields(reviewerNonePrefixedLenient),
+    snapshotFiles,
+    headSha: '7777777777777777777777777777777777777777',
+    sliceId: 'slice-review',
+    recordedAt: 7,
+  });
+  assert(
+    reviewerNonePrefixedRejected.errors.some((error) => error.includes('follow-up slice other than none')),
+    `reviewer none-prefixed lenient fixture should be rejected for a yes verdict with contradictory routing text: ${reviewerNonePrefixedRejected.errors.join(' | ')}`,
+  );
+  assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 1, 'rejected none-prefixed reviewer fixture must not append history');
 
   const audited = await transcribeCanonicalRoleReport({
     role: 'completion-auditor',
@@ -204,6 +265,21 @@ Brief justification: This should be rejected because remaining contracts and blo
   );
   assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 2, 'rejected auditor fixture must not append history');
 
+  const auditorNonePrefixedRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-auditor',
+    output: auditorNonePrefixedLenient,
+    reportFields: parseReportFields(auditorNonePrefixedLenient),
+    snapshotFiles,
+    headSha: '8888888888888888888888888888888888888888',
+    sliceId: 'slice-audit',
+    recordedAt: 8,
+  });
+  assert(
+    auditorNonePrefixedRejected.errors.some((error) => error.includes('listing worktree blockers')),
+    `auditor none-prefixed lenient fixture should reject clean-yes reports that smuggle blockers behind none: ${auditorNonePrefixedRejected.errors.join(' | ')}`,
+  );
+  assert(readJsonl(snapshotFiles.sliceHistoryPath).length === 2, 'rejected none-prefixed auditor fixture must not append history');
+
   const judged = await transcribeCanonicalRoleReport({
     role: 'completion-stop-judge',
     output: stopJudgePass,
@@ -233,6 +309,20 @@ Brief justification: This should be rejected because remaining contracts and blo
     `stop-judge lenient fixture should reject yes verdicts with blockers: ${judgeRejected.errors.join(' | ')}`,
   );
   assert(readJsonl(snapshotFiles.stopHistoryPath).length === 1, 'rejected stop-judge fixture must not append judgment history');
+
+  const judgeNonePrefixedRejected = await transcribeCanonicalRoleReport({
+    role: 'completion-stop-judge',
+    output: stopJudgeNonePrefixedLenient,
+    reportFields: parseReportFields(stopJudgeNonePrefixedLenient),
+    snapshotFiles,
+    headSha: '9999999999999999999999999999999999999999',
+    recordedAt: 9,
+  });
+  assert(
+    judgeNonePrefixedRejected.errors.some((error) => error.includes('remaining open top-level contract IDs')),
+    `stop-judge none-prefixed lenient fixture should reject yes verdicts with none-prefixed open contracts: ${judgeNonePrefixedRejected.errors.join(' | ')}`,
+  );
+  assert(readJsonl(snapshotFiles.stopHistoryPath).length === 1, 'rejected none-prefixed stop-judge fixture must not append judgment history');
 
   fs.rmSync(tempRoot, { recursive: true, force: true });
 })().catch((error) => {
