@@ -467,7 +467,7 @@ type ActiveWorkflowProposalAssessment = {
 	action: "continue" | "refocus" | "unclear";
 	currentMissionAnchor: string;
 	proposal?: ContextProposal;
-	reason: "matching_mission" | "clear_refocus" | "explicit_goal" | "missing_proposal" | "ambiguous_discussion";
+	reason: "matching_mission" | "clear_refocus" | "missing_proposal" | "ambiguous_discussion";
 };
 
 type ExistingWorkflowChooserOptions = {
@@ -813,12 +813,7 @@ function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope"
 	return undefined;
 }
 
-function finalizeContextProposal(
-	proposal: ContextProposal,
-	projectName: string,
-	options: { preserveExplicitMission?: boolean } = {},
-): ContextProposal | undefined {
-	if (options.preserveExplicitMission) return proposal;
+function finalizeContextProposal(proposal: ContextProposal, projectName: string): ContextProposal | undefined {
 	if (!isGenericPlanningMissionAnchor(proposal.mission)) return proposal;
 	const bodyTexts = contextProposalBodyTexts(proposal);
 	if (hasExplicitPlanningOnlyDeliverable(bodyTexts) || hasClearNoCodeOrDocsOnlySignal(bodyTexts) || hasSupportOnlyDocumentationDeliverable(proposal)) {
@@ -976,19 +971,14 @@ function shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal: ContextPr
 	);
 }
 
-function maybeWriteActiveWorkflowRoutingSnapshot(
-	assessment: ActiveWorkflowProposalAssessment,
-	options: { mode: "bare" | "explicit"; explicitGoal?: string },
-): void {
+function maybeWriteActiveWorkflowRoutingSnapshot(assessment: ActiveWorkflowProposalAssessment): void {
 	const snapshotPath = completionTestActiveWorkflowRoutingSnapshotPath();
 	if (!snapshotPath) return;
 	maybeWriteTestSnapshot(
 		snapshotPath,
 		`${JSON.stringify(
 			{
-				mode: options.mode,
-				explicitGoalProvided: Boolean(options.explicitGoal),
-				explicitGoal: options.explicitGoal ?? null,
+				mode: "bare",
 				action: assessment.action,
 				reason: assessment.reason,
 				currentMissionAnchor: assessment.currentMissionAnchor,
@@ -1017,7 +1007,6 @@ const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 	"risks must contain concrete failure modes or regressions that the later workflow should keep in view.",
 	"task_type and evaluation_profile should be candidate routing hints only; reuse the existing completion vocabulary when it clearly fits instead of inventing new schema names.",
 	"possible_noise should list discussion points that look stale, weakly related, or unsafe to promote into scope.",
-	"When an explicit goal is provided, keep the mission anchored to that goal instead of replacing it with a broader or different mission.",
 	"When discussion is insufficient, prefer empty arrays and a low confidence value over invention.",
 ].join(" ");
 
@@ -1072,11 +1061,7 @@ function extractJsonObjectFromText(text: string): string | undefined {
 	return unfenced.slice(start, end + 1);
 }
 
-function parseContextProposalAnalystOutput(
-	raw: string,
-	projectName: string,
-	explicitGoal?: string,
-): ContextProposal | undefined {
+function parseContextProposalAnalystOutput(raw: string, projectName: string): ContextProposal | undefined {
 	const jsonText = extractJsonObjectFromText(raw);
 	if (!jsonText) return undefined;
 	let parsed: unknown;
@@ -1086,8 +1071,7 @@ function parseContextProposalAnalystOutput(
 		return undefined;
 	}
 	if (!isRecord(parsed)) return undefined;
-	const explicit = explicitGoal ? parseContextProposal(explicitGoal, projectName, { preserveMission: true }) : undefined;
-	const missionSource = explicit?.mission ?? explicitGoal ?? asString(parsed.mission);
+	const missionSource = asString(parsed.mission);
 	if (!missionSource) return undefined;
 	const assessment = assessMissionAnchor(missionSource, projectName);
 	const normalizedMission = normalizeMissionAnchorText(missionSource);
@@ -1096,20 +1080,14 @@ function parseContextProposalAnalystOutput(
 	const scope = uniqueProposalItems(asStringArray(parsed.scope));
 	const constraints = uniqueProposalItems(asStringArray(parsed.constraints));
 	const acceptance = uniqueProposalItems(asStringArray(parsed.acceptance));
-	const analysis = mergeContextProposalAnalysis(
-		[
-			explicit?.analysis,
-			buildContextProposalAnalysis({
-				taskType: parsed.task_type ?? parsed.taskType,
-				evaluationProfile: parsed.evaluation_profile ?? parsed.evaluationProfile,
-				critique: asStringArray(parsed.critique),
-				risks: asStringArray(parsed.risks ?? parsed.risk),
-				possibleNoise: asStringArray(parsed.possible_noise ?? parsed.possibleNoise),
-				hintTexts: [raw, mission, ...scope, ...constraints, ...acceptance],
-			}),
-		],
-		[explicitGoal ?? "", raw, mission, ...scope, ...constraints, ...acceptance],
-	);
+	const analysis = buildContextProposalAnalysis({
+		taskType: parsed.task_type ?? parsed.taskType,
+		evaluationProfile: parsed.evaluation_profile ?? parsed.evaluationProfile,
+		critique: asStringArray(parsed.critique),
+		risks: asStringArray(parsed.risks ?? parsed.risk),
+		possibleNoise: asStringArray(parsed.possible_noise ?? parsed.possibleNoise),
+		hintTexts: [raw, mission, ...scope, ...constraints, ...acceptance],
+	});
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
 	return finalizeContextProposal(
 		{
@@ -1123,7 +1101,6 @@ function parseContextProposalAnalystOutput(
 			source: "analyst",
 		},
 		projectName,
-		{ preserveExplicitMission: Boolean(explicitGoal) },
 	);
 }
 
@@ -1134,17 +1111,9 @@ function contextProposalAnalystModelArg(model: unknown): string | undefined {
 	return provider && id ? `${provider}/${id}` : undefined;
 }
 
-function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[], explicitGoal?: string): string {
+function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[]): string {
 	const discussion = serializeRecentDiscussionEntries(recentEntries);
-	return [
-		`Project: ${projectName}`,
-		explicitGoal
-			? `Explicit goal (keep this mission anchor):\n${explicitGoal}`
-			: "Explicit goal: none provided; infer the current mission from the discussion.",
-		"",
-		"Recent discussion:",
-		discussion,
-	].join("\n");
+	return [`Project: ${projectName}`, "Infer the current mission from the discussion.", "", "Recent discussion:", discussion].join("\n");
 }
 
 function contextProposalAnalystProgressLines(activity: LiveRoleActivity): string[] {
@@ -1173,14 +1142,13 @@ async function runContextProposalAnalystSubprocess(
 	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any },
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
-	explicitGoal?: string,
 ): Promise<string | undefined> {
 	const modelArg = contextProposalAnalystModelArg(ctx.model);
 	if (!modelArg) return undefined;
 	const cwd = getCtxCwd(ctx);
 	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 	const rootKey = completionRootKey(undefined, cwd);
-	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries, explicitGoal);
+	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries);
 	const systemPromptTemp = await writeTempFile("pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
 	const analystRole = "cook-proposal-analyst";
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
@@ -1282,18 +1250,17 @@ async function analyzeContextProposalWithAgent(
 	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any; modelRegistry?: any },
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
-	explicitGoal?: string,
 ): Promise<ContextProposal | undefined> {
 	if (shouldDisableContextProposalAnalyst()) return undefined;
 	const testOutput = completionTestContextProposalAnalystOutput();
 	if (testOutput) {
-		return parseContextProposalAnalystOutput(testOutput, projectName, explicitGoal);
+		return parseContextProposalAnalystOutput(testOutput, projectName);
 	}
 	if (recentEntries.length === 0) return undefined;
 	try {
-		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries, explicitGoal);
+		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries);
 		if (!raw) return undefined;
-		return parseContextProposalAnalystOutput(raw, projectName, explicitGoal);
+		return parseContextProposalAnalystOutput(raw, projectName);
 	} catch (error) {
 		console.warn("[completion] context proposal analyst failed", error);
 		return undefined;
@@ -1522,7 +1489,7 @@ async function resolveContextProposalConfirmationAction(
 	};
 }
 
-function parseContextProposal(text: string, projectName: string, options: { preserveMission?: boolean } = {}): ContextProposal | undefined {
+function parseContextProposal(text: string, projectName: string): ContextProposal | undefined {
 	const cleaned = stripCodeBlocks(text).replace(/\r/g, "").trim();
 	if (!cleaned) return undefined;
 	const lines = cleaned
@@ -1667,7 +1634,6 @@ function parseContextProposal(text: string, projectName: string, options: { pres
 			source: "session",
 		},
 		projectName,
-		{ preserveExplicitMission: options.preserveMission },
 	);
 }
 
@@ -1750,73 +1716,17 @@ function extractContextProposalFromStructuredSession(
 async function extractContextProposalFromSession(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
-	explicitGoal?: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx);
-	return (await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal)) ??
+	return (await analyzeContextProposalWithAgent(ctx, projectName, recentEntries)) ??
 		extractContextProposalFromStructuredSession(recentEntries, projectName);
-}
-
-async function buildGoalAnchoredContextProposal(
-	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
-	goal: string,
-	projectName: string,
-): Promise<ContextProposal> {
-	const explicit = parseContextProposal(goal, projectName, { preserveMission: true });
-	const sessionProposal = await extractContextProposalFromSession(ctx, projectName, goal);
-	const missionSource = explicit?.mission ?? goal;
-	const assessment = assessMissionAnchor(missionSource, projectName);
-	const mission = assessment.derived;
-	const mergeSessionBody = sessionProposal?.source === "analyst";
-	const explicitScope = explicit?.scope ?? [];
-	const sessionScope = mergeSessionBody
-		? (sessionProposal?.scope ?? []).filter((item) => isSessionScopeItemMissionRelevant(item, mission))
-		: [];
-	const sessionConstraints = mergeSessionBody ? sessionProposal?.constraints ?? [] : [];
-	const sessionAcceptance = mergeSessionBody ? sessionProposal?.acceptance ?? [] : [];
-	const scope = uniqueProposalItems([...explicitScope, ...sessionScope]);
-	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...sessionConstraints]);
-	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...sessionAcceptance]);
-	const analysis = mergeContextProposalAnalysis(
-		[explicit?.analysis, sessionProposal?.analysis],
-		[goal, mission, ...(sessionProposal?.analysis.possibleNoise ?? []), ...scope, ...constraints, ...acceptance],
-	);
-	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
-	return (
-		finalizeContextProposal(
-			{
-				mission,
-				scope,
-				constraints,
-				acceptance,
-				analysis,
-				goalText,
-				basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
-				source: sessionProposal?.source ?? explicit?.source ?? "session",
-			},
-			projectName,
-			{ preserveExplicitMission: true },
-		) ?? {
-			mission,
-			scope,
-			constraints,
-			acceptance,
-			analysis,
-			goalText,
-			basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
-			source: sessionProposal?.source ?? explicit?.source ?? "session",
-		}
-	);
 }
 
 async function deriveCookContextProposal(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
-	explicitGoal?: string,
 ): Promise<ContextProposal | undefined> {
-	return explicitGoal
-		? await buildGoalAnchoredContextProposal(ctx, explicitGoal, projectName)
-		: await extractContextProposalFromSession(ctx, projectName);
+	return await extractContextProposalFromSession(ctx, projectName);
 }
 
 async function confirmContextProposal(
@@ -2092,44 +2002,37 @@ function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role
 async function assessActiveWorkflowProposalRouting(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	snapshot: CompletionStateSnapshot,
-	explicitGoal?: string,
 ): Promise<ActiveWorkflowProposalAssessment> {
 	const currentMission = currentMissionAnchor(snapshot);
 	const projectName = path.basename(snapshot.files.root);
-	const proposal = explicitGoal
-		? await deriveCookContextProposal(ctx, projectName, explicitGoal)
-		: await deriveCookContextProposal(ctx, projectName);
-	const mode = explicitGoal ? "explicit" : "bare";
+	const proposal = await deriveCookContextProposal(ctx, projectName);
 	if (!proposal) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "unclear",
 			currentMissionAnchor: currentMission,
 			reason: "missing_proposal",
 		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
 		return assessment;
 	}
-	const missionsMatch = explicitGoal
-		? missionAnchorsStrictlyEquivalent(currentMission, proposal.mission)
-		: missionAnchorsLikelyEquivalent(currentMission, proposal.mission);
-	if (missionsMatch) {
+	if (missionAnchorsLikelyEquivalent(currentMission, proposal.mission)) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "continue",
 			currentMissionAnchor: currentMission,
 			proposal,
 			reason: "matching_mission",
 		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
 		return assessment;
 	}
-	if (explicitGoal || shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal)) {
+	if (shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal)) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "refocus",
 			currentMissionAnchor: currentMission,
 			proposal,
-			reason: explicitGoal ? "explicit_goal" : "clear_refocus",
+			reason: "clear_refocus",
 		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
 		return assessment;
 	}
 	const assessment: ActiveWorkflowProposalAssessment = {
@@ -2138,7 +2041,7 @@ async function assessActiveWorkflowProposalRouting(
 		proposal,
 		reason: "ambiguous_discussion",
 	};
-	maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+	maybeWriteActiveWorkflowRoutingSnapshot(assessment);
 	return assessment;
 }
 
@@ -4172,11 +4075,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 				emitCommandText(ctx, COOK_INLINE_ARG_REJECTION_MESSAGE, "info");
 				return;
 			}
-			const explicitGoal = inlineArgs;
-			let goal = explicitGoal;
+			let goal: string | undefined;
 			const cwd = getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);
-			const hadSnapshot = Boolean(snapshot);
 			const workflowDone = isWorkflowDone(snapshot);
 			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
 			let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
@@ -4185,40 +4086,21 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
 				const projectName = path.basename(root);
-				if (!goal) {
-					const proposal = await deriveCookContextProposal(ctx, projectName);
-					if (!proposal) {
-						emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(), "info");
-						return;
-					}
-					const decision = await confirmContextProposal(ctx, proposal, {
-						title: "Start a completion workflow from the recent discussion?",
-					});
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal"), "info");
-						return;
-					}
-					goal = decision.goalText;
-					kickoffMissionAnchor = decision.missionAnchor;
-					kickoffAnalysis = decision.analysis;
-				} else {
-					const proposal = await deriveCookContextProposal(ctx, projectName, goal);
-					if (!proposal) {
-						emitCommandText(ctx, "Failed to derive a workflow startup proposal from this goal.", "error");
-						return;
-					}
-					const decision = await confirmContextProposal(ctx, proposal, {
-						title: "Start a completion workflow from this goal?",
-						nonInteractiveBehavior: "accept",
-					});
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled workflow startup proposal"), "info");
-						return;
-					}
-					goal = decision.goalText;
-					kickoffMissionAnchor = decision.missionAnchor;
-					kickoffAnalysis = decision.analysis;
+				const proposal = await deriveCookContextProposal(ctx, projectName);
+				if (!proposal) {
+					emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(), "info");
+					return;
 				}
+				const decision = await confirmContextProposal(ctx, proposal, {
+					title: "Start a completion workflow from the recent discussion?",
+				});
+				if (!decision) {
+					emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal"), "info");
+					return;
+				}
+				goal = decision.goalText;
+				kickoffMissionAnchor = decision.missionAnchor;
+				kickoffAnalysis = decision.analysis;
 				const startupRouting = finalizeContextProposalAnalysis(kickoffAnalysis, [goal ?? kickoffMissionAnchor ?? projectName]);
 				const created = await scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName, {
 					analysis: startupRouting,
@@ -4296,73 +4178,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 				}
 			}
 			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
-			if (hadSnapshot && explicitGoal) {
-				if (workflowDone) {
-					const projectName = path.basename(snapshot.files.root);
-					const proposal = await deriveCookContextProposal(ctx, projectName, goal);
-					if (!proposal) {
-						emitCommandText(ctx, "Failed to derive the next workflow round proposal from this goal.", "error");
-						return;
-					}
-					const decision = await confirmContextProposal(ctx, proposal, {
-						title: "Start the next workflow round from this goal?",
-						nonInteractiveBehavior: "accept",
-					});
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal"), "info");
-						return;
-					}
-					goal = decision.goalText;
-					kickoffIntent = "refocus";
-					kickoffMissionAnchor = decision.missionAnchor;
-					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-					emitCommandText(ctx, `Started a new completion workflow round from explicit goal: ${decision.missionAnchor}`, "info");
-				} else {
-					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, goal);
-					if (!assessment.proposal) {
-						emitCommandText(ctx, "Failed to derive the replacement workflow proposal from this goal.", "error");
-						return;
-					}
-					if (assessment.action === "continue") {
-						kickoffIntent = "continue";
-						kickoffMissionAnchor = assessment.currentMissionAnchor;
-						if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(assessment.currentMissionAnchor)) {
-							emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${assessment.currentMissionAnchor}`, "info");
-						}
-					} else {
-						const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, { comparison: "strict" });
-						if (!decision) {
-							emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
-							return;
-						}
-						kickoffIntent = decision.action;
-						kickoffMissionAnchor = decision.currentMissionAnchor;
-						if (decision.action === "refocus") {
-							const proposalDecision = await confirmContextProposal(ctx, assessment.proposal, {
-								title: "Start the replacement workflow from this goal?",
-								nonInteractiveBehavior: "accept",
-							});
-							if (!proposalDecision) {
-								emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
-								return;
-							}
-							goal = proposalDecision.goalText;
-							await refocusCompletionMission(
-								snapshot,
-								proposalDecision.missionAnchor,
-								proposalDecision.goalText,
-								proposalDecision.analysis,
-							);
-							snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-							kickoffMissionAnchor = proposalDecision.missionAnchor;
-							emitCommandText(ctx, `Refocused completion mission to: ${proposalDecision.missionAnchor}`, "info");
-						} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
-							emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
-						}
-					}
-				}
-			}
 			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
 			const kickoffPrompt = completionKickoff(
 				goal,

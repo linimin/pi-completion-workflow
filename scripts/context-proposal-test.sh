@@ -202,7 +202,7 @@ PY
 # No workflow yet: bare /cook structured fallback should normalize placeholder planning phrasing
 # into the concrete implementation mission when scope/acceptance clearly describe shipped work.
 SESSION_ZERO_NORMALIZED="$TMPDIR/session-zero-normalized.jsonl"
-DISCUSSION_ZERO_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing into shipped implementation missions.\n- Keep analyst-derived and structured-fallback proposals aligned.\nConstraints:\n- Do not rewrite explicit /cook <text> mission anchors.\nAcceptance:\n- Add deterministic regression coverage for startup normalization and refocus gating.\n- Keep the approval-only Start/Cancel rewrite gate.'
+DISCUSSION_ZERO_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing into shipped implementation missions.\n- Keep analyst-derived and structured-fallback proposals aligned.\nConstraints:\n- Do not rewrite the supported bare-discussion mission anchor once it is clear.\nAcceptance:\n- Add deterministic regression coverage for startup normalization and refocus gating.\n- Keep the approval-only Start/Cancel rewrite gate.'
 DISCUSSION_SNAPSHOT_ZERO_NORMALIZED="$TMPDIR/context-proposal-normalized-fallback.json"
 write_session "$SESSION_ZERO_NORMALIZED" "$ROOT" "$DISCUSSION_ZERO_NORMALIZED"
 
@@ -238,7 +238,7 @@ rm -rf .agent
 # No workflow yet: analyst-derived and strict structured fallback proposals should converge on the same
 # normalized implementation mission for the same planning-phrased discussion.
 SESSION_ZERO_ANALYST_NORMALIZED="$TMPDIR/session-zero-analyst-normalized.jsonl"
-ANALYST_OUTPUT_ZERO_NORMALIZED='{"mission":"開始實作這個方案","scope":["Normalize bare /cook planning phrasing into shipped implementation missions.","Keep analyst-derived and structured-fallback proposals aligned."],"constraints":["Do not rewrite explicit /cook <text> mission anchors."],"acceptance":["Add deterministic regression coverage for startup normalization and refocus gating.","Keep the approval-only Start/Cancel rewrite gate."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.93}'
+ANALYST_OUTPUT_ZERO_NORMALIZED='{"mission":"開始實作這個方案","scope":["Normalize bare /cook planning phrasing into shipped implementation missions.","Keep analyst-derived and structured-fallback proposals aligned."],"constraints":["Do not rewrite the supported bare-discussion mission anchor once it is clear."],"acceptance":["Add deterministic regression coverage for startup normalization and refocus gating.","Keep the approval-only Start/Cancel rewrite gate."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.93}'
 DISCUSSION_SNAPSHOT_ZERO_ANALYST_NORMALIZED="$TMPDIR/context-proposal-normalized-analyst.json"
 write_session "$SESSION_ZERO_ANALYST_NORMALIZED" "$ROOT" "$DISCUSSION_ZERO_NORMALIZED"
 
@@ -434,6 +434,8 @@ plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert routing['mode'] == 'bare', 'active bare /cook continue regression should snapshot bare routing mode'
+assert 'explicitGoal' not in routing, 'active bare /cook continue routing should not expose removed explicit-goal shim fields'
+assert 'explicitGoalProvided' not in routing, 'active bare /cook continue routing should not expose removed explicit-goal shim fields'
 assert routing['action'] == 'continue', 'matching structured discussion should classify active bare /cook as continue'
 assert routing['reason'] == 'matching_mission', 'matching structured discussion should keep the current mission rather than refocus'
 assert routing['currentMissionAnchor'] == mission, 'continue routing should preserve the current mission anchor'
@@ -480,6 +482,8 @@ plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
 assert routing['mode'] == 'bare', 'active bare /cook refocus normalization should snapshot bare routing mode'
+assert 'explicitGoal' not in routing, 'active bare /cook refocus routing should not expose removed explicit-goal shim fields'
+assert 'explicitGoalProvided' not in routing, 'active bare /cook refocus routing should not expose removed explicit-goal shim fields'
 assert routing['action'] == 'refocus', 'placeholder planning mission should still classify active bare /cook as refocus when the normalized mission changes'
 assert routing['reason'] == 'clear_refocus', 'active bare /cook refocus normalization should keep the clear_refocus routing reason'
 assert routing['proposedMissionAnchor'] == mission, 'active bare /cook refocus should normalize the proposed mission before canonical rewrite'
@@ -609,7 +613,7 @@ PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$ACTIVE_INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ACTIVE_INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$ACTIVE_INLINE_REJECTION_CHOOSER" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-active-inline-arg.out" 2>"$TMPDIR/pi-completion-context-proposal-active-inline-arg.err"
+pi -e "$PKG_ROOT" -p "/cook Replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-active-inline-arg.out" 2>"$TMPDIR/pi-completion-context-proposal-active-inline-arg.err"
 
 python3 - "$TMPDIR/pi-completion-context-proposal-active-inline-arg.out" "$TMPDIR/pi-completion-context-proposal-active-inline-arg.err" "$ACTIVE_INLINE_REJECTION_ROUTING" "$ACTIVE_INLINE_REJECTION_PROPOSAL" "$ACTIVE_INLINE_REJECTION_CHOOSER" "$ACTIVE_INLINE_REJECTION_BASELINE" <<'PY'
 import json
@@ -705,8 +709,8 @@ PY
 mark_done
 
 SESSION_FIVE="$TMPDIR/session-five.jsonl"
-DISCUSSION_FIVE=$'I do not want to rewrite the parser. The safer path is to let /cook analyze the discussion first, keep the user\'s explicit mission if they provided one, and ignore stale scope that drifted in from earlier turns. We should still prove it with a regression test before writing canonical state.'
-ANALYST_OUTPUT_FIVE='{"mission":"Use a proposal analyst to summarize natural discussion before /cook writes canonical state.","scope":["Keep explicit goals anchored.","Drop stale scope from earlier turns."],"constraints":["Do not rewrite the parser."],"acceptance":["Add a regression test."],"confidence":0.91,"possible_noise":["old unrelated scope"]}'
+DISCUSSION_FIVE=$'I do not want to rewrite the parser. The safer path is to let /cook analyze the discussion first, keep the discussion-derived mission anchored once it is clear, and ignore stale scope that drifted in from earlier turns. We should still prove it with a regression test before writing canonical state.'
+ANALYST_OUTPUT_FIVE='{"mission":"Use a proposal analyst to summarize natural discussion before /cook writes canonical state.","scope":["Keep the discussion-derived mission anchored once it is clear.","Drop stale scope from earlier turns."],"constraints":["Do not rewrite the parser."],"acceptance":["Add a regression test."],"confidence":0.91,"possible_noise":["old unrelated scope"]}'
 write_session "$SESSION_FIVE" "$ROOT" "$DISCUSSION_FIVE"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
@@ -746,7 +750,7 @@ assert continuation_reason.startswith('User refocused workflow via /cook:'), 'co
 assert 'task_type=completion-workflow' in continuation_reason, 'analyst-derived restart should persist the selected task_type'
 assert 'evaluation_profile=completion-rubric-v1' in continuation_reason, 'analyst-derived restart should persist the selected evaluation_profile'
 assert 'critique outcome=accepted critique=none' in continuation_reason, 'analyst-derived restart should persist that no critique notes were accepted'
-assert 'Keep explicit goals anchored.' in continuation_reason, 'analyst-derived scope should be preserved'
+assert 'Keep the discussion-derived mission anchored once it is clear.' in continuation_reason, 'analyst-derived scope should be preserved'
 PY
 
 # Custom confirmation UI: start should render proposal content separately from approval-only Start/Cancel actions.
