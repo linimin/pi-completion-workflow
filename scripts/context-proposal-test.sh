@@ -293,6 +293,61 @@ PY
 
 rm -rf .agent
 
+# No workflow yet: support-docs-only deliverables should also preserve planning missions even without
+# an explicit docs-only/no-code phrase, as long as the deliverable stays limited to support documentation.
+SESSION_ZERO_SUPPORT_DOCS_ONLY="$TMPDIR/session-zero-support-docs-only.jsonl"
+DISCUSSION_ZERO_SUPPORT_DOCS_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Update README for the /cook mission-normalization behavior.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Add documentation for the operator-facing refocus flow.'
+DISCUSSION_SNAPSHOT_ZERO_SUPPORT_DOCS_ONLY="$TMPDIR/context-proposal-support-docs-only.json"
+write_session "$SESSION_ZERO_SUPPORT_DOCS_ONLY" "$ROOT" "$DISCUSSION_ZERO_SUPPORT_DOCS_ONLY"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_SUPPORT_DOCS_ONLY" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_SUPPORT_DOCS_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-support-docs-only.out" 2>"$TMPDIR/pi-completion-context-proposal-support-docs-only.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_SUPPORT_DOCS_ONLY" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = '開始實作這個方案.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'support-docs-only startup should preserve the planning mission even without an explicit docs-only phrase'
+assert state['mission_anchor'] == mission, 'support-docs-only startup should keep the planning mission anchor in canonical state'
+assert proposal['scope'] == ['Update README for the /cook mission-normalization behavior.'], 'support-docs-only startup should keep the documentation scope item'
+assert proposal['acceptance'] == ['Add documentation for the operator-facing refocus flow.'], 'support-docs-only startup should keep the documentation acceptance item'
+PY
+
+rm -rf .agent
+
+# No workflow yet: analyst-derived generic planning missions should still fail closed when discussion
+# never provides a clear implementation anchor, instead of promoting vague non-doc scope.
+SESSION_ZERO_ANALYST_AMBIGUOUS_GENERIC="$TMPDIR/session-zero-analyst-ambiguous-generic.jsonl"
+DISCUSSION_ZERO_ANALYST_AMBIGUOUS_GENERIC=$'We should revisit the completion widget while roles are active and make the outcome easier to follow without deciding the exact implementation yet.'
+ANALYST_OUTPUT_ZERO_AMBIGUOUS_GENERIC='{"mission":"開始實作這個方案","scope":["The completion widget during active roles."],"constraints":["Keep the approval-only Start/Cancel gate unchanged."],"acceptance":["Current behavior stays understandable."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.74}'
+DISCUSSION_SNAPSHOT_ZERO_ANALYST_AMBIGUOUS_GENERIC="$TMPDIR/context-proposal-analyst-ambiguous-generic.json"
+write_session "$SESSION_ZERO_ANALYST_AMBIGUOUS_GENERIC" "$ROOT" "$DISCUSSION_ZERO_ANALYST_AMBIGUOUS_GENERIC"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_ZERO_AMBIGUOUS_GENERIC" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_ANALYST_AMBIGUOUS_GENERIC" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_ANALYST_AMBIGUOUS_GENERIC" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-analyst-ambiguous-generic.out" 2>"$TMPDIR/pi-completion-context-proposal-analyst-ambiguous-generic.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-analyst-ambiguous-generic.out" "$TMPDIR/pi-completion-context-proposal-analyst-ambiguous-generic.err" "$DISCUSSION_SNAPSHOT_ZERO_ANALYST_AMBIGUOUS_GENERIC" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+assert not Path('.agent').exists(), 'analyst-derived ambiguous generic discussion should fail closed without writing canonical state'
+assert not snapshot.exists(), 'analyst-derived ambiguous generic discussion should not emit a proposal snapshot when bare /cook fails closed'
+assert 'Bare /cook failed closed' in output, 'analyst-derived ambiguous generic discussion should explain the fail-closed startup outcome'
+PY
+
 # No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
 SESSION_ONE="$TMPDIR/session-one.jsonl"
 DISCUSSION_ONE="$DISCUSSION_ZERO"

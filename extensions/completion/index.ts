@@ -795,6 +795,12 @@ function isImplementationMissionSourceCandidate(text: string): boolean {
 	return CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalized);
 }
 
+function hasSupportOnlyDocumentationDeliverable(proposal: Pick<ContextProposal, "scope" | "acceptance">): boolean {
+	const deliverableTexts = [...proposal.scope, ...proposal.acceptance].map((item) => normalizeProposalLine(item)).filter(Boolean);
+	if (deliverableTexts.length === 0) return false;
+	return deliverableTexts.every((item) => isSupportOnlyDocumentationItem(item));
+}
+
 function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string | undefined {
 	for (const item of proposal.scope) {
 		if (isImplementationMissionSourceCandidate(item)) return item;
@@ -802,9 +808,7 @@ function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope"
 	for (const item of proposal.acceptance) {
 		if (isImplementationMissionSourceCandidate(item)) return item;
 	}
-	return proposal.scope.find(
-		(item) => !hasExplicitPlanningOnlyDeliverable([item]) && !hasClearNoCodeOrDocsOnlySignal([item]) && !isSupportOnlyDocumentationItem(item),
-	);
+	return undefined;
 }
 
 function finalizeContextProposal(
@@ -815,7 +819,9 @@ function finalizeContextProposal(
 	if (options.preserveExplicitMission) return proposal;
 	if (!isGenericPlanningMissionAnchor(proposal.mission)) return proposal;
 	const bodyTexts = contextProposalBodyTexts(proposal);
-	if (hasExplicitPlanningOnlyDeliverable(bodyTexts) || hasClearNoCodeOrDocsOnlySignal(bodyTexts)) return proposal;
+	if (hasExplicitPlanningOnlyDeliverable(bodyTexts) || hasClearNoCodeOrDocsOnlySignal(bodyTexts) || hasSupportOnlyDocumentationDeliverable(proposal)) {
+		return proposal;
+	}
 	const missionSource = pickImplementationMissionSource(proposal);
 	if (!missionSource) return undefined;
 	const nextMission = assessMissionAnchor(missionSource, projectName).derived;
