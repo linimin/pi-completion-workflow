@@ -539,8 +539,10 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 }
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
+const COOK_INLINE_ARG_REJECTION_MESSAGE =
+	"Inline /cook arguments are no longer supported. Clarify the mission in the main chat and rerun bare /cook.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat or, as a temporary compatibility shim, pass /cook <text>.";
+	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat and rerun bare /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -4165,7 +4167,12 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("cook", {
 		description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round",
 		handler: async (args, ctx) => {
-			const explicitGoal = args.trim();
+			const inlineArgs = args.trim();
+			if (inlineArgs) {
+				emitCommandText(ctx, COOK_INLINE_ARG_REJECTION_MESSAGE, "info");
+				return;
+			}
+			const explicitGoal = inlineArgs;
 			let goal = explicitGoal;
 			const cwd = getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);

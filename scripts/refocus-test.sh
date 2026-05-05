@@ -47,7 +47,13 @@ PY
 cd "$TMPDIR"
 git init -q
 
-pi -e "$PKG_ROOT" -p "/cook smoke-test mission" >"$TMPDIR/pi-completion-refocus-bootstrap.out" 2>"$TMPDIR/pi-completion-refocus-bootstrap.err" &
+BOOTSTRAP_SESSION="$TMPDIR/session-bootstrap.jsonl"
+BOOTSTRAP_DISCUSSION=$'Mission: Smoke-test mission.\nScope:\n- Bootstrap a completion workflow for the refocus regression fixture.\nConstraints:\n- Use supported bare /cook discussion flow only.\nAcceptance:\n- Materialize canonical state for active-workflow refocus tests.'
+write_session "$BOOTSTRAP_SESSION" "$TMPDIR" "$BOOTSTRAP_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+pi --session "$BOOTSTRAP_SESSION" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-refocus-bootstrap.out" 2>"$TMPDIR/pi-completion-refocus-bootstrap.err" &
 PI_PID=$!
 for _ in $(seq 1 60); do
   if [[ -f .agent/profile.json && -f .agent/state.json && -f .agent/plan.json && -f .agent/active-slice.json ]]; then
@@ -73,45 +79,78 @@ print(state['mission_anchor'])
 PY
 )"
 
-CHOOSER_SNAPSHOT="$TMPDIR/existing-workflow-chooser.json"
-PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
-PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$CHOOSER_SNAPSHOT" \
-PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/cook replacement mission that should stay in the main chat" \
-  >"$TMPDIR/pi-completion-refocus-cancel.out" 2>"$TMPDIR/pi-completion-refocus-cancel.err"
-
-python3 - "$CHOOSER_SNAPSHOT" "$TMPDIR/pi-completion-refocus-cancel.out" "$TMPDIR/pi-completion-refocus-cancel.err" "$INITIAL_MISSION" <<'PY'
+INLINE_REJECTION_ROUTING="$TMPDIR/inline-arg-routing.json"
+INLINE_REJECTION_PROPOSAL="$TMPDIR/inline-arg-proposal.json"
+INLINE_REJECTION_CHOOSER="$TMPDIR/inline-arg-chooser.json"
+INLINE_REJECTION_BASELINE="$TMPDIR/inline-arg-before.json"
+python3 - "$INLINE_REJECTION_BASELINE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-chooser = json.loads(Path(sys.argv[1]).read_text())
-output = Path(sys.argv[2]).read_text() + Path(sys.argv[3]).read_text()
-initial_mission = sys.argv[4]
-state = json.loads(Path('.agent/state.json').read_text())
-plan = json.loads(Path('.agent/plan.json').read_text())
-active = json.loads(Path('.agent/active-slice.json').read_text())
-
-assert state['mission_anchor'] == initial_mission, 'cancelled chooser should keep the current mission anchor'
-assert plan['mission_anchor'] == initial_mission, 'cancelled chooser should keep plan.json unchanged'
-assert active['mission_anchor'] == initial_mission, 'cancelled chooser should keep active-slice.json unchanged'
-assert chooser['title'].startswith('Existing completion workflow found'), 'chooser snapshot should describe the existing-workflow prompt'
-assert chooser['choices'][0].startswith('Continue current workflow'), 'chooser should keep the continue option'
-assert chooser['choices'][1].startswith('Abandon current workflow and start this new one'), 'chooser should keep the explicit-goal refocus option'
-assert 'Start/Cancel confirmation' in chooser['choices'][1], 'chooser should mention the approval-only replacement confirmation'
-assert chooser['choices'][2].startswith('Cancel'), 'chooser should keep the cancel option'
-assert 'Discuss changes in the main chat and rerun /cook.' in chooser['choices'][2], 'chooser cancel copy should redirect users back to the main chat and rerun /cook'
-assert 'Discuss changes in the main chat and rerun /cook.' in output, 'chooser cancel output should redirect users back to the main chat and rerun /cook'
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
+Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
 PY
 
-EXPLICIT_ROUTING_SNAPSHOT="$TMPDIR/explicit-goal-routing.json"
-PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
-PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$EXPLICIT_ROUTING_SNAPSHOT" \
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$INLINE_REJECTION_ROUTING" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$INLINE_REJECTION_PROPOSAL" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$INLINE_REJECTION_CHOOSER" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/cook Remove completion status line, keep widget" \
+pi -e "$PKG_ROOT" -p "/cook replacement mission that should stay in the main chat" \
+  >"$TMPDIR/pi-completion-refocus-inline-arg.out" 2>"$TMPDIR/pi-completion-refocus-inline-arg.err"
+
+python3 - "$TMPDIR/pi-completion-refocus-inline-arg.out" "$TMPDIR/pi-completion-refocus-inline-arg.err" "$INLINE_REJECTION_ROUTING" "$INLINE_REJECTION_PROPOSAL" "$INLINE_REJECTION_CHOOSER" "$INITIAL_MISSION" "$INLINE_REJECTION_BASELINE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+routing = Path(sys.argv[3])
+proposal = Path(sys.argv[4])
+chooser = Path(sys.argv[5])
+initial_mission = sys.argv[6]
+before = json.loads(Path(sys.argv[7]).read_text())
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
+current_state = json.loads(before['state.json'])
+assert current_state['mission_anchor'] == initial_mission, 'active inline /cook args should start from the current mission anchor'
+assert 'Inline /cook arguments are no longer supported.' in output, 'active inline /cook args should explain the hard rejection'
+assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'active inline /cook args should redirect users back to main chat plus bare /cook'
+assert not routing.exists(), 'active inline /cook args should not run active-workflow routing'
+assert not proposal.exists(), 'active inline /cook args should not open proposal confirmation'
+assert not chooser.exists(), 'active inline /cook args should not open the existing-workflow chooser'
+after = {path.name: path.read_text() for path in tracked}
+assert before == after, 'active inline /cook args should leave canonical files unchanged'
+PY
+
+SESSION_INITIAL_REFOCUS="$TMPDIR/session-initial-bare-refocus.jsonl"
+INITIAL_REFOCUS_DISCUSSION=$'Mission: Remove completion status line, keep widget.\nScope:\n- Replace the initial smoke-test workflow with the widget mission.\nConstraints:\n- Keep the approval-only Start/Cancel refocus gate.\nAcceptance:\n- Rewrite canonical state only after the replacement mission is approved.'
+INITIAL_REFOCUS_ROUTING="$TMPDIR/initial-bare-refocus-routing.json"
+write_session "$SESSION_INITIAL_REFOCUS" "$TMPDIR" "$INITIAL_REFOCUS_DISCUSSION"
+
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$INITIAL_REFOCUS_ROUTING" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_INITIAL_REFOCUS" -e "$PKG_ROOT" -p "/cook" \
   >"$TMPDIR/pi-completion-refocus.out" 2>"$TMPDIR/pi-completion-refocus.err"
 
-python3 - "$EXPLICIT_ROUTING_SNAPSHOT" <<'PY'
+python3 - "$INITIAL_REFOCUS_ROUTING" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -144,10 +183,10 @@ assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_
 assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the refocus'
 assert plan['plan_basis'] == 'user_refocus', 'plan.json plan_basis should be user_refocus after refocus'
 assert active['status'] == 'idle', 'active-slice.json status should reset to idle after refocus'
-assert routing['mode'] == 'explicit', 'explicit /cook <goal> should use explicit active-workflow routing mode'
-assert routing['action'] == 'refocus', 'explicit /cook <goal> should classify as refocus when the mission changes'
-assert routing['reason'] == 'explicit_goal', 'explicit /cook <goal> should record the explicit-goal routing reason'
-assert routing['proposedMissionAnchor'] == new_anchor, 'explicit routing snapshot should expose the replacement mission anchor'
+assert routing['mode'] == 'bare', 'supported refocus should use bare active-workflow routing mode'
+assert routing['action'] == 'refocus', 'supported bare /cook should classify as refocus when the mission changes'
+assert routing['reason'] == 'clear_refocus', 'supported bare /cook should record the clear-refocus routing reason'
+assert routing['proposedMissionAnchor'] == new_anchor, 'bare refocus routing snapshot should expose the replacement mission anchor'
 PY
 
 UPDATED_MISSION="$(python3 - <<'PY'
@@ -159,7 +198,7 @@ PY
 )"
 
 if [[ "$INITIAL_MISSION" == "$UPDATED_MISSION" ]]; then
-  echo "expected mission anchor to change during explicit refocus" >&2
+  echo "expected mission anchor to change during supported bare refocus" >&2
   exit 1
 fi
 

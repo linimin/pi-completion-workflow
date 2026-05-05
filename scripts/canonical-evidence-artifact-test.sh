@@ -5,6 +5,45 @@ PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPDIR="$(mktemp -d)"
 CURRENT_EVIDENCE_BACKUP=""
 
+write_session() {
+  local session_path="$1"
+  local cwd="$2"
+  local text="$3"
+  python3 - "$session_path" "$cwd" "$text" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session_path = Path(sys.argv[1])
+cwd = sys.argv[2]
+text = sys.argv[3]
+session_path.parent.mkdir(parents=True, exist_ok=True)
+entries = [
+    {
+        "type": "session",
+        "version": 3,
+        "id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": cwd,
+    },
+    {
+        "type": "message",
+        "id": "a1b2c3d4",
+        "parentId": None,
+        "timestamp": "2026-01-01T00:00:01.000Z",
+        "message": {
+            "role": "user",
+            "content": text,
+            "timestamp": 1767225601000,
+        },
+    },
+]
+with session_path.open('w', encoding='utf-8') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+}
+
 cleanup() {
   if [[ -n "$CURRENT_EVIDENCE_BACKUP" && -f "$CURRENT_EVIDENCE_BACKUP" ]]; then
     cp "$CURRENT_EVIDENCE_BACKUP" "$PKG_ROOT/.agent/verification-evidence.json"
@@ -96,12 +135,17 @@ bash .agent/verify_completion_control_plane.sh >/dev/null
 
 ROOT="$TMPDIR/repo"
 SYSTEM_REMINDER="$TMPDIR/system-reminder.txt"
+BOOTSTRAP_SESSION="$TMPDIR/session-canonical-evidence-bootstrap.jsonl"
+BOOTSTRAP_DISCUSSION=$'Mission: Exercise canonical evidence fixture bootstrap.\nScope:\n- Materialize canonical completion files for the evidence artifact fixture.\nConstraints:\n- Use supported bare /cook startup only.\nAcceptance:\n- Scaffold canonical files before the fixture rewrites them.'
 mkdir -p "$ROOT"
 cd "$ROOT"
 git init -q
+write_session "$BOOTSTRAP_SESSION" "$ROOT" "$BOOTSTRAP_DISCUSSION"
 
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/cook canonical evidence fixture" \
+pi --session "$BOOTSTRAP_SESSION" -e "$PKG_ROOT" -p "/cook" \
   >"$TMPDIR/pi-canonical-evidence-bootstrap.out" 2>"$TMPDIR/pi-canonical-evidence-bootstrap.err"
 
 for file in .agent/profile.json .agent/state.json .agent/plan.json .agent/active-slice.json .agent/verification-evidence.json; do

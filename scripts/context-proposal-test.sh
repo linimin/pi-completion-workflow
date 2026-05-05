@@ -580,165 +580,124 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: /cook <goal> plus refocus should keep the explicit goal as the mission anchor
-# even when analyst output is unavailable and structured session fallback is present.
-SESSION_THREE="$TMPDIR/session-three.jsonl"
-DISCUSSION_THREE=$'Scope:\n- Preserve the richer proposal structure from discussion.\nConstraints:\n- Keep explicit goals as the mission anchor when they conflict with earlier text.\nAcceptance:\n- Refresh canonical state from the replacement mission.'
-DISCUSSION_SNAPSHOT_THREE="$TMPDIR/context-proposal-active-goal.json"
-ROUTING_SNAPSHOT_THREE="$TMPDIR/context-proposal-active-goal-routing.json"
-write_session "$SESSION_THREE" "$ROOT" "$DISCUSSION_THREE"
+# Active workflow: inline /cook args should be rejected before proposal/routing helpers run
+# and should leave canonical state unchanged.
+ACTIVE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-active-inline-arg-routing.json"
+ACTIVE_INLINE_REJECTION_PROPOSAL="$TMPDIR/context-proposal-active-inline-arg-proposal.json"
+ACTIVE_INLINE_REJECTION_CHOOSER="$TMPDIR/context-proposal-active-inline-arg-chooser.json"
+ACTIVE_INLINE_REJECTION_BASELINE="$TMPDIR/context-proposal-active-inline-before.json"
+python3 - "$ACTIVE_INLINE_REJECTION_BASELINE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
+Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
+PY
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
-PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_THREE" \
-PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ROUTING_SNAPSHOT_THREE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$ACTIVE_INLINE_REJECTION_PROPOSAL" \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ACTIVE_INLINE_REJECTION_ROUTING" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$ACTIVE_INLINE_REJECTION_CHOOSER" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_THREE" -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-active-goal.out" 2>"$TMPDIR/pi-completion-context-proposal-active-goal.err"
+pi -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-active-inline-arg.out" 2>"$TMPDIR/pi-completion-context-proposal-active-inline-arg.err"
 
-python3 - "$DISCUSSION_SNAPSHOT_THREE" "$ROUTING_SNAPSHOT_THREE" <<'PY'
+python3 - "$TMPDIR/pi-completion-context-proposal-active-inline-arg.out" "$TMPDIR/pi-completion-context-proposal-active-inline-arg.err" "$ACTIVE_INLINE_REJECTION_ROUTING" "$ACTIVE_INLINE_REJECTION_PROPOSAL" "$ACTIVE_INLINE_REJECTION_CHOOSER" "$ACTIVE_INLINE_REJECTION_BASELINE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-mission = 'Explicit replacement mission for the active workflow.'
-expected_task_type = 'completion-workflow'
-expected_eval_profile = 'completion-rubric-v1'
-proposal = json.loads(Path(sys.argv[1]).read_text())
-routing = json.loads(Path(sys.argv[2]).read_text())
-mission_text = Path('.agent/mission.md').read_text()
-profile = json.loads(Path('.agent/profile.json').read_text())
-state = json.loads(Path('.agent/state.json').read_text())
-plan = json.loads(Path('.agent/plan.json').read_text())
-active = json.loads(Path('.agent/active-slice.json').read_text())
-
-assert mission in mission_text, '.agent/mission.md did not update to the explicit replacement mission anchor'
-assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after explicit-goal replacement'
-assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after explicit-goal replacement'
-assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after explicit-goal replacement'
-assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after explicit-goal replacement'
-assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after explicit-goal replacement'
-assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after explicit-goal replacement'
-assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after explicit-goal replacement'
-assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after explicit-goal replacement'
-assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal replacement'
-assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal replacement'
-assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal replacement'
-assert proposal['mission'] == mission, 'explicit-goal replacement should route through the shared proposal confirmation pipeline'
-assert routing['mode'] == 'explicit', 'explicit-goal replacement should snapshot explicit active-workflow routing mode'
-assert routing['action'] == 'refocus', 'explicit-goal replacement should classify as refocus when the mission changes'
-assert routing['reason'] == 'explicit_goal', 'explicit-goal replacement should record the explicit-goal routing reason'
-assert routing['proposedMissionAnchor'] == mission, 'explicit-goal routing should expose the replacement mission anchor'
-assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal replacement'
-assert state['continuation_policy'] == 'continue', 'continuation_policy should stay continue after explicit-goal replacement'
-assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal replacement'
-assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal replacement'
-assert 'task_type=completion-workflow' in state['continuation_reason'], 'explicit-goal replacement should persist the selected task_type'
-assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason'], 'explicit-goal replacement should persist the selected evaluation_profile'
-assert 'critique outcome=accepted critique=none' in state['continuation_reason'], 'explicit-goal replacement should persist the accepted critique outcome even when no critique was derived'
-assert 'Preserve the richer proposal structure from discussion.' not in state['continuation_reason'], 'session scope should not be merged when analyst output is unavailable'
-assert 'Keep explicit goals as the mission anchor when they conflict with earlier text.' not in state['continuation_reason'], 'session constraints should not be merged when analyst output is unavailable'
-assert 'Refresh canonical state from the replacement mission.' not in state['continuation_reason'], 'session acceptance should not be merged when analyst output is unavailable'
-assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal replacement'
-assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal replacement'
-PY
-
-# Active workflow: cancelling the replacement proposal should keep the current workflow and redirect
-# the user back to the main chat before rerunning /cook.
-SESSION_THREE_CANCEL="$TMPDIR/session-three-cancel.jsonl"
-DISCUSSION_THREE_CANCEL=$'Scope:\n- Keep the current workflow unchanged when replacement confirmation is cancelled.\nConstraints:\n- Do not rewrite canonical state after cancel.\nAcceptance:\n- Print rerun guidance.'
-write_session "$SESSION_THREE_CANCEL" "$ROOT" "$DISCUSSION_THREE_CANCEL"
-
-PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
-PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
-PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_THREE_CANCEL" -e "$PKG_ROOT" -p "/cook Cancelled replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-replacement-cancel.out" 2>"$TMPDIR/pi-completion-context-proposal-replacement-cancel.err"
-
-python3 - "$TMPDIR/pi-completion-context-proposal-replacement-cancel.out" "$TMPDIR/pi-completion-context-proposal-replacement-cancel.err" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-mission = 'Explicit replacement mission for the active workflow.'
-state = json.loads(Path('.agent/state.json').read_text())
-plan = json.loads(Path('.agent/plan.json').read_text())
-active = json.loads(Path('.agent/active-slice.json').read_text())
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+routing = Path(sys.argv[3])
+proposal = Path(sys.argv[4])
+chooser = Path(sys.argv[5])
+before = json.loads(Path(sys.argv[6]).read_text())
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
 
-assert state['mission_anchor'] == mission, 'replacement proposal cancel should keep the existing mission anchor'
-assert plan['mission_anchor'] == mission, 'replacement proposal cancel should keep plan.json unchanged'
-assert active['mission_anchor'] == mission, 'replacement proposal cancel should keep active-slice.json unchanged'
-assert 'Discuss changes in the main chat and rerun /cook.' in output, 'replacement proposal cancel should redirect back to the main chat and rerun /cook'
+assert 'Inline /cook arguments are no longer supported.' in output, 'active inline /cook args should explain the hard rejection'
+assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'active inline /cook args should redirect users back to main chat plus bare /cook'
+assert not routing.exists(), 'active inline /cook args should not run active-workflow routing'
+assert not proposal.exists(), 'active inline /cook args should not open proposal confirmation'
+assert not chooser.exists(), 'active inline /cook args should not open the existing-workflow chooser'
+after = {path.name: path.read_text() for path in tracked}
+assert before == after, 'active inline /cook args should leave canonical files unchanged'
 PY
 
-# Completed workflow again: /cook <goal> should start the next round directly from the explicit goal
-# even when analyst output is unavailable, without merging session-derived scope, constraints, or acceptance.
+# Completed workflow: inline /cook args should also fail closed without starting the next round.
 mark_done
 
-SESSION_FOUR="$TMPDIR/session-four.jsonl"
-DISCUSSION_FOUR=$'Scope:\n- Add session-only scope.\n- Restyle widget.\nConstraints:\n- Keep rules.\nAcceptance:\n- Add test.'
-EXPLICIT_GOAL_FOUR=$'Mission: Filter scope by mission.\nScope:\n- Keep explicit scope.\nCritique:\n- Keep critique notes separate from the mission anchor.\nRisks:\n- Session-only scope could leak into the next workflow round.\nTask type: completion-workflow\nEvaluation profile: completion-rubric-v1'
-EXPLICIT_SNAPSHOT_FOUR="$TMPDIR/context-proposal-explicit-hints.json"
-write_session "$SESSION_FOUR" "$ROOT" "$DISCUSSION_FOUR"
-
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
-PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
-PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$EXPLICIT_SNAPSHOT_FOUR" \
-PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_FOUR" -e "$PKG_ROOT" -p "/cook $EXPLICIT_GOAL_FOUR" >/tmp/pi-completion-context-proposal-done-goal.out 2>/tmp/pi-completion-context-proposal-done-goal.err
-
-python3 - "$EXPLICIT_SNAPSHOT_FOUR" <<'PY'
+DONE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-done-inline-arg-routing.json"
+DONE_INLINE_REJECTION_PROPOSAL="$TMPDIR/context-proposal-done-inline-arg-proposal.json"
+DONE_INLINE_REJECTION_CHOOSER="$TMPDIR/context-proposal-done-inline-arg-chooser.json"
+DONE_INLINE_REJECTION_BASELINE="$TMPDIR/context-proposal-done-inline-before.json"
+python3 - "$DONE_INLINE_REJECTION_BASELINE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-mission = 'Filter scope by mission.'
-expected_task_type = 'completion-workflow'
-expected_eval_profile = 'completion-rubric-v1'
-mission_text = Path('.agent/mission.md').read_text()
-profile = json.loads(Path('.agent/profile.json').read_text())
-state = json.loads(Path('.agent/state.json').read_text())
-plan = json.loads(Path('.agent/plan.json').read_text())
-active = json.loads(Path('.agent/active-slice.json').read_text())
-proposal = json.loads(Path(sys.argv[1]).read_text())
-continuation_reason = state['continuation_reason']
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
+Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
+PY
 
-assert mission in mission_text, '.agent/mission.md did not update to the explicit next-round mission anchor'
-assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after explicit-goal next-round start'
-assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after explicit-goal next-round start'
-assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after explicit-goal next-round start'
-assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after explicit-goal next-round start'
-assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after explicit-goal next-round start'
-assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after explicit-goal next-round start'
-assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after explicit-goal next-round start'
-assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after explicit-goal next-round start'
-assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal next-round start'
-assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal next-round start'
-assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal next-round start'
-assert proposal['mission'] == mission, 'explicit-goal proposal snapshot should preserve the explicit mission anchor'
-assert proposal['analysis']['taskType'] == expected_task_type, 'explicit-goal proposal snapshot should preserve task_type hints from the goal text'
-assert proposal['analysis']['evaluationProfile'] == expected_eval_profile, 'explicit-goal proposal snapshot should preserve evaluation_profile hints from the goal text'
-assert proposal['analysis']['critique'] == ['Keep critique notes separate from the mission anchor.'], 'explicit-goal proposal snapshot should preserve critique hints from the goal text'
-assert proposal['analysis']['risks'] == ['Session-only scope could leak into the next workflow round.'], 'explicit-goal proposal snapshot should preserve risk hints from the goal text'
-assert 'Critique:' not in proposal['goalText'], 'goalText should keep critique notes separate from mission/scope/constraints/acceptance'
-assert 'Task type:' not in proposal['goalText'], 'goalText should keep task_type hints separate from the mission body'
-assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal next-round start'
-assert state['continuation_policy'] == 'continue', 'continuation_policy should reset to continue after explicit-goal next-round start'
-assert state['project_done'] is False, 'project_done should reset to false after explicit-goal next-round start'
-assert state['requires_reground'] is True, 'requires_reground should reset to true after explicit-goal next-round start'
-assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal next-round start'
-assert continuation_reason.startswith('User refocused workflow via /cook:'), 'continuation_reason should record the explicit-goal next-round start'
-assert 'task_type=completion-workflow' in continuation_reason, 'explicit-goal next-round start should persist the selected task_type'
-assert 'evaluation_profile=completion-rubric-v1' in continuation_reason, 'explicit-goal next-round start should persist the selected evaluation_profile'
-assert 'Keep critique notes separate from the mission anchor.' in continuation_reason, 'explicit-goal next-round start should persist the accepted critique outcome'
-assert 'Keep explicit scope.' in continuation_reason, 'explicit scope should remain in the explicit-goal proposal'
-assert 'Add session-only scope.' not in continuation_reason, 'session-derived scope should not be merged when analyst output is unavailable'
-assert 'Restyle widget.' not in continuation_reason, 'unrelated session-derived scope should not be merged when analyst output is unavailable'
-assert 'Keep rules.' not in continuation_reason, 'session-derived constraints should not merge when analyst output is unavailable'
-assert 'Add test.' not in continuation_reason, 'session-derived acceptance should not merge when analyst output is unavailable'
-assert plan['plan_basis'] == 'user_refocus', 'plan_basis should be user_refocus after explicit-goal next-round start'
-assert active['status'] == 'idle', 'active slice should reset to idle after explicit-goal next-round start'
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DONE_INLINE_REJECTION_PROPOSAL" \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$DONE_INLINE_REJECTION_ROUTING" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$DONE_INLINE_REJECTION_CHOOSER" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi -e "$PKG_ROOT" -p "/cook done-workflow replacement mission" >"$TMPDIR/pi-completion-context-proposal-done-inline-arg.out" 2>"$TMPDIR/pi-completion-context-proposal-done-inline-arg.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-done-inline-arg.out" "$TMPDIR/pi-completion-context-proposal-done-inline-arg.err" "$DONE_INLINE_REJECTION_ROUTING" "$DONE_INLINE_REJECTION_PROPOSAL" "$DONE_INLINE_REJECTION_CHOOSER" "$DONE_INLINE_REJECTION_BASELINE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+routing = Path(sys.argv[3])
+proposal = Path(sys.argv[4])
+chooser = Path(sys.argv[5])
+before = json.loads(Path(sys.argv[6]).read_text())
+tracked = [
+    Path('.agent/mission.md'),
+    Path('.agent/profile.json'),
+    Path('.agent/state.json'),
+    Path('.agent/plan.json'),
+    Path('.agent/active-slice.json'),
+    Path('.agent/verification-evidence.json'),
+]
+state_before = json.loads(before['state.json'])
+assert state_before['current_phase'] == 'done', 'done inline /cook rejection should start from a completed workflow'
+assert state_before['project_done'] is True, 'done inline /cook rejection should start from project_done=true'
+assert 'Inline /cook arguments are no longer supported.' in output, 'done inline /cook args should explain the hard rejection'
+assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'done inline /cook args should redirect users back to main chat plus bare /cook'
+assert not routing.exists(), 'done inline /cook args should not run active/done workflow routing'
+assert not proposal.exists(), 'done inline /cook args should not open next-round proposal confirmation'
+assert not chooser.exists(), 'done inline /cook args should not open the chooser flow'
+after = {path.name: path.read_text() for path in tracked}
+assert before == after, 'done inline /cook args should leave canonical files unchanged'
 PY
 
 # Completed workflow again: /cook with no goal should be able to use model-assisted
