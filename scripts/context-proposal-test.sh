@@ -101,20 +101,78 @@ mkdir -p "$ROOT"
 cd "$ROOT"
 git init -q
 
-# No workflow yet: /cook with no goal should not bootstrap from discussion alone when analyst output is unavailable.
+# No workflow yet: bare /cook should use strict structured discussion fallback when analyst output is unavailable.
 SESSION_ZERO="$TMPDIR/session-zero.jsonl"
 DISCUSSION_ZERO=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\n- Suppress the widget while a completion role is active.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\n- Keep observability regression coverage truthful.'
+DISCUSSION_SNAPSHOT_ZERO="$TMPDIR/context-proposal-structured-fallback.json"
 write_session "$SESSION_ZERO" "$ROOT" "$DISCUSSION_ZERO"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_ZERO" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-no-analyst.out 2>/tmp/pi-completion-context-proposal-no-analyst.err
+pi --session "$SESSION_ZERO" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-structured-fallback.out" 2>"$TMPDIR/pi-completion-context-proposal-structured-fallback.err"
 
-python3 - <<'PY'
+python3 - "$DISCUSSION_SNAPSHOT_ZERO" <<'PY'
+import json
+import sys
 from pathlib import Path
 
-assert not Path('.agent').exists(), '/cook should not bootstrap canonical state from discussion alone without analyst output'
+mission = 'Remove the completion status line while keeping the completion widget.'
+expected_task_type = 'completion-workflow'
+expected_eval_profile = 'completion-rubric-v1'
+mission_text = Path('.agent/mission.md').read_text()
+profile = json.loads(Path('.agent/profile.json').read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+proposal = json.loads(Path(sys.argv[1]).read_text())
+
+assert Path('.agent').exists(), 'strict structured fallback should only create canonical state after Start is accepted'
+assert mission in mission_text, '.agent/mission.md did not record the structured-fallback mission anchor'
+assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after structured-fallback bootstrap'
+assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after structured-fallback bootstrap'
+assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after structured-fallback bootstrap'
+assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after structured-fallback bootstrap'
+assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after structured-fallback bootstrap'
+assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after structured-fallback bootstrap'
+assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after structured-fallback bootstrap'
+assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after structured-fallback bootstrap'
+assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after structured-fallback bootstrap'
+assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after structured-fallback bootstrap'
+assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after structured-fallback bootstrap'
+assert proposal['mission'] == mission, 'structured-fallback proposal snapshot should preserve the discussion mission anchor'
+assert proposal['source'] == 'session', 'structured-fallback proposal snapshot should record the strict session fallback source'
+assert proposal['scope'] == ['Keep the non-running completion widget.', 'Suppress the widget while a completion role is active.'], 'structured-fallback proposal snapshot should preserve discussion scope'
+assert proposal['constraints'] == ['Do not reintroduce any other completion status surface.'], 'structured-fallback proposal snapshot should preserve discussion constraints'
+assert proposal['acceptance'] == ['Update README to match the shipped behavior.', 'Keep observability regression coverage truthful.'], 'structured-fallback proposal snapshot should preserve discussion acceptance'
+assert state['current_phase'] == 'reground', 'state.json current_phase should start at reground after structured-fallback bootstrap'
+assert state['next_mandatory_role'] == 'completion-regrounder', 'next_mandatory_role should start at completion-regrounder after structured-fallback bootstrap'
+assert state['continuation_reason'].startswith('User started workflow via /cook:'), 'structured-fallback startup should record the accepted startup routing in continuation_reason'
+assert 'task_type=completion-workflow' in state['continuation_reason'], 'structured-fallback startup should persist the selected task_type in continuation_reason'
+assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason'], 'structured-fallback startup should persist the selected evaluation_profile in continuation_reason'
+PY
+
+rm -rf .agent
+
+# No workflow yet: bare /cook should fail closed on ambiguous structured discussion when analyst output is unavailable.
+SESSION_ZERO_AMBIG="$TMPDIR/session-zero-ambiguous.jsonl"
+DISCUSSION_ZERO_AMBIG=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\nMission: Ship an unrelated widget overhaul.\nScope:\n- Replace the widget entirely.'
+write_session "$SESSION_ZERO_AMBIG" "$ROOT" "$DISCUSSION_ZERO_AMBIG"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_AMBIG" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-ambiguous.out" 2>"$TMPDIR/pi-completion-context-proposal-ambiguous.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-ambiguous.out" "$TMPDIR/pi-completion-context-proposal-ambiguous.err" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+assert not Path('.agent').exists(), 'ambiguous structured discussion should fail closed without writing canonical state'
+assert 'Bare /cook failed closed' in output, 'ambiguous structured discussion should explain the fail-closed startup outcome'
+assert 'Mission/Scope/Constraints/Acceptance' in output, 'ambiguous structured discussion should explain the strict fallback requirement'
 PY
 
 # No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
@@ -173,21 +231,23 @@ assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason']
 assert 'Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal.' in state['continuation_reason'], 'initial startup should persist the accepted critique outcome in continuation_reason'
 PY
 
-# Completed workflow: /cook with no goal should infer the next round from recent discussion through analyst output.
+# Completed workflow: bare /cook should use the same strict structured fallback for the next workflow round when analyst output is unavailable.
 mark_done
 
 SESSION_TWO="$TMPDIR/session-two.jsonl"
 DISCUSSION_TWO=$'Mission: Ship the next workflow round for richer context-derived /cook startup.\nScope:\n- Start a new workflow round from recent discussion after the previous one is done.\n- Keep using canonical .agent state after confirmation.\nConstraints:\n- Do not resume the completed workflow when the new round is clearly different.\nAcceptance:\n- Reset canonical state back to reground for the new mission.\n- Preserve the tracked completion control-plane files.'
-ANALYST_OUTPUT_TWO='{"mission":"Ship the next workflow round for richer context-derived /cook startup.","scope":["Start a new workflow round from recent discussion after the previous one is done.","Keep using canonical .agent state after confirmation."],"constraints":["Do not resume the completed workflow when the new round is clearly different."],"acceptance":["Reset canonical state back to reground for the new mission.","Preserve the tracked completion control-plane files."],"confidence":0.93}'
+DISCUSSION_SNAPSHOT_TWO="$TMPDIR/context-proposal-next-round-structured-fallback.json"
 write_session "$SESSION_TWO" "$ROOT" "$DISCUSSION_TWO"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
-PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_TWO" \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_TWO" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_TWO" -e "$PKG_ROOT" -p "/cook" >/tmp/pi-completion-context-proposal-next-round.out 2>/tmp/pi-completion-context-proposal-next-round.err
+pi --session "$SESSION_TWO" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-next-round.out" 2>"$TMPDIR/pi-completion-context-proposal-next-round.err"
 
-python3 - <<'PY'
+python3 - "$DISCUSSION_SNAPSHOT_TWO" <<'PY'
 import json
+import sys
 from pathlib import Path
 
 mission = 'Ship the next workflow round for richer context-derived /cook startup.'
@@ -198,6 +258,7 @@ profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
+proposal = json.loads(Path(sys.argv[1]).read_text())
 
 assert mission in mission_text, '.agent/mission.md did not update to the next-round context-derived mission anchor'
 assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after next-round startup'
@@ -211,6 +272,8 @@ assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluatio
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after starting the next workflow round'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after starting the next workflow round'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after starting the next workflow round'
+assert proposal['mission'] == mission, 'next-round structured-fallback proposal snapshot should preserve the discussion mission anchor'
+assert proposal['source'] == 'session', 'next-round structured-fallback proposal snapshot should record the strict session fallback source'
 assert state['current_phase'] == 'reground', 'state.json current_phase should reset to reground for the next workflow round'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should reset to continue for the next workflow round'
 assert state['requires_reground'] is True, 'requires_reground should reset to true for the next workflow round'
@@ -224,8 +287,8 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: /cook <goal> plus refocus should use the explicit goal as the mission anchor
-# even when analyst output is unavailable, without falling back to session-derived proposal parsing.
+# Active workflow: /cook <goal> plus refocus should keep the explicit goal as the mission anchor
+# even when analyst output is unavailable and structured session fallback is present.
 SESSION_THREE="$TMPDIR/session-three.jsonl"
 DISCUSSION_THREE=$'Scope:\n- Preserve the richer proposal structure from discussion.\nConstraints:\n- Keep explicit goals as the mission anchor when they conflict with earlier text.\nAcceptance:\n- Refresh canonical state from the replacement mission.'
 write_session "$SESSION_THREE" "$ROOT" "$DISCUSSION_THREE"

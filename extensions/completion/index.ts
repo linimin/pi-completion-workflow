@@ -521,9 +521,15 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 }
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
+const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
+	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat or pass /cook <goal>.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
+}
+
+function buildCookStructuredDiscussionFailureMessage(prefix?: string): string {
+	return prefix ? `${prefix} ${COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL}` : COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL;
 }
 
 function shouldDisableContextProposalAnalyst(): boolean {
@@ -1443,13 +1449,89 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 	};
 }
 
+function hasStructuredContextProposalSignal(text: string): boolean {
+	const cleaned = stripCodeBlocks(text).replace(/\r/g, "").trim();
+	if (!cleaned) return false;
+	return /(^|\n)\s*(mission|goal|objective|summary|scope|plan|steps|implementation|constraints?|guardrails|non-goals|acceptance|acceptance criteria|deliverables|verification|critique|concerns?|warnings?|notes?|risks?|hazards?|task[\s_-]*type|evaluation[\s_-]*profile)\s*(?:[:：]\s*|$)/imu.test(
+		cleaned,
+	);
+}
+
+function parseStrictStructuredSessionProposal(text: string, projectName: string): ContextProposal | undefined {
+	const cleaned = stripCodeBlocks(text).replace(/\r/g, "").trim();
+	if (!cleaned) return undefined;
+	const lines = cleaned
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (lines.length === 0) return undefined;
+
+	let section: ContextProposalSection | undefined;
+	const sectionsPresent = new Set<ContextProposalSection>();
+	const missionCandidates: string[] = [];
+
+	for (const rawLine of lines) {
+		const inlineSection = matchInlineProposalSection(rawLine);
+		if (inlineSection) {
+			section = inlineSection.section;
+			sectionsPresent.add(section);
+			if (section === "mission") missionCandidates.push(inlineSection.content);
+			continue;
+		}
+		const headerSection = detectProposalSection(rawLine);
+		if (headerSection) {
+			section = headerSection;
+			sectionsPresent.add(section);
+			continue;
+		}
+		const normalized = bulletText(rawLine) ?? normalizeProposalLine(rawLine);
+		if (normalized && section === "mission") missionCandidates.push(normalized);
+	}
+
+	if (!sectionsPresent.has("mission")) return undefined;
+	const supportingSections = ["scope", "constraints", "acceptance"].filter((candidate) =>
+		sectionsPresent.has(candidate as ContextProposalSection),
+	);
+	if (supportingSections.length < 2) return undefined;
+
+	const distinctMissionAnchors = Array.from(
+		new Set(
+			missionCandidates
+				.map((candidate) => normalizeMissionAnchorText(assessMissionAnchor(candidate, projectName).derived))
+				.filter((candidate): candidate is string => Boolean(candidate)),
+		),
+	);
+	if (distinctMissionAnchors.length !== 1) return undefined;
+
+	const proposal = parseContextProposal(cleaned, projectName);
+	if (!proposal) return undefined;
+	if (normalizeMissionAnchorText(proposal.mission) !== distinctMissionAnchors[0]) return undefined;
+	const itemCount = proposal.scope.length + proposal.constraints.length + proposal.acceptance.length;
+	if (itemCount < 2) return undefined;
+	return { ...proposal, source: "session" };
+}
+
+function extractContextProposalFromStructuredSession(
+	recentEntries: RecentDiscussionEntry[],
+	projectName: string,
+): ContextProposal | undefined {
+	const structuredTexts = recentEntries
+		.slice()
+		.reverse()
+		.map((entry) => entry.text.trim())
+		.filter((text) => hasStructuredContextProposalSignal(text));
+	if (structuredTexts.length === 0) return undefined;
+	return parseStrictStructuredSessionProposal(structuredTexts.join("\n\n"), projectName);
+}
+
 async function extractContextProposalFromSession(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
 	explicitGoal?: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx);
-	return await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal);
+	return (await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, explicitGoal)) ??
+		extractContextProposalFromStructuredSession(recentEntries, projectName);
 }
 
 async function buildGoalAnchoredContextProposal(
@@ -1462,11 +1544,16 @@ async function buildGoalAnchoredContextProposal(
 	const missionSource = explicit?.mission ?? goal;
 	const assessment = assessMissionAnchor(missionSource, projectName);
 	const mission = assessment.derived;
+	const mergeSessionBody = sessionProposal?.source === "analyst";
 	const explicitScope = explicit?.scope ?? [];
-	const sessionScope = (sessionProposal?.scope ?? []).filter((item) => isSessionScopeItemMissionRelevant(item, mission));
+	const sessionScope = mergeSessionBody
+		? (sessionProposal?.scope ?? []).filter((item) => isSessionScopeItemMissionRelevant(item, mission))
+		: [];
+	const sessionConstraints = mergeSessionBody ? sessionProposal?.constraints ?? [] : [];
+	const sessionAcceptance = mergeSessionBody ? sessionProposal?.acceptance ?? [] : [];
 	const scope = uniqueProposalItems([...explicitScope, ...sessionScope]);
-	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...(sessionProposal?.constraints ?? [])]);
-	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...(sessionProposal?.acceptance ?? [])]);
+	const constraints = uniqueProposalItems([...(explicit?.constraints ?? []), ...sessionConstraints]);
+	const acceptance = uniqueProposalItems([...(explicit?.acceptance ?? []), ...sessionAcceptance]);
 	const analysis = mergeContextProposalAnalysis(
 		[explicit?.analysis, sessionProposal?.analysis],
 		[goal, mission, ...(sessionProposal?.analysis.possibleNoise ?? []), ...scope, ...constraints, ...acceptance],
@@ -1482,6 +1569,16 @@ async function buildGoalAnchoredContextProposal(
 		basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
 		source: sessionProposal?.source ?? explicit?.source ?? "session",
 	};
+}
+
+async function deriveCookContextProposal(
+	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
+	projectName: string,
+	explicitGoal?: string,
+): Promise<ContextProposal | undefined> {
+	return explicitGoal
+		? await buildGoalAnchoredContextProposal(ctx, explicitGoal, projectName)
+		: await extractContextProposalFromSession(ctx, projectName);
 }
 
 async function confirmContextProposal(
@@ -3768,13 +3865,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 				const root = findRepoRoot(cwd) ?? cwd;
 				const projectName = path.basename(root);
 				if (!goal) {
-					const proposal = await extractContextProposalFromSession(ctx, projectName);
+					const proposal = await deriveCookContextProposal(ctx, projectName);
 					if (!proposal) {
-						emitCommandText(
-							ctx,
-							"Usage: /cook <goal> (discussion-only startup needs proposal analyst output; otherwise pass an explicit goal)",
-							"error",
-						);
+						emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(), "info");
 						return;
 					}
 					const decision = await confirmContextProposal(ctx, proposal, {
@@ -3788,7 +3881,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 					kickoffMissionAnchor = decision.missionAnchor;
 					kickoffAnalysis = decision.analysis;
 				} else {
-					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const proposal = await deriveCookContextProposal(ctx, projectName, goal);
+					if (!proposal) {
+						emitCommandText(ctx, "Failed to derive a workflow startup proposal from this goal.", "error");
+						return;
+					}
 					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "Start a completion workflow from this goal?",
 						nonInteractiveBehavior: "accept",
@@ -3824,13 +3921,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (!goal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = await extractContextProposalFromSession(ctx, projectName);
+					const proposal = await deriveCookContextProposal(ctx, projectName);
 					if (!proposal) {
-						emitCommandText(
-							ctx,
-							"The previous completion workflow is already done. Provide /cook <goal>, or rerun /cook when the proposal analyst can summarize the next round from discussion.",
-							"info",
-						);
+						emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage("The previous completion workflow is already done."), "info");
 						return;
 					}
 					const decision = await confirmContextProposal(ctx, proposal, {
@@ -3870,7 +3963,11 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (hadSnapshot && explicitGoal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
+					const proposal = await deriveCookContextProposal(ctx, projectName, goal);
+					if (!proposal) {
+						emitCommandText(ctx, "Failed to derive the next workflow round proposal from this goal.", "error");
+						return;
+					}
 					const decision = await confirmContextProposal(ctx, proposal, {
 						title: "Start the next workflow round from this goal?",
 						nonInteractiveBehavior: "accept",
