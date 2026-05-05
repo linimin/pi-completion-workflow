@@ -847,12 +847,21 @@ function missionAnchorsStrictlyEquivalent(left: string, right: string): boolean 
 	return normalizeMissionAnchorText(left).toLowerCase() === normalizeMissionAnchorText(right).toLowerCase();
 }
 
+const MISSION_NEGATION_CUE_REGEX = /(?:^|[^\p{L}\p{N}_])(?:no|not|without|never|cannot|don['’]?t)(?=$|[^\p{L}\p{N}_])/u;
+
+function missionAnchorHasNegationCue(text: string): boolean {
+	return MISSION_NEGATION_CUE_REGEX.test(text);
+}
+
 function missionAnchorsLikelyEquivalent(left: string, right: string): boolean {
 	const normalizedLeft = normalizeMissionAnchorText(left).toLowerCase();
 	const normalizedRight = normalizeMissionAnchorText(right).toLowerCase();
 	if (!normalizedLeft || !normalizedRight) return false;
+	const leftHasNegationCue = missionAnchorHasNegationCue(normalizedLeft);
+	const rightHasNegationCue = missionAnchorHasNegationCue(normalizedRight);
+	if (leftHasNegationCue !== rightHasNegationCue) return false;
 	if (normalizedLeft === normalizedRight) return true;
-	if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) return true;
+	if (!leftHasNegationCue && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft))) return true;
 	const leftTokens = missionAnchorSemanticTokens(normalizedLeft);
 	const rightTokens = missionAnchorSemanticTokens(normalizedRight);
 	if (leftTokens.length === 0 || rightTokens.length === 0) return false;

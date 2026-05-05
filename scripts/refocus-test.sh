@@ -163,9 +163,9 @@ if [[ "$INITIAL_MISSION" == "$UPDATED_MISSION" ]]; then
   exit 1
 fi
 
-# High-overlap inverted missions must still reach the conservative chooser and final Start/Cancel gate.
-BARE_REFOCUS_MISSION='Keep completion status line, remove widget.'
-BARE_REFOCUS_DISCUSSION=$'Mission: Keep completion status line, remove widget.\nScope:\n- Treat the active bare /cook discussion as a replacement workflow rather than a resume.\n- Keep the replacement behind the existing approval-only Start/Cancel gate.\nConstraints:\n- Do not rewrite canonical state before the final Start confirmation.\nAcceptance:\n- Add deterministic coverage proving the chooser and final approval path for this inverted mission pair.'
+# Negated replacement missions that contain the current anchor must still reach the conservative chooser and final Start/Cancel gate.
+BARE_REFOCUS_MISSION='Do not remove completion status line, keep widget.'
+BARE_REFOCUS_DISCUSSION=$'Mission: Do not remove completion status line, keep widget.\nScope:\n- Treat the active bare /cook discussion as a replacement workflow rather than a resume.\n- Keep the replacement behind the existing approval-only Start/Cancel gate.\nConstraints:\n- Do not rewrite canonical state before the final Start confirmation.\nAcceptance:\n- Add deterministic coverage proving the chooser and final approval path for this negated replacement mission.'
 
 SESSION_BARE_CHOOSER_CANCEL="$TMPDIR/session-bare-chooser-cancel.jsonl"
 BARE_CHOOSER_SNAPSHOT="$TMPDIR/bare-existing-workflow-chooser.json"
@@ -267,7 +267,7 @@ import json
 import sys
 from pathlib import Path
 
-new_anchor = 'Keep completion status line, remove widget.'
+new_anchor = 'Do not remove completion status line, keep widget.'
 expected_task_type = 'completion-workflow'
 expected_eval_profile = 'completion-rubric-v1'
 proposal = json.loads(Path(sys.argv[1]).read_text())
