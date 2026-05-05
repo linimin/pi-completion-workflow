@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.39
+
+### Changed
+
+- aligned public docs and packaged release-gate parity around bare `/cook` as the only supported workflow entrypoint
+- updated operator-facing fail-closed guidance to send users back to the main chat to clarify the mission before rerunning bare `/cook`
+- refreshed `scripts/release-check.sh` so packaged parity now fails closed on the bare-only contract while still covering the supported startup, refocus, and context flows
+
 ## 0.1.38
 
 ### Changed
@@ -13,7 +21,7 @@
 ### Changed
 
 - documented `/cook` as the single public discussion-first workflow command for startup, active-workflow continue/refocus, and done-workflow next-round flows
-- reframed `/cook <text>` in public docs/help copy as a temporary compatibility shim instead of the primary workflow entrypoint, without removing it from the shipped runtime
+- reframed the public docs/help copy around `/cook` as the discussion-first workflow entrypoint and documented the conservative fail-closed clarification path before the later runtime removal
 - documented the fail-closed ambiguous-discussion behavior and approval-only Start/Cancel gate before canonical-state writes
 - added release-gated public-parity assertions for README/help/changelog `/cook` single-command copy so docs drift fails closed before packaging
 - simplified the README opening so first-time users can understand the problem `/cook` solves, what the extension provides, and how to start using it without reading the full control-plane details first
