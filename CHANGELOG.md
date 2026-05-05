@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.38
+
+### Changed
+
+- normalized discussion-derived `/cook` missions through shared proposal finalization so planning-phrased startup, next-round, and bare active-refocus discussions now resolve to implementation-result missions only when scope or acceptance clearly point to shipped code/test/doc/runtime changes
+- preserved genuine planning missions for explicit plan/spec/design-doc/migration-plan/proposal and support-docs-only discussions, while keeping ambiguous generic scope fail-closed instead of promoting it into a new mission
+- aligned analyst-derived and strict structured-fallback `/cook` proposal paths behind the same mission-normalization rules, added deterministic regressions for planning-only preservation and ambiguous-scope fail-closed behavior, and kept the existing approval-only Start/Cancel rewrite gate intact
+
 ## 0.1.37
 
 ### Changed
