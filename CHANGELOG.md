@@ -112,7 +112,7 @@
 ### Changed
 
 - `/cook` with no goal can now propose a context-derived startup plan for confirmation when no active workflow exists, including starting a fresh next round after the previous workflow already reached `done`
-- `/cook <goal>` now builds a goal-anchored, context-enriched startup proposal before writing canonical state, uses more explicit active-workflow replacement wording, and starts the next round directly from the explicit goal after a completed workflow instead of reopening continue/refocus choices
+- historically added goal-anchored startup proposals from inline `/cook` arguments before canonical writes, plus more explicit active-workflow replacement wording and direct next-round startup after a completed workflow; that old inline-argument path is no longer supported now that bare `/cook` is the only public entrypoint
 
 ## 0.1.24
 

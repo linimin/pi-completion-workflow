@@ -9,6 +9,7 @@ bash .agent/verify_completion_control_plane.sh
 
 echo "[release-check] verifying public bare /cook parity"
 python3 - <<'PY'
+import re
 from pathlib import Path
 
 checks = {
@@ -24,6 +25,7 @@ checks = {
         "bare `/cook` as the only supported workflow entrypoint",
         "clarify the mission before rerunning bare `/cook`",
         "packaged parity now fails closed on the bare-only contract",
+        "that old inline-argument path is no longer supported now that bare `/cook` is the only public entrypoint",
     ],
     "extensions/completion/index.ts": [
         'description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round"',
@@ -33,10 +35,17 @@ checks = {
 }
 
 forbidden = {
-    "README.md": ["`/cook " + "<text>`", "compatibility" + " shim"],
-    "CHANGELOG.md": ["`/cook " + "<text>`", "compatibility" + " shim"],
+    "README.md": ["compatibility" + " shim"],
+    "CHANGELOG.md": ["compatibility" + " shim"],
     "extensions/completion/index.ts": ["temporary" + " compatibility" + " shim, pass /cook"],
 }
+
+public_doc_paths = [
+    Path("README.md"),
+    Path("CHANGELOG.md"),
+    Path("PUBLISHING.md"),
+]
+inline_cook_pattern = re.compile(r"/cook\s*<[^>]+>")
 
 for path, needles in checks.items():
     text = Path(path).read_text()
@@ -49,6 +58,14 @@ for path, needles in forbidden.items():
     for needle in needles:
         if needle in text:
             raise SystemExit(f"[release-check] found stale compatibility wording in {path}: {needle}")
+
+for path in public_doc_paths:
+    text = path.read_text()
+    match = inline_cook_pattern.search(text)
+    if match:
+        raise SystemExit(
+            f"[release-check] found unsupported inline /cook syntax in {path}: {match.group(0)}"
+        )
 PY
 
 npm run smoke-test
