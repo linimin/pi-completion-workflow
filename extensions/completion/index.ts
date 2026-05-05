@@ -1488,11 +1488,8 @@ function parseStrictStructuredSessionProposal(text: string, projectName: string)
 		if (normalized && section === "mission") missionCandidates.push(normalized);
 	}
 
-	if (!sectionsPresent.has("mission")) return undefined;
-	const supportingSections = ["scope", "constraints", "acceptance"].filter((candidate) =>
-		sectionsPresent.has(candidate as ContextProposalSection),
-	);
-	if (supportingSections.length < 2) return undefined;
+	const requiredSections: ContextProposalSection[] = ["mission", "scope", "constraints", "acceptance"];
+	if (requiredSections.some((candidate) => !sectionsPresent.has(candidate))) return undefined;
 
 	const distinctMissionAnchors = Array.from(
 		new Set(
@@ -1506,8 +1503,7 @@ function parseStrictStructuredSessionProposal(text: string, projectName: string)
 	const proposal = parseContextProposal(cleaned, projectName);
 	if (!proposal) return undefined;
 	if (normalizeMissionAnchorText(proposal.mission) !== distinctMissionAnchors[0]) return undefined;
-	const itemCount = proposal.scope.length + proposal.constraints.length + proposal.acceptance.length;
-	if (itemCount < 2) return undefined;
+	if (proposal.scope.length === 0 || proposal.constraints.length === 0 || proposal.acceptance.length === 0) return undefined;
 	return { ...proposal, source: "session" };
 }
 

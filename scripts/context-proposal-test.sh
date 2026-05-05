@@ -155,6 +155,30 @@ PY
 
 rm -rf .agent
 
+# No workflow yet: bare /cook should fail closed when a required structured section is missing and analyst output is unavailable.
+SESSION_ZERO_MISSING="$TMPDIR/session-zero-missing-section.jsonl"
+DISCUSSION_ZERO_MISSING=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\n- Suppress the widget while a completion role is active.\nConstraints:\n- Do not reintroduce any other completion status surface.'
+DISCUSSION_SNAPSHOT_ZERO_MISSING="$TMPDIR/context-proposal-missing-section.json"
+write_session "$SESSION_ZERO_MISSING" "$ROOT" "$DISCUSSION_ZERO_MISSING"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_MISSING" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_MISSING" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-missing-section.out" 2>"$TMPDIR/pi-completion-context-proposal-missing-section.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-missing-section.out" "$TMPDIR/pi-completion-context-proposal-missing-section.err" "$DISCUSSION_SNAPSHOT_ZERO_MISSING" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+assert not Path('.agent').exists(), 'missing-section structured discussion should fail closed without writing canonical state'
+assert not snapshot.exists(), 'missing-section structured discussion should not emit a proposal snapshot when bare /cook fails closed'
+assert 'Bare /cook failed closed' in output, 'missing-section structured discussion should explain the fail-closed startup outcome'
+assert 'Mission/Scope/Constraints/Acceptance' in output, 'missing-section structured discussion should explain the strict fallback requirement'
+PY
+
 # No workflow yet: bare /cook should fail closed on ambiguous structured discussion when analyst output is unavailable.
 SESSION_ZERO_AMBIG="$TMPDIR/session-zero-ambiguous.jsonl"
 DISCUSSION_ZERO_AMBIG=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\nMission: Ship an unrelated widget overhaul.\nScope:\n- Replace the widget entirely.'
