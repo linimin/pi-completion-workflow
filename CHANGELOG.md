@@ -4,6 +4,10 @@
 
 ### Changed
 
+- documented `/cook` as the single public discussion-first workflow command for startup, active-workflow continue/refocus, and done-workflow next-round flows
+- reframed `/cook <text>` in public docs/help copy as a temporary compatibility shim instead of the primary workflow entrypoint, without removing it from the shipped runtime
+- documented the fail-closed ambiguous-discussion behavior and approval-only Start/Cancel gate before canonical-state writes
+- added release-gated public-parity assertions for README/help/changelog `/cook` single-command copy so docs drift fails closed before packaging
 - simplified the README opening so first-time users can understand the problem `/cook` solves, what the extension provides, and how to start using it without reading the full control-plane details first
 
 ## 0.1.35

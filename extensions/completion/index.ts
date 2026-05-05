@@ -540,7 +540,7 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat or pass /cook <goal>.";
+	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat or, as a temporary compatibility shim, pass /cook <text>.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -4048,7 +4048,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("cook", {
-		description: "Start or continue the completion workflow for a repo",
+		description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round",
 		handler: async (args, ctx) => {
 			const explicitGoal = args.trim();
 			let goal = explicitGoal;

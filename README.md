@@ -1,6 +1,6 @@
 # @linimin/pi-letscook
 
-A Pi extension that turns `/cook` into a repo-local workflow command for long-running coding work.
+A Pi extension that turns `/cook` into a discussion-driven repo-local workflow command for long-running coding work.
 
 ## Why this exists
 
@@ -11,14 +11,15 @@ Normal chat is good for one-off tasks. It is much worse for work that needs to:
 - resume from repo state instead of chat memory
 - keep review, audit, and verification tied to the repo
 
-`@linimin/pi-letscook` solves that by storing canonical workflow state in `.agent/**` and using `/cook` to start, resume, or refocus the workflow.
+`@linimin/pi-letscook` solves that by storing canonical workflow state in `.agent/**` and using `/cook` as one discussion-first command to start, continue, refocus, or advance the workflow.
 
 ## What you get
 
 - one command: `/cook`
 - repo-local canonical state in `.agent/**`
 - resumable long-running workflows
-- startup proposals from an explicit goal or recent discussion
+- discussion-first startup, continue, refocus, and next-round routing
+- temporary `/cook <text>` compatibility input when you need to anchor the mission explicitly
 - deterministic verification, review, audit, and stop checks
 
 ## Install
@@ -31,49 +32,54 @@ Then run `/reload` in Pi.
 
 ## Quick start
 
-Start from an explicit goal:
-
-```text
-/cook build feature X end-to-end with tests and docs
-```
-
-Resume an active workflow:
+Primary entrypoint:
 
 ```text
 /cook
 ```
 
-Replace the active workflow with a different goal:
+Use bare `/cook` after you discuss the mission in the main chat. The same command can:
+
+- start a brand-new workflow from recent discussion
+- continue the current workflow when recent discussion still matches it, or when discussion is too weak or ambiguous to justify a refocus
+- surface a conservative refocus chooser when recent discussion clearly points to a different workflow
+- start the next workflow round after the previous one is `done`
+
+Temporary compatibility shim when you need to anchor the mission explicitly:
 
 ```text
-/cook fix onboarding crash first, with regression tests
+/cook build feature X end-to-end with tests and docs
 ```
+
+On startup and next-round flows, if recent discussion is missing, weak, or ambiguous, bare `/cook` fails closed and leaves canonical `.agent/**` state unchanged until the discussion is clarified.
 
 ## How `/cook` works
 
-`/cook` is the only public workflow command, but it reacts to canonical workflow state:
+Bare `/cook` is now the primary workflow entrypoint. `/cook <text>` is still supported as a temporary compatibility shim, and it uses the same proposal/routing pipeline while treating the explicit text as the mission anchor when provided.
 
-| Repo state | `/cook` | `/cook <goal>` |
+| Repo state | Bare `/cook` (primary) | Temporary `/cook <text>` compatibility shim |
 |---|---|---|
-| No workflow yet | Summarizes recent discussion into a startup proposal, then asks for approval | Builds a proposal anchored on the explicit goal, then asks for approval |
-| Active workflow exists | Resumes from canonical `.agent/**` state | First asks whether to continue or replace the current workflow |
-| Previous workflow is `done` | Starts the next round from recent discussion | Starts the next round from the explicit goal |
+| No workflow yet | Summarizes recent discussion into a startup proposal, then asks for approval with **Start** or **Cancel**. If the discussion is weak or ambiguous, `/cook` fails closed without writing `.agent/**` state. | Uses the same startup proposal and approval-only **Start**/**Cancel** gate, but the explicit text anchors the proposed mission. |
+| Active workflow exists | Reads the current mission plus recent non-command discussion. Matching or unclear discussion resumes from canonical `.agent/**` state. Clear replacement discussion opens a chooser first, then only rewrites canonical state after the follow-on **Start** confirmation. | Uses the same discussion-first routing pipeline. The explicit text is only a temporary compatibility anchor; `/cook` can still continue unchanged or route through the chooser plus final **Start**/**Cancel** replacement confirmation. |
+| Previous workflow is `done` | Starts the next round from recent discussion, then asks for approval with **Start** or **Cancel**. Ambiguous discussion fails closed without rewriting canonical state. | Uses the same next-round proposal and approval-only gate, but the explicit text anchors the next mission. |
 
-## Startup confirmation
+## Approval-only confirmation and fail-closed behavior
 
-Startup and replacement proposals are **approval-only**:
+All startup, next-round, and replacement proposals are **approval-only**:
 
 - the proposal body is shown separately from actions
 - actions are only **Start** and **Cancel**
-- if the proposal needs changes, **Cancel**, discuss them in the main chat, and rerun `/cook`
+- **Cancel** is side-effect free: discuss changes in the main chat and rerun `/cook`
 
-When an active workflow already exists and you run `/cook <goal>`, `/cook` still shows a separate chooser first:
+When bare `/cook` cannot derive a clear startup, next-round, or replacement proposal from recent discussion, it fails closed instead of guessing. That means no canonical `.agent/**` state is created or rewritten until the discussion is clarified or you temporarily pass `/cook <text>`.
+
+When an active workflow already exists and recent discussion clearly suggests a different workflow, `/cook` shows a separate chooser first:
 
 - **Continue current workflow**
-- **Abandon current workflow and start this new one**
+- **Start new workflow from recent discussion**
 - **Cancel**
 
-Only the follow-on startup/replacement proposal uses the approval-only Start/Cancel gate.
+Only the follow-on startup/replacement proposal uses the approval-only Start/Cancel gate, and canonical `.agent/**` state changes happen only after **Start** is accepted.
 
 When you accept startup or refocus from that flow, `/cook` persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
 
@@ -218,7 +224,7 @@ npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then asserts the shipped single-command `/cook` public parity surfaces in `README.md`, `CHANGELOG.md`, and the `/cook` help/fail-closed copy in `extensions/completion/index.ts`, reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 ## Release
 
