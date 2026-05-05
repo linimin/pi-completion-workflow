@@ -255,6 +255,47 @@ assert 'evaluation_profile=completion-rubric-v1' in state['continuation_reason']
 assert 'Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal.' in state['continuation_reason'], 'initial startup should persist the accepted critique outcome in continuation_reason'
 PY
 
+# Active workflow: bare /cook with matching structured discussion should classify as continue
+# and resume the current workflow without opening the chooser or rewriting canonical state.
+SESSION_ONE_CONTINUE="$TMPDIR/session-one-continue.jsonl"
+DISCUSSION_ONE_CONTINUE=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the current mission focused on the non-running completion widget.\nConstraints:\n- Do not start a different workflow from this discussion.\nAcceptance:\n- Resume the current workflow from canonical state without rewriting it.'
+CONTINUE_ROUTING_ONE="$TMPDIR/active-continue-routing.json"
+CONTINUE_RESUME_PROMPT_ONE="$TMPDIR/active-continue-resume.txt"
+CONTINUE_CHOOSER_ONE="$TMPDIR/unexpected-active-continue-chooser.json"
+write_session "$SESSION_ONE_CONTINUE" "$ROOT" "$DISCUSSION_ONE_CONTINUE"
+
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$CONTINUE_ROUTING_ONE" \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$CONTINUE_RESUME_PROMPT_ONE" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$CONTINUE_CHOOSER_ONE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ONE_CONTINUE" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-active-continue.out" 2>"$TMPDIR/pi-completion-context-proposal-active-continue.err"
+
+python3 - "$CONTINUE_ROUTING_ONE" "$CONTINUE_RESUME_PROMPT_ONE" "$CONTINUE_CHOOSER_ONE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Remove the completion status line while keeping the completion widget.'
+routing = json.loads(Path(sys.argv[1]).read_text())
+resume = Path(sys.argv[2]).read_text()
+chooser_path = Path(sys.argv[3])
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert routing['mode'] == 'bare', 'active bare /cook continue regression should snapshot bare routing mode'
+assert routing['action'] == 'continue', 'matching structured discussion should classify active bare /cook as continue'
+assert routing['reason'] == 'matching_mission', 'matching structured discussion should keep the current mission rather than refocus'
+assert routing['currentMissionAnchor'] == mission, 'continue routing should preserve the current mission anchor'
+assert routing['proposedMissionAnchor'] == mission, 'continue routing should keep the proposed mission anchored to the current mission'
+assert 'Resume the completion workflow from canonical state.' in resume, 'active bare /cook continue should still use the canonical resume prompt'
+assert not chooser_path.exists(), 'active bare /cook continue should not open the refocus chooser'
+assert state['mission_anchor'] == mission, 'active bare /cook continue should keep state.json unchanged'
+assert plan['mission_anchor'] == mission, 'active bare /cook continue should keep plan.json unchanged'
+assert active['mission_anchor'] == mission, 'active bare /cook continue should keep active-slice.json unchanged'
+PY
+
 # Completed workflow: bare /cook should use the same strict structured fallback for the next workflow round when analyst output is unavailable.
 mark_done
 
@@ -315,21 +356,28 @@ PY
 # even when analyst output is unavailable and structured session fallback is present.
 SESSION_THREE="$TMPDIR/session-three.jsonl"
 DISCUSSION_THREE=$'Scope:\n- Preserve the richer proposal structure from discussion.\nConstraints:\n- Keep explicit goals as the mission anchor when they conflict with earlier text.\nAcceptance:\n- Refresh canonical state from the replacement mission.'
+DISCUSSION_SNAPSHOT_THREE="$TMPDIR/context-proposal-active-goal.json"
+ROUTING_SNAPSHOT_THREE="$TMPDIR/context-proposal-active-goal-routing.json"
 write_session "$SESSION_THREE" "$ROOT" "$DISCUSSION_THREE"
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_THREE" \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ROUTING_SNAPSHOT_THREE" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi --session "$SESSION_THREE" -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >/tmp/pi-completion-context-proposal-active-goal.out 2>/tmp/pi-completion-context-proposal-active-goal.err
+pi --session "$SESSION_THREE" -e "$PKG_ROOT" -p "/cook Explicit replacement mission for the active workflow" >"$TMPDIR/pi-completion-context-proposal-active-goal.out" 2>"$TMPDIR/pi-completion-context-proposal-active-goal.err"
 
-python3 - <<'PY'
+python3 - "$DISCUSSION_SNAPSHOT_THREE" "$ROUTING_SNAPSHOT_THREE" <<'PY'
 import json
+import sys
 from pathlib import Path
 
 mission = 'Explicit replacement mission for the active workflow.'
 expected_task_type = 'completion-workflow'
 expected_eval_profile = 'completion-rubric-v1'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+routing = json.loads(Path(sys.argv[2]).read_text())
 mission_text = Path('.agent/mission.md').read_text()
 profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
@@ -348,6 +396,11 @@ assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluatio
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after explicit-goal replacement'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after explicit-goal replacement'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after explicit-goal replacement'
+assert proposal['mission'] == mission, 'explicit-goal replacement should route through the shared proposal confirmation pipeline'
+assert routing['mode'] == 'explicit', 'explicit-goal replacement should snapshot explicit active-workflow routing mode'
+assert routing['action'] == 'refocus', 'explicit-goal replacement should classify as refocus when the mission changes'
+assert routing['reason'] == 'explicit_goal', 'explicit-goal replacement should record the explicit-goal routing reason'
+assert routing['proposedMissionAnchor'] == mission, 'explicit-goal routing should expose the replacement mission anchor'
 assert state['current_phase'] == 'reground', 'current_phase should reset to reground after explicit-goal replacement'
 assert state['continuation_policy'] == 'continue', 'continuation_policy should stay continue after explicit-goal replacement'
 assert state['next_mandatory_role'] == 'completion-regrounder', 'next role should reset to completion-regrounder after explicit-goal replacement'

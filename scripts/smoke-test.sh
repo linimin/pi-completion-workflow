@@ -8,6 +8,8 @@ trap 'rm -rf "$TMPDIR"' EXIT
 ROOT="$TMPDIR/repo"
 KICKOFF_PROMPT="$TMPDIR/kickoff-prompt.txt"
 RESUME_PROMPT="$TMPDIR/resume-prompt.txt"
+UNCLEAR_ROUTING_SNAPSHOT="$TMPDIR/active-unclear-routing.json"
+UNCLEAR_CHOOSER_SNAPSHOT="$TMPDIR/unexpected-existing-workflow-chooser.json"
 AUTO_RESUME_PROMPT="$TMPDIR/auto-resume-prompt.txt"
 
 mkdir -p "$ROOT"
@@ -62,20 +64,32 @@ PY
 
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$RESUME_PROMPT" \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$UNCLEAR_ROUTING_SNAPSHOT" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$UNCLEAR_CHOOSER_SNAPSHOT" \
 pi -e "$PKG_ROOT" -p "/cook" \
   >"$TMPDIR/pi-completion-smoke-resume.out" 2>"$TMPDIR/pi-completion-smoke-resume.err"
 
-python3 - "$RESUME_PROMPT" <<'PY'
+python3 - "$RESUME_PROMPT" "$UNCLEAR_ROUTING_SNAPSHOT" "$UNCLEAR_CHOOSER_SNAPSHOT" <<'PY'
+import json
 import sys
 from pathlib import Path
 
 expected_task_type = 'completion-workflow'
 expected_eval_profile = 'completion-rubric-v1'
 resume = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+chooser_path = Path(sys.argv[3])
+state = json.loads(Path('.agent/state.json').read_text())
 
 assert 'Canonical routing profile:' in resume, 'resume prompt should expose canonical routing profile'
 assert f'- task_type: {expected_task_type}' in resume, 'resume prompt missing canonical task_type'
 assert f'- evaluation_profile: {expected_eval_profile}' in resume, 'resume prompt missing canonical evaluation_profile'
+assert routing['mode'] == 'bare', 'active bare /cook should snapshot bare routing mode'
+assert routing['action'] == 'unclear', 'no-discussion active bare /cook should classify as unclear'
+assert routing['reason'] == 'missing_proposal', 'no-discussion active bare /cook should fail closed because no replacement proposal was derived'
+assert routing['currentMissionAnchor'] == state['mission_anchor'], 'unclear routing snapshot should keep the current mission anchor'
+assert routing['proposedMissionAnchor'] is None, 'unclear no-discussion routing should not propose a replacement mission'
+assert not chooser_path.exists(), 'unclear active bare /cook should fall back to resume without opening the chooser'
 PY
 
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \

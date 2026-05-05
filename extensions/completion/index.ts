@@ -463,6 +463,20 @@ type ExistingWorkflowDecision =
 	| { action: "continue"; currentMissionAnchor: string }
 	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string };
 
+type ActiveWorkflowProposalAssessment = {
+	action: "continue" | "refocus" | "unclear";
+	currentMissionAnchor: string;
+	proposal?: ContextProposal;
+	reason: "matching_mission" | "clear_refocus" | "explicit_goal" | "missing_proposal" | "ambiguous_discussion";
+};
+
+type ExistingWorkflowChooserOptions = {
+	intro?: string;
+	proposedMissionLabel?: string;
+	refocusChoiceLabel?: string;
+	comparison?: "semantic" | "strict";
+};
+
 function completionTestWorkflowActionOverride(): "continue" | "refocus" | "cancel" | undefined {
 	const raw = process.env.PI_COMPLETION_EXISTING_WORKFLOW_ACTION?.trim().toLowerCase();
 	return raw === "continue" || raw === "refocus" || raw === "cancel" ? raw : undefined;
@@ -492,6 +506,10 @@ function completionTestContextProposalUiSnapshotPath(): string | undefined {
 
 function completionTestContextProposalSnapshotPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH);
+}
+
+function completionTestActiveWorkflowRoutingSnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH);
 }
 
 function completionTestDriverPromptPath(): string | undefined {
@@ -789,6 +807,73 @@ function isSessionScopeItemMissionRelevant(item: string, mission: string): boole
 	const overlap = itemTokens.filter((token) => missionTokens.has(token));
 	if (overlap.length >= 2) return true;
 	return overlap.some((token) => token.length >= 6 || /[\p{Script=Han}]/u.test(token));
+}
+
+function missionAnchorSemanticTokens(text: string): string[] {
+	return [...new Set(missionScopeFilterTokens(normalizeMissionAnchorText(text).toLowerCase()))];
+}
+
+function missionAnchorsStrictlyEquivalent(left: string, right: string): boolean {
+	return normalizeMissionAnchorText(left).toLowerCase() === normalizeMissionAnchorText(right).toLowerCase();
+}
+
+function missionAnchorsLikelyEquivalent(left: string, right: string): boolean {
+	const normalizedLeft = normalizeMissionAnchorText(left).toLowerCase();
+	const normalizedRight = normalizeMissionAnchorText(right).toLowerCase();
+	if (!normalizedLeft || !normalizedRight) return false;
+	if (normalizedLeft === normalizedRight) return true;
+	if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) return true;
+	const leftTokens = missionAnchorSemanticTokens(normalizedLeft);
+	const rightTokens = missionAnchorSemanticTokens(normalizedRight);
+	if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+	const rightSet = new Set(rightTokens);
+	const overlap = leftTokens.filter((token) => rightSet.has(token));
+	if (overlap.length === 0) return false;
+	const minLen = Math.min(leftTokens.length, rightTokens.length);
+	const maxLen = Math.max(leftTokens.length, rightTokens.length);
+	if (overlap.length === minLen && overlap.length >= 2) return true;
+	return overlap.length >= 3 && overlap.length / maxLen >= 0.75;
+}
+
+function shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal: ContextProposal): boolean {
+	if (proposal.source === "session") {
+		return proposal.scope.length > 0 && proposal.constraints.length > 0 && proposal.acceptance.length > 0;
+	}
+	return (
+		proposal.scope.length > 0 &&
+		proposal.constraints.length > 0 &&
+		proposal.acceptance.length > 0 &&
+		proposal.analysis.possibleNoise.length === 0
+	);
+}
+
+function maybeWriteActiveWorkflowRoutingSnapshot(
+	assessment: ActiveWorkflowProposalAssessment,
+	options: { mode: "bare" | "explicit"; explicitGoal?: string },
+): void {
+	const snapshotPath = completionTestActiveWorkflowRoutingSnapshotPath();
+	if (!snapshotPath) return;
+	maybeWriteTestSnapshot(
+		snapshotPath,
+		`${JSON.stringify(
+			{
+				mode: options.mode,
+				explicitGoalProvided: Boolean(options.explicitGoal),
+				explicitGoal: options.explicitGoal ?? null,
+				action: assessment.action,
+				reason: assessment.reason,
+				currentMissionAnchor: assessment.currentMissionAnchor,
+				proposedMissionAnchor: assessment.proposal?.mission ?? null,
+				proposalSource: assessment.proposal?.source ?? null,
+				possibleNoise: assessment.proposal?.analysis.possibleNoise ?? [],
+				scope: assessment.proposal?.scope ?? [],
+				constraints: assessment.proposal?.constraints ?? [],
+				acceptance: assessment.proposal?.acceptance ?? [],
+			},
+			null,
+			2,
+		)}\n`,
+	);
 }
 
 const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
@@ -1847,32 +1932,110 @@ function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role
 	return buildEvaluationRoleContextLines(snapshot, role).join(" ");
 }
 
-async function confirmExistingWorkflowGoal(
+async function assessActiveWorkflowProposalRouting(
+	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
+	snapshot: CompletionStateSnapshot,
+	explicitGoal?: string,
+): Promise<ActiveWorkflowProposalAssessment> {
+	const currentMission = currentMissionAnchor(snapshot);
+	const projectName = path.basename(snapshot.files.root);
+	const proposal = explicitGoal
+		? await deriveCookContextProposal(ctx, projectName, explicitGoal)
+		: await deriveCookContextProposal(ctx, projectName);
+	const mode = explicitGoal ? "explicit" : "bare";
+	if (!proposal) {
+		const assessment: ActiveWorkflowProposalAssessment = {
+			action: "unclear",
+			currentMissionAnchor: currentMission,
+			reason: "missing_proposal",
+		};
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		return assessment;
+	}
+	const missionsMatch = explicitGoal
+		? missionAnchorsStrictlyEquivalent(currentMission, proposal.mission)
+		: missionAnchorsLikelyEquivalent(currentMission, proposal.mission);
+	if (missionsMatch) {
+		const assessment: ActiveWorkflowProposalAssessment = {
+			action: "continue",
+			currentMissionAnchor: currentMission,
+			proposal,
+			reason: "matching_mission",
+		};
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		return assessment;
+	}
+	if (explicitGoal || shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal)) {
+		const assessment: ActiveWorkflowProposalAssessment = {
+			action: "refocus",
+			currentMissionAnchor: currentMission,
+			proposal,
+			reason: explicitGoal ? "explicit_goal" : "clear_refocus",
+		};
+		maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+		return assessment;
+	}
+	const assessment: ActiveWorkflowProposalAssessment = {
+		action: "unclear",
+		currentMissionAnchor: currentMission,
+		proposal,
+		reason: "ambiguous_discussion",
+	};
+	maybeWriteActiveWorkflowRoutingSnapshot(assessment, { mode, explicitGoal });
+	return assessment;
+}
+
+async function resumeActiveWorkflowFromCanonicalState(
+	pi: any,
+	ctx: { cwd: string; hasUI: boolean; ui: any },
+	snapshot: CompletionStateSnapshot,
+): Promise<void> {
+	const mission = currentMissionAnchor(snapshot);
+	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
+	const resumePrompt = completionResumePrompt(
+		currentTaskType(snapshot) ?? "(missing)",
+		currentEvaluationProfile(snapshot) ?? "(missing)",
+	);
+	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
+	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
+		kind: "resume",
+		mission_anchor: mission,
+		current_phase: asString(snapshot.state?.current_phase) ?? null,
+		next_mandatory_role: asString(snapshot.state?.next_mandatory_role) ?? null,
+	});
+	const resumeKind = shouldTestAutoContinueOnSessionStart() && completionTestAutoContinuePromptPath() ? "auto-resume" : "resume";
+	await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, resumeKind);
+}
+
+async function confirmExistingWorkflowProposal(
 	ctx: { hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
-	goal: string,
+	proposal: ContextProposal,
+	options: ExistingWorkflowChooserOptions = {},
 ): Promise<ExistingWorkflowDecision | undefined> {
 	const currentMission = currentMissionAnchor(snapshot);
-	const assessment = assessMissionAnchor(goal, path.basename(snapshot.files.root));
-	const normalizedCurrent = normalizeMissionAnchorText(currentMission);
-	const normalizedGoal = normalizeMissionAnchorText(goal);
-	const normalizedProposed = normalizeMissionAnchorText(assessment.derived);
-	if (!normalizedGoal || normalizedGoal === normalizedCurrent || normalizedProposed === normalizedCurrent) {
+	const comparison = options.comparison ?? "semantic";
+	const missionsMatch =
+		comparison === "strict"
+			? missionAnchorsStrictlyEquivalent(currentMission, proposal.mission)
+			: missionAnchorsLikelyEquivalent(currentMission, proposal.mission);
+	if (missionsMatch) {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
 	const title = [
 		"Existing completion workflow found",
 		"",
-		"A workflow is already in progress. Choose how /cook should proceed:",
+		options.intro ?? "A workflow is already in progress. Choose how /cook should proceed:",
 		"",
 		"Current mission",
 		currentMission,
 		"",
-		"New proposed mission",
-		assessment.derived,
+		options.proposedMissionLabel ?? "New proposed mission",
+		proposal.mission,
 	].join("\n");
 	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new goal as extra direction only.";
 	const refocusChoice =
+		options.refocusChoiceLabel ??
 		"Abandon current workflow and start this new one\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.";
 	const cancelChoice = `Cancel\n\nKeep the current workflow unchanged. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
 	maybeWriteTestSnapshot(
@@ -1884,7 +2047,7 @@ async function confirmExistingWorkflowGoal(
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
 	if (actionOverride === "refocus") {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
 	}
 	if (actionOverride === "cancel") return undefined;
 	if (!getCtxHasUI(ctx)) {
@@ -1897,7 +2060,7 @@ async function confirmExistingWorkflowGoal(
 	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
 	if (!choice || choice === cancelChoice) return undefined;
 	if (choice === refocusChoice) {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: assessment.derived };
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
 	}
 	return { action: "continue", currentMissionAnchor: currentMission };
 }
@@ -3936,23 +4099,38 @@ export default function completionExtension(pi: ExtensionAPI) {
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 				} else {
-					const mission = currentMissionAnchor(snapshot);
-					pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
-					const resumePrompt = completionResumePrompt(
-						currentTaskType(snapshot) ?? "(missing)",
-						currentEvaluationProfile(snapshot) ?? "(missing)",
-					);
-					const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
-					const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
-						kind: "resume",
-						mission_anchor: currentMissionAnchor(snapshot),
-						current_phase: asString(snapshot.state?.current_phase) ?? null,
-						next_mandatory_role: asString(snapshot.state?.next_mandatory_role) ?? null,
+					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot);
+					if (assessment.action !== "refocus" || !assessment.proposal) {
+						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot);
+						return;
+					}
+					const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, {
+						intro: "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:",
+						proposedMissionLabel: "Proposed mission from recent discussion",
+						refocusChoiceLabel:
+							"Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.",
 					});
-					const resumeKind =
-						shouldTestAutoContinueOnSessionStart() && completionTestAutoContinuePromptPath() ? "auto-resume" : "resume";
-					await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, resumeKind);
-					return;
+					if (!decision) {
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
+						return;
+					}
+					if (decision.action === "continue") {
+						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot);
+						return;
+					}
+					const proposalDecision = await confirmContextProposal(ctx, assessment.proposal, {
+						title: "Start the replacement workflow from recent discussion?",
+					});
+					if (!proposalDecision) {
+						emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
+						return;
+					}
+					goal = proposalDecision.goalText;
+					kickoffIntent = "refocus";
+					kickoffMissionAnchor = proposalDecision.missionAnchor;
+					await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText, proposalDecision.analysis);
+					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+					emitCommandText(ctx, `Refocused completion mission from recent discussion to: ${proposalDecision.missionAnchor}`, "info");
 				}
 			}
 			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
@@ -3979,36 +4157,47 @@ export default function completionExtension(pi: ExtensionAPI) {
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					emitCommandText(ctx, `Started a new completion workflow round from explicit goal: ${decision.missionAnchor}`, "info");
 				} else {
-					const decision = await confirmExistingWorkflowGoal(ctx, snapshot, goal);
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
+					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, goal);
+					if (!assessment.proposal) {
+						emitCommandText(ctx, "Failed to derive the replacement workflow proposal from this goal.", "error");
 						return;
 					}
-					kickoffIntent = decision.action;
-					kickoffMissionAnchor = decision.currentMissionAnchor;
-					if (decision.action === "refocus") {
-						const projectName = path.basename(snapshot.files.root);
-						const proposal = await buildGoalAnchoredContextProposal(ctx, goal, projectName);
-						const proposalDecision = await confirmContextProposal(ctx, proposal, {
-							title: "Start the replacement workflow from this goal?",
-							nonInteractiveBehavior: "accept",
-						});
-						if (!proposalDecision) {
-							emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
+					if (assessment.action === "continue") {
+						kickoffIntent = "continue";
+						kickoffMissionAnchor = assessment.currentMissionAnchor;
+						if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(assessment.currentMissionAnchor)) {
+							emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${assessment.currentMissionAnchor}`, "info");
+						}
+					} else {
+						const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, { comparison: "strict" });
+						if (!decision) {
+							emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
 							return;
 						}
-						goal = proposalDecision.goalText;
-						await refocusCompletionMission(
-							snapshot,
-							proposalDecision.missionAnchor,
-							proposalDecision.goalText,
-							proposalDecision.analysis,
-						);
-						snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-						kickoffMissionAnchor = proposalDecision.missionAnchor;
-						emitCommandText(ctx, `Refocused completion mission to: ${proposalDecision.missionAnchor}`, "info");
-					} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
-						emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
+						kickoffIntent = decision.action;
+						kickoffMissionAnchor = decision.currentMissionAnchor;
+						if (decision.action === "refocus") {
+							const proposalDecision = await confirmContextProposal(ctx, assessment.proposal, {
+								title: "Start the replacement workflow from this goal?",
+								nonInteractiveBehavior: "accept",
+							});
+							if (!proposalDecision) {
+								emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
+								return;
+							}
+							goal = proposalDecision.goalText;
+							await refocusCompletionMission(
+								snapshot,
+								proposalDecision.missionAnchor,
+								proposalDecision.goalText,
+								proposalDecision.analysis,
+							);
+							snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+							kickoffMissionAnchor = proposalDecision.missionAnchor;
+							emitCommandText(ctx, `Refocused completion mission to: ${proposalDecision.missionAnchor}`, "info");
+						} else if (normalizeMissionAnchorText(goal) !== normalizeMissionAnchorText(decision.currentMissionAnchor)) {
+							emitCommandText(ctx, `Continuing existing workflow without changing mission anchor: ${decision.currentMissionAnchor}`, "info");
+						}
 					}
 				}
 			}
