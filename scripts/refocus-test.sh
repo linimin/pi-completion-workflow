@@ -108,7 +108,7 @@ EXPLICIT_ROUTING_SNAPSHOT="$TMPDIR/explicit-goal-routing.json"
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$EXPLICIT_ROUTING_SNAPSHOT" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
-pi -e "$PKG_ROOT" -p "/cook refocused smoke-test mission with tests and docs" \
+pi -e "$PKG_ROOT" -p "/cook Remove completion status line, keep widget" \
   >"$TMPDIR/pi-completion-refocus.out" 2>"$TMPDIR/pi-completion-refocus.err"
 
 python3 - "$EXPLICIT_ROUTING_SNAPSHOT" <<'PY'
@@ -116,7 +116,7 @@ import json
 import sys
 from pathlib import Path
 
-new_anchor = 'refocused smoke-test mission with tests and docs parity.'
+new_anchor = 'Remove completion status line, keep widget.'
 expected_task_type = 'completion-workflow'
 expected_eval_profile = 'completion-rubric-v1'
 routing = json.loads(Path(sys.argv[1]).read_text())
@@ -163,8 +163,9 @@ if [[ "$INITIAL_MISSION" == "$UPDATED_MISSION" ]]; then
   exit 1
 fi
 
-BARE_REFOCUS_MISSION='Route active bare /cook discussion with a chooser and final approval gate.'
-BARE_REFOCUS_DISCUSSION=$'Mission: Route active bare /cook discussion with a chooser and final approval gate.\nScope:\n- Classify bare /cook discussion as continue, refocus, or unclear for active workflows.\n- Keep the replacement behind the existing approval-only Start/Cancel gate.\nConstraints:\n- Do not rewrite canonical state before the final Start confirmation.\nAcceptance:\n- Add deterministic coverage for bare active continue, clear refocus, and unclear routing.'
+# High-overlap inverted missions must still reach the conservative chooser and final Start/Cancel gate.
+BARE_REFOCUS_MISSION='Keep completion status line, remove widget.'
+BARE_REFOCUS_DISCUSSION=$'Mission: Keep completion status line, remove widget.\nScope:\n- Treat the active bare /cook discussion as a replacement workflow rather than a resume.\n- Keep the replacement behind the existing approval-only Start/Cancel gate.\nConstraints:\n- Do not rewrite canonical state before the final Start confirmation.\nAcceptance:\n- Add deterministic coverage proving the chooser and final approval path for this inverted mission pair.'
 
 SESSION_BARE_CHOOSER_CANCEL="$TMPDIR/session-bare-chooser-cancel.jsonl"
 BARE_CHOOSER_SNAPSHOT="$TMPDIR/bare-existing-workflow-chooser.json"
@@ -199,6 +200,7 @@ assert active['mission_anchor'] == updated_mission, 'chooser cancel should keep 
 assert routing['mode'] == 'bare', 'bare /cook should snapshot bare active-workflow routing mode'
 assert routing['action'] == 'refocus', 'clear structured discussion should classify active bare /cook as refocus'
 assert routing['reason'] == 'clear_refocus', 'clear structured discussion should record the clear-refocus routing reason'
+assert routing['currentMissionAnchor'] == updated_mission, 'clear-refocus routing should keep the current mission anchor until the user approves replacement'
 assert routing['proposedMissionAnchor'] == replacement_mission, 'clear-refocus routing should expose the proposed replacement mission'
 assert chooser['title'].startswith('Existing completion workflow found'), 'bare chooser snapshot should describe the existing-workflow prompt'
 assert chooser['choices'][0].startswith('Continue current workflow'), 'bare chooser should keep the continue option'
@@ -241,6 +243,7 @@ assert plan['mission_anchor'] == updated_mission, 'final Start/Cancel cancel sho
 assert active['mission_anchor'] == updated_mission, 'final Start/Cancel cancel should keep active-slice.json unchanged'
 assert routing['action'] == 'refocus', 'final Start/Cancel cancel should still come from a clear-refocus classification'
 assert routing['reason'] == 'clear_refocus', 'final Start/Cancel cancel should preserve the clear-refocus reason'
+assert routing['currentMissionAnchor'] == updated_mission, 'final Start/Cancel cancel should keep the current mission anchor until the user approves replacement'
 assert proposal['mission'] == replacement_mission, 'final Start/Cancel cancel should still prepare the replacement proposal before rewriting state'
 assert 'Discuss changes in the main chat and rerun /cook.' in output, 'final Start/Cancel cancel should redirect users back to the main chat and rerun /cook'
 PY
@@ -264,7 +267,7 @@ import json
 import sys
 from pathlib import Path
 
-new_anchor = 'Route active bare /cook discussion with a chooser and final approval gate.'
+new_anchor = 'Keep completion status line, remove widget.'
 expected_task_type = 'completion-workflow'
 expected_eval_profile = 'completion-rubric-v1'
 proposal = json.loads(Path(sys.argv[1]).read_text())
@@ -279,6 +282,7 @@ assert proposal['mission'] == new_anchor, 'accepted bare refocus should preserve
 assert routing['mode'] == 'bare', 'accepted bare refocus should keep bare routing mode'
 assert routing['action'] == 'refocus', 'accepted bare refocus should keep the clear-refocus classification'
 assert routing['reason'] == 'clear_refocus', 'accepted bare refocus should keep the clear-refocus reason'
+assert routing['currentMissionAnchor'] == 'Remove completion status line, keep widget.', 'accepted bare refocus should expose the original mission until Start is accepted'
 assert new_anchor in mission_text, '.agent/mission.md did not update to the bare refocus mission anchor'
 assert profile['task_type'] == expected_task_type, 'profile.json task_type mismatch after bare refocus'
 assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json evaluation_profile mismatch after bare refocus'

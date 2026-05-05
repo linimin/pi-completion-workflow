@@ -813,6 +813,36 @@ function missionAnchorSemanticTokens(text: string): string[] {
 	return [...new Set(missionScopeFilterTokens(normalizeMissionAnchorText(text).toLowerCase()))];
 }
 
+function missionAnchorOrderedTokenOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
+	if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+	const dp = new Array(rightTokens.length + 1).fill(0);
+	for (const leftToken of leftTokens) {
+		let previous = 0;
+		for (let index = 0; index < rightTokens.length; index += 1) {
+			const nextPrevious = dp[index + 1];
+			if (leftToken === rightTokens[index]) {
+				dp[index + 1] = previous + 1;
+			} else {
+				dp[index + 1] = Math.max(dp[index + 1], dp[index]);
+			}
+			previous = nextPrevious;
+		}
+	}
+	return dp[rightTokens.length] / Math.max(leftTokens.length, rightTokens.length);
+}
+
+function missionAnchorBigramOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
+	if (leftTokens.length < 2 || rightTokens.length < 2) return 0;
+	const leftBigrams = new Set(leftTokens.slice(0, -1).map((token, index) => `${token} ${leftTokens[index + 1]}`));
+	const rightBigrams = new Set(rightTokens.slice(0, -1).map((token, index) => `${token} ${rightTokens[index + 1]}`));
+	if (leftBigrams.size === 0 || rightBigrams.size === 0) return 0;
+	let overlap = 0;
+	for (const bigram of leftBigrams) {
+		if (rightBigrams.has(bigram)) overlap += 1;
+	}
+	return overlap / Math.max(leftBigrams.size, rightBigrams.size);
+}
+
 function missionAnchorsStrictlyEquivalent(left: string, right: string): boolean {
 	return normalizeMissionAnchorText(left).toLowerCase() === normalizeMissionAnchorText(right).toLowerCase();
 }
@@ -828,11 +858,12 @@ function missionAnchorsLikelyEquivalent(left: string, right: string): boolean {
 	if (leftTokens.length === 0 || rightTokens.length === 0) return false;
 	const rightSet = new Set(rightTokens);
 	const overlap = leftTokens.filter((token) => rightSet.has(token));
-	if (overlap.length === 0) return false;
-	const minLen = Math.min(leftTokens.length, rightTokens.length);
+	if (overlap.length < 3) return false;
 	const maxLen = Math.max(leftTokens.length, rightTokens.length);
-	if (overlap.length === minLen && overlap.length >= 2) return true;
-	return overlap.length >= 3 && overlap.length / maxLen >= 0.75;
+	if (overlap.length / maxLen < 0.75) return false;
+	if (missionAnchorOrderedTokenOverlapRatio(leftTokens, rightTokens) < 0.75) return false;
+	if (Math.min(leftTokens.length, rightTokens.length) < 4) return true;
+	return missionAnchorBigramOverlapRatio(leftTokens, rightTokens) >= 0.5;
 }
 
 function shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal: ContextProposal): boolean {
