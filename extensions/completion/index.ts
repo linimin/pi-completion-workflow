@@ -753,6 +753,87 @@ function matchContextProposalRoutingHint(
 	return label === "tasktype" ? { field: "taskType", value } : { field: "evaluationProfile", value };
 }
 
+const CONTEXT_PROPOSAL_GENERIC_PLANNING_MISSION_REGEX =
+	/(?:\b(?:start(?:ing)?|begin|continue|continu(?:e|ing)|resume|implement(?:ing)?|execute|execut(?:e|ing)|carry out|work on|ship|build(?:ing)?)\b.*\b(?:this|that|the|current|latest)\s+(?:plan|proposal|spec(?:ification)?|design(?: doc(?:ument)?)?|migration plan)\b|(?:開始|著手|繼續|继续|恢復|恢复)?(?:實作|实现|執行|执行|落地|完成)(?:這個|这个|此|該|该)?(?:方案|計畫|计划|提案|規劃|规划|設計|设计))/iu;
+const CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX =
+	/(?:\b(?:write|draft|prepare|create|produce|share|deliver|document|review)\b.*\b(?:plan|spec(?:ification)?|design(?: doc(?:ument)?)?|migration plan|proposal)\b|(?:撰寫|撰写|編寫|编写|起草|準備|准备|產出|产出|整理|分享|交付|審查|审查).*(?:計畫|计划|規格|规格|設計文件|设计文档|提案|方案))/iu;
+const CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX =
+	/(?:\b(?:docs? only|documentation only|no code(?: changes?)?|without code(?: changes?)?|do not implement|don't implement|planning only|proposal only|spec only|design[- ]doc only|no runtime changes?)\b|(?:只改文件|僅文件|仅文件|不改(?:動)?代碼|不改代码|不要實作|不要实现|只規劃|只规划|僅規劃|仅规划|不改(?:動)?執行|不改运行))/iu;
+const CONTEXT_PROPOSAL_SUPPORT_ONLY_DOCS_REGEX =
+	/(?:^(?:update|edit|document|refresh|write|add)\s+(?:the\s+)?(?:readme|docs?|documentation)\b|^(?:更新|補充|补充|撰寫|撰写|新增)\s*(?:README|文件|文檔|文档))/iu;
+const CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX =
+	/(?:\b(?:normalize|fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|正規化|规范化|規範化|过滤|過濾|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
+
+function contextProposalBodyTexts(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string[] {
+	return [...proposal.scope, ...proposal.constraints, ...proposal.acceptance];
+}
+
+function isGenericPlanningMissionAnchor(text: string): boolean {
+	const normalized = normalizeMissionAnchorText(text);
+	if (!normalized) return false;
+	return CONTEXT_PROPOSAL_GENERIC_PLANNING_MISSION_REGEX.test(normalized);
+}
+
+function hasExplicitPlanningOnlyDeliverable(texts: string[]): boolean {
+	return texts.some((text) => CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX.test(normalizeProposalLine(text)));
+}
+
+function hasClearNoCodeOrDocsOnlySignal(texts: string[]): boolean {
+	return texts.some((text) => CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX.test(normalizeProposalLine(text)));
+}
+
+function isSupportOnlyDocumentationItem(text: string): boolean {
+	return CONTEXT_PROPOSAL_SUPPORT_ONLY_DOCS_REGEX.test(normalizeProposalLine(text));
+}
+
+function isImplementationMissionSourceCandidate(text: string): boolean {
+	const normalized = normalizeProposalLine(text);
+	if (!normalized) return false;
+	if (hasExplicitPlanningOnlyDeliverable([normalized])) return false;
+	if (hasClearNoCodeOrDocsOnlySignal([normalized])) return false;
+	if (isSupportOnlyDocumentationItem(normalized)) return false;
+	return CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalized);
+}
+
+function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string | undefined {
+	for (const item of proposal.scope) {
+		if (isImplementationMissionSourceCandidate(item)) return item;
+	}
+	for (const item of proposal.acceptance) {
+		if (isImplementationMissionSourceCandidate(item)) return item;
+	}
+	return proposal.scope.find(
+		(item) => !hasExplicitPlanningOnlyDeliverable([item]) && !hasClearNoCodeOrDocsOnlySignal([item]) && !isSupportOnlyDocumentationItem(item),
+	);
+}
+
+function finalizeContextProposal(
+	proposal: ContextProposal,
+	projectName: string,
+	options: { preserveExplicitMission?: boolean } = {},
+): ContextProposal | undefined {
+	if (options.preserveExplicitMission) return proposal;
+	if (!isGenericPlanningMissionAnchor(proposal.mission)) return proposal;
+	const bodyTexts = contextProposalBodyTexts(proposal);
+	if (hasExplicitPlanningOnlyDeliverable(bodyTexts) || hasClearNoCodeOrDocsOnlySignal(bodyTexts)) return proposal;
+	const missionSource = pickImplementationMissionSource(proposal);
+	if (!missionSource) return undefined;
+	const nextMission = assessMissionAnchor(missionSource, projectName).derived;
+	const normalizedNextMission = normalizeMissionAnchorText(nextMission);
+	if (!normalizedNextMission || isWeakMissionAnchor(normalizedNextMission)) return undefined;
+	if (missionAnchorsStrictlyEquivalent(nextMission, proposal.mission)) return proposal;
+	return {
+		...proposal,
+		mission: nextMission,
+		goalText: buildContextProposalGoalText({
+			mission: nextMission,
+			scope: proposal.scope,
+			constraints: proposal.constraints,
+			acceptance: proposal.acceptance,
+		}),
+	};
+}
+
 const MISSION_SCOPE_FILTER_STOPWORDS = new Set([
 	"a",
 	"an",
@@ -997,7 +1078,7 @@ function parseContextProposalAnalystOutput(
 		return undefined;
 	}
 	if (!isRecord(parsed)) return undefined;
-	const explicit = explicitGoal ? parseContextProposal(explicitGoal, projectName) : undefined;
+	const explicit = explicitGoal ? parseContextProposal(explicitGoal, projectName, { preserveMission: true }) : undefined;
 	const missionSource = explicit?.mission ?? explicitGoal ?? asString(parsed.mission);
 	if (!missionSource) return undefined;
 	const assessment = assessMissionAnchor(missionSource, projectName);
@@ -1022,16 +1103,20 @@ function parseContextProposalAnalystOutput(
 		[explicitGoal ?? "", raw, mission, ...scope, ...constraints, ...acceptance],
 	);
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
-	return {
-		mission,
-		scope,
-		constraints,
-		acceptance,
-		analysis,
-		goalText,
-		basisPreview: raw.replace(/\s+/g, " ").trim(),
-		source: "analyst",
-	};
+	return finalizeContextProposal(
+		{
+			mission,
+			scope,
+			constraints,
+			acceptance,
+			analysis,
+			goalText,
+			basisPreview: raw.replace(/\s+/g, " ").trim(),
+			source: "analyst",
+		},
+		projectName,
+		{ preserveExplicitMission: Boolean(explicitGoal) },
+	);
 }
 
 function contextProposalAnalystModelArg(model: unknown): string | undefined {
@@ -1429,7 +1514,7 @@ async function resolveContextProposalConfirmationAction(
 	};
 }
 
-function parseContextProposal(text: string, projectName: string): ContextProposal | undefined {
+function parseContextProposal(text: string, projectName: string, options: { preserveMission?: boolean } = {}): ContextProposal | undefined {
 	const cleaned = stripCodeBlocks(text).replace(/\r/g, "").trim();
 	if (!cleaned) return undefined;
 	const lines = cleaned
@@ -1562,16 +1647,20 @@ function parseContextProposal(text: string, projectName: string): ContextProposa
 		hintTexts: [cleaned, mission, ...scope, ...constraints, ...acceptance, ...critique, ...risks],
 	});
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
-	return {
-		mission,
-		scope,
-		constraints,
-		acceptance,
-		analysis,
-		goalText,
-		basisPreview,
-		source: "session",
-	};
+	return finalizeContextProposal(
+		{
+			mission,
+			scope,
+			constraints,
+			acceptance,
+			analysis,
+			goalText,
+			basisPreview,
+			source: "session",
+		},
+		projectName,
+		{ preserveExplicitMission: options.preserveMission },
+	);
 }
 
 function hasStructuredContextProposalSignal(text: string): boolean {
@@ -1627,7 +1716,12 @@ function parseStrictStructuredSessionProposal(text: string, projectName: string)
 
 	const proposal = parseContextProposal(cleaned, projectName);
 	if (!proposal) return undefined;
-	if (normalizeMissionAnchorText(proposal.mission) !== distinctMissionAnchors[0]) return undefined;
+	if (
+		normalizeMissionAnchorText(proposal.mission) !== distinctMissionAnchors[0] &&
+		!isGenericPlanningMissionAnchor(distinctMissionAnchors[0])
+	) {
+		return undefined;
+	}
 	if (proposal.scope.length === 0 || proposal.constraints.length === 0 || proposal.acceptance.length === 0) return undefined;
 	return { ...proposal, source: "session" };
 }
@@ -1660,7 +1754,7 @@ async function buildGoalAnchoredContextProposal(
 	goal: string,
 	projectName: string,
 ): Promise<ContextProposal> {
-	const explicit = parseContextProposal(goal, projectName);
+	const explicit = parseContextProposal(goal, projectName, { preserveMission: true });
 	const sessionProposal = await extractContextProposalFromSession(ctx, projectName, goal);
 	const missionSource = explicit?.mission ?? goal;
 	const assessment = assessMissionAnchor(missionSource, projectName);
@@ -1680,16 +1774,31 @@ async function buildGoalAnchoredContextProposal(
 		[goal, mission, ...(sessionProposal?.analysis.possibleNoise ?? []), ...scope, ...constraints, ...acceptance],
 	);
 	const goalText = buildContextProposalGoalText({ mission, scope, constraints, acceptance });
-	return {
-		mission,
-		scope,
-		constraints,
-		acceptance,
-		analysis,
-		goalText,
-		basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
-		source: sessionProposal?.source ?? explicit?.source ?? "session",
-	};
+	return (
+		finalizeContextProposal(
+			{
+				mission,
+				scope,
+				constraints,
+				acceptance,
+				analysis,
+				goalText,
+				basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
+				source: sessionProposal?.source ?? explicit?.source ?? "session",
+			},
+			projectName,
+			{ preserveExplicitMission: true },
+		) ?? {
+			mission,
+			scope,
+			constraints,
+			acceptance,
+			analysis,
+			goalText,
+			basisPreview: sessionProposal?.basisPreview ?? explicit?.basisPreview ?? goal,
+			source: sessionProposal?.source ?? explicit?.source ?? "session",
+		}
+	);
 }
 
 async function deriveCookContextProposal(

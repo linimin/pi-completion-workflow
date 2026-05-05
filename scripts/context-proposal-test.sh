@@ -199,6 +199,100 @@ assert 'Bare /cook failed closed' in output, 'ambiguous structured discussion sh
 assert 'Mission/Scope/Constraints/Acceptance' in output, 'ambiguous structured discussion should explain the strict fallback requirement'
 PY
 
+# No workflow yet: bare /cook structured fallback should normalize placeholder planning phrasing
+# into the concrete implementation mission when scope/acceptance clearly describe shipped work.
+SESSION_ZERO_NORMALIZED="$TMPDIR/session-zero-normalized.jsonl"
+DISCUSSION_ZERO_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing into shipped implementation missions.\n- Keep analyst-derived and structured-fallback proposals aligned.\nConstraints:\n- Do not rewrite explicit /cook <text> mission anchors.\nAcceptance:\n- Add deterministic regression coverage for startup normalization and refocus gating.\n- Keep the approval-only Start/Cancel rewrite gate.'
+DISCUSSION_SNAPSHOT_ZERO_NORMALIZED="$TMPDIR/context-proposal-normalized-fallback.json"
+write_session "$SESSION_ZERO_NORMALIZED" "$ROOT" "$DISCUSSION_ZERO_NORMALIZED"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_NORMALIZED" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_NORMALIZED" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-normalized-fallback.out" 2>"$TMPDIR/pi-completion-context-proposal-normalized-fallback.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_NORMALIZED" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Normalize bare /cook planning phrasing into shipped implementation missions.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+mission_text = Path('.agent/mission.md').read_text()
+
+assert mission in mission_text, 'normalized structured-fallback startup should update .agent/mission.md to the implementation mission'
+assert proposal['mission'] == mission, 'structured-fallback startup should normalize the placeholder planning mission'
+assert state['mission_anchor'] == mission, 'state.json mission_anchor should use the normalized implementation mission'
+assert plan['mission_anchor'] == mission, 'plan.json mission_anchor should use the normalized implementation mission'
+assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor should use the normalized implementation mission'
+assert proposal['source'] == 'session', 'normalized structured-fallback startup should still record session fallback as the proposal source'
+assert proposal['scope'][0] == mission, 'normalized structured-fallback startup should derive the mission from shipped-work scope'
+PY
+
+rm -rf .agent
+
+# No workflow yet: analyst-derived and strict structured fallback proposals should converge on the same
+# normalized implementation mission for the same planning-phrased discussion.
+SESSION_ZERO_ANALYST_NORMALIZED="$TMPDIR/session-zero-analyst-normalized.jsonl"
+ANALYST_OUTPUT_ZERO_NORMALIZED='{"mission":"開始實作這個方案","scope":["Normalize bare /cook planning phrasing into shipped implementation missions.","Keep analyst-derived and structured-fallback proposals aligned."],"constraints":["Do not rewrite explicit /cook <text> mission anchors."],"acceptance":["Add deterministic regression coverage for startup normalization and refocus gating.","Keep the approval-only Start/Cancel rewrite gate."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.93}'
+DISCUSSION_SNAPSHOT_ZERO_ANALYST_NORMALIZED="$TMPDIR/context-proposal-normalized-analyst.json"
+write_session "$SESSION_ZERO_ANALYST_NORMALIZED" "$ROOT" "$DISCUSSION_ZERO_NORMALIZED"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$ANALYST_OUTPUT_ZERO_NORMALIZED" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_ANALYST_NORMALIZED" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_ANALYST_NORMALIZED" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-normalized-analyst.out" 2>"$TMPDIR/pi-completion-context-proposal-normalized-analyst.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_ANALYST_NORMALIZED" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Normalize bare /cook planning phrasing into shipped implementation missions.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'analyst-derived startup should normalize the same placeholder planning mission to the same implementation mission'
+assert state['mission_anchor'] == mission, 'analyst-derived startup should converge on the same canonical mission anchor as structured fallback'
+assert proposal['analysis']['taskType'] == 'completion-workflow', 'analyst-derived normalization should preserve task_type hints'
+assert proposal['analysis']['evaluationProfile'] == 'completion-rubric-v1', 'analyst-derived normalization should preserve evaluation_profile hints'
+PY
+
+rm -rf .agent
+
+# No workflow yet: planning-only deliverables should preserve planning missions when discussion clearly says
+# docs-only / no-code plan output instead of shipped code, test, or runtime work.
+SESSION_ZERO_PLANNING_ONLY="$TMPDIR/session-zero-planning-only.jsonl"
+DISCUSSION_ZERO_PLANNING_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Draft the migration plan for the /cook mission-normalization rollout.\nConstraints:\n- Docs only; do not implement runtime changes.\nAcceptance:\n- Produce the proposal text for review.'
+DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY="$TMPDIR/context-proposal-planning-only.json"
+write_session "$SESSION_ZERO_PLANNING_ONLY" "$ROOT" "$DISCUSSION_ZERO_PLANNING_ONLY"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_PLANNING_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-planning-only.out" 2>"$TMPDIR/pi-completion-context-proposal-planning-only.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = '開始實作這個方案.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'planning-only startup should preserve the planning mission when the deliverable is explicitly a plan'
+assert state['mission_anchor'] == mission, 'planning-only startup should keep the planning mission anchor in canonical state'
+PY
+
+rm -rf .agent
+
 # No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
 SESSION_ONE="$TMPDIR/session-one.jsonl"
 DISCUSSION_ONE="$DISCUSSION_ZERO"
@@ -294,6 +388,85 @@ assert not chooser_path.exists(), 'active bare /cook continue should not open th
 assert state['mission_anchor'] == mission, 'active bare /cook continue should keep state.json unchanged'
 assert plan['mission_anchor'] == mission, 'active bare /cook continue should keep plan.json unchanged'
 assert active['mission_anchor'] == mission, 'active bare /cook continue should keep active-slice.json unchanged'
+PY
+
+# Active workflow: bare /cook with a placeholder planning mission should still route through the existing
+# refocus chooser and final Start/Cancel gate before canonical state is rewritten.
+SESSION_ONE_REFOCUS_NORMALIZED="$TMPDIR/session-one-refocus-normalized.jsonl"
+DISCUSSION_ONE_REFOCUS_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing into implementation-result missions.\n- Keep the approval-only Start/Cancel gate before rewriting canonical state.\nConstraints:\n- Do not resume the current widget mission.\nAcceptance:\n- Route through chooser-driven refocus before rewriting canonical state.'
+REFOCUS_ROUTING_ONE="$TMPDIR/active-refocus-routing.json"
+REFOCUS_CHOOSER_ONE="$TMPDIR/active-refocus-chooser.json"
+REFOCUS_PROPOSAL_ONE="$TMPDIR/active-refocus-proposal.json"
+REFOCUS_UI_ONE="$TMPDIR/active-refocus-ui.json"
+write_session "$SESSION_ONE_REFOCUS_NORMALIZED" "$ROOT" "$DISCUSSION_ONE_REFOCUS_NORMALIZED"
+
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_ACTION=start \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$REFOCUS_ROUTING_ONE" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$REFOCUS_CHOOSER_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$REFOCUS_PROPOSAL_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_UI_PATH="$REFOCUS_UI_ONE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ONE_REFOCUS_NORMALIZED" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-active-refocus-normalized.out" 2>"$TMPDIR/pi-completion-context-proposal-active-refocus-normalized.err"
+
+python3 - "$REFOCUS_ROUTING_ONE" "$REFOCUS_CHOOSER_ONE" "$REFOCUS_PROPOSAL_ONE" "$REFOCUS_UI_ONE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Normalize bare /cook planning phrasing into implementation-result missions.'
+routing = json.loads(Path(sys.argv[1]).read_text())
+chooser = json.loads(Path(sys.argv[2]).read_text())
+proposal = json.loads(Path(sys.argv[3]).read_text())
+ui = json.loads(Path(sys.argv[4]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert routing['mode'] == 'bare', 'active bare /cook refocus normalization should snapshot bare routing mode'
+assert routing['action'] == 'refocus', 'placeholder planning mission should still classify active bare /cook as refocus when the normalized mission changes'
+assert routing['reason'] == 'clear_refocus', 'active bare /cook refocus normalization should keep the clear_refocus routing reason'
+assert routing['proposedMissionAnchor'] == mission, 'active bare /cook refocus should normalize the proposed mission before canonical rewrite'
+assert chooser['choices'][1].startswith('Start new workflow from recent discussion'), 'active bare /cook refocus should still route through the existing chooser copy before rewrite'
+assert [action['id'] for action in ui['actions']] == ['start', 'cancel'], 'active bare /cook refocus should still end at the approval-only Start/Cancel gate'
+assert proposal['mission'] == mission, 'active bare /cook refocus proposal snapshot should expose the normalized implementation mission'
+assert state['mission_anchor'] == mission, 'active bare /cook refocus should rewrite canonical state to the normalized mission only after approval'
+assert plan['mission_anchor'] == mission, 'active bare /cook refocus should rewrite plan.json only after approval'
+assert active['mission_anchor'] == mission, 'active bare /cook refocus should rewrite active-slice.json only after approval'
+PY
+
+# Completed workflow: bare /cook should normalize placeholder planning phrasing for the next workflow
+# round too, not only for fresh startup.
+mark_done
+
+SESSION_TWO_NORMALIZED="$TMPDIR/session-two-normalized.jsonl"
+DISCUSSION_TWO_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing for the next workflow round.\n- Reset canonical state for the new implementation mission.\nConstraints:\n- Do not resume the completed workflow when the new round is clearly different.\nAcceptance:\n- Start a new round with the normalized mission anchor.'
+DISCUSSION_SNAPSHOT_TWO_NORMALIZED="$TMPDIR/context-proposal-next-round-normalized.json"
+write_session "$SESSION_TWO_NORMALIZED" "$ROOT" "$DISCUSSION_TWO_NORMALIZED"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_TWO_NORMALIZED" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_TWO_NORMALIZED" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-next-round-normalized.out" 2>"$TMPDIR/pi-completion-context-proposal-next-round-normalized.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_TWO_NORMALIZED" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Normalize bare /cook planning phrasing for the next workflow round.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert proposal['mission'] == mission, 'done-workflow structured fallback should normalize the placeholder planning mission for the next round'
+assert state['mission_anchor'] == mission, 'done-workflow startup should rewrite canonical state to the normalized next-round mission'
+assert plan['mission_anchor'] == mission, 'done-workflow startup should rewrite plan.json to the normalized next-round mission'
+assert active['mission_anchor'] == mission, 'done-workflow startup should rewrite active-slice.json to the normalized next-round mission'
+assert state['continuation_reason'].startswith('User refocused workflow via /cook:'), 'done-workflow normalization should still route through refocus semantics for the next round'
 PY
 
 # Completed workflow: bare /cook should use the same strict structured fallback for the next workflow round when analyst output is unavailable.
