@@ -542,7 +542,7 @@ const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and reru
 const COOK_INLINE_ARG_REJECTION_MESSAGE =
 	"Inline /cook arguments are no longer supported. Clarify the mission in the main chat and rerun bare /cook.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat and rerun bare /cook.";
+	"Bare /cook failed closed because recent discussion did not contain a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun bare /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -761,8 +761,6 @@ const CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX =
 	/(?:\b(?:write|draft|prepare|create|produce|share|deliver|document|review)\b.*\b(?:plan|spec(?:ification)?|design(?: doc(?:ument)?)?|migration plan|proposal)\b|(?:撰寫|撰写|編寫|编写|起草|準備|准备|產出|产出|整理|分享|交付|審查|审查).*(?:計畫|计划|規格|规格|設計文件|设计文档|提案|方案))/iu;
 const CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX =
 	/(?:\b(?:docs? only|documentation only|no code(?: changes?)?|without code(?: changes?)?|do not implement|don't implement|planning only|proposal only|spec only|design[- ]doc only|no runtime changes?)\b|(?:只改文件|僅文件|仅文件|不改(?:動)?代碼|不改代码|不要實作|不要实现|只規劃|只规划|僅規劃|仅规划|不改(?:動)?執行|不改运行))/iu;
-const CONTEXT_PROPOSAL_SUPPORT_ONLY_DOCS_REGEX =
-	/(?:^(?:update|edit|document|refresh|write|add)\s+(?:the\s+)?(?:readme|docs?|documentation)\b|^(?:更新|補充|补充|撰寫|撰写|新增)\s*(?:README|文件|文檔|文档))/iu;
 const CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX =
 	/(?:\b(?:normalize|fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|正規化|规范化|規範化|过滤|過濾|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
 
@@ -784,23 +782,12 @@ function hasClearNoCodeOrDocsOnlySignal(texts: string[]): boolean {
 	return texts.some((text) => CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX.test(normalizeProposalLine(text)));
 }
 
-function isSupportOnlyDocumentationItem(text: string): boolean {
-	return CONTEXT_PROPOSAL_SUPPORT_ONLY_DOCS_REGEX.test(normalizeProposalLine(text));
-}
-
 function isImplementationMissionSourceCandidate(text: string): boolean {
 	const normalized = normalizeProposalLine(text);
 	if (!normalized) return false;
 	if (hasExplicitPlanningOnlyDeliverable([normalized])) return false;
 	if (hasClearNoCodeOrDocsOnlySignal([normalized])) return false;
-	if (isSupportOnlyDocumentationItem(normalized)) return false;
 	return CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalized);
-}
-
-function hasSupportOnlyDocumentationDeliverable(proposal: Pick<ContextProposal, "scope" | "acceptance">): boolean {
-	const deliverableTexts = [...proposal.scope, ...proposal.acceptance].map((item) => normalizeProposalLine(item)).filter(Boolean);
-	if (deliverableTexts.length === 0) return false;
-	return deliverableTexts.every((item) => isSupportOnlyDocumentationItem(item));
 }
 
 function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string | undefined {
@@ -813,12 +800,17 @@ function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope"
 	return undefined;
 }
 
+function hasPlanningArtifactOnlyContext(
+	proposal: Pick<ContextProposal, "mission" | "scope" | "constraints" | "acceptance">,
+): boolean {
+	const texts = [proposal.mission, ...contextProposalBodyTexts(proposal)];
+	if (!hasExplicitPlanningOnlyDeliverable(texts)) return false;
+	return !pickImplementationMissionSource(proposal);
+}
+
 function finalizeContextProposal(proposal: ContextProposal, projectName: string): ContextProposal | undefined {
+	if (hasPlanningArtifactOnlyContext(proposal)) return undefined;
 	if (!isGenericPlanningMissionAnchor(proposal.mission)) return proposal;
-	const bodyTexts = contextProposalBodyTexts(proposal);
-	if (hasExplicitPlanningOnlyDeliverable(bodyTexts) || hasClearNoCodeOrDocsOnlySignal(bodyTexts) || hasSupportOnlyDocumentationDeliverable(proposal)) {
-		return proposal;
-	}
 	const missionSource = pickImplementationMissionSource(proposal);
 	if (!missionSource) return undefined;
 	const nextMission = assessMissionAnchor(missionSource, projectName).derived;
@@ -1026,12 +1018,9 @@ function collectRecentDiscussionEntries(ctx: { sessionManager: any }, limit = 8)
 		let text = "";
 		let role: RecentDiscussionEntry["role"] | undefined;
 		const messageRole = asString(message.role);
-		if (messageRole === "user" || messageRole === "assistant" || messageRole === "custom") {
+		if (messageRole === "user" || messageRole === "custom") {
 			text = extractTextFromMessageContent(message.content);
 			role = messageRole;
-		} else if (messageRole === "branchSummary" || messageRole === "compactionSummary") {
-			text = asString(message.summary) ?? "";
-			role = "summary";
 		}
 		if (!text || !role) continue;
 		const trimmed = text.trim();

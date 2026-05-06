@@ -265,8 +265,8 @@ PY
 
 rm -rf .agent
 
-# No workflow yet: planning-only deliverables should preserve planning missions when discussion clearly says
-# docs-only / no-code plan output instead of shipped code, test, or runtime work.
+# No workflow yet: planning-artifact-only context should fail closed even when the discussion is
+# clearly structured, because bare /cook now expects execution-ready repo changes.
 SESSION_ZERO_PLANNING_ONLY="$TMPDIR/session-zero-planning-only.jsonl"
 DISCUSSION_ZERO_PLANNING_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Draft the migration plan for the /cook mission-normalization rollout.\nConstraints:\n- Docs only; do not implement runtime changes.\nAcceptance:\n- Produce the proposal text for review.'
 DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY="$TMPDIR/context-proposal-planning-only.json"
@@ -278,25 +278,23 @@ PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONL
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_ZERO_PLANNING_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-planning-only.out" 2>"$TMPDIR/pi-completion-context-proposal-planning-only.err"
 
-python3 - "$DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY" <<'PY'
-import json
+python3 - "$TMPDIR/pi-completion-context-proposal-planning-only.out" "$TMPDIR/pi-completion-context-proposal-planning-only.err" "$DISCUSSION_SNAPSHOT_ZERO_PLANNING_ONLY" <<'PY'
 import sys
 from pathlib import Path
 
-mission = '開始實作這個方案.'
-proposal = json.loads(Path(sys.argv[1]).read_text())
-state = json.loads(Path('.agent/state.json').read_text())
-
-assert proposal['mission'] == mission, 'planning-only startup should preserve the planning mission when the deliverable is explicitly a plan'
-assert state['mission_anchor'] == mission, 'planning-only startup should keep the planning mission anchor in canonical state'
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+assert not Path('.agent').exists(), 'planning-only startup should fail closed without writing canonical state'
+assert not snapshot.exists(), 'planning-only startup should not emit a proposal snapshot when bare /cook fails closed'
+assert 'Bare /cook failed closed' in output, 'planning-only startup should explain the fail-closed startup outcome'
+assert 'Mission/Scope/Constraints/Acceptance' in output, 'planning-only startup should still explain the structured discussion requirement'
+assert 'concrete repo changes' in output, 'planning-only startup should explain that bare /cook now expects execution-ready repo changes'
 PY
 
-rm -rf .agent
-
-# No workflow yet: support-docs-only deliverables should also preserve planning missions even without
-# an explicit docs-only/no-code phrase, as long as the deliverable stays limited to support documentation.
+# No workflow yet: docs-only tracked deliverables such as README/CHANGELOG updates should
+# normalize placeholder planning missions into concrete repo-change missions.
 SESSION_ZERO_SUPPORT_DOCS_ONLY="$TMPDIR/session-zero-support-docs-only.jsonl"
-DISCUSSION_ZERO_SUPPORT_DOCS_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Update README for the /cook mission-normalization behavior.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Add documentation for the operator-facing refocus flow.'
+DISCUSSION_ZERO_SUPPORT_DOCS_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Update README and CHANGELOG for the /cook mission-normalization behavior.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Add documentation for the operator-facing refocus flow.'
 DISCUSSION_SNAPSHOT_ZERO_SUPPORT_DOCS_ONLY="$TMPDIR/context-proposal-support-docs-only.json"
 write_session "$SESSION_ZERO_SUPPORT_DOCS_ONLY" "$ROOT" "$DISCUSSION_ZERO_SUPPORT_DOCS_ONLY"
 
@@ -311,14 +309,71 @@ import json
 import sys
 from pathlib import Path
 
-mission = '開始實作這個方案.'
+mission = 'Update README and CHANGELOG for the /cook mission-normalization behavior.'
 proposal = json.loads(Path(sys.argv[1]).read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 
-assert proposal['mission'] == mission, 'support-docs-only startup should preserve the planning mission even without an explicit docs-only phrase'
-assert state['mission_anchor'] == mission, 'support-docs-only startup should keep the planning mission anchor in canonical state'
-assert proposal['scope'] == ['Update README for the /cook mission-normalization behavior.'], 'support-docs-only startup should keep the documentation scope item'
-assert proposal['acceptance'] == ['Add documentation for the operator-facing refocus flow.'], 'support-docs-only startup should keep the documentation acceptance item'
+assert proposal['mission'] == mission, 'docs-only startup should normalize the placeholder planning mission to the tracked-doc repo change'
+assert state['mission_anchor'] == mission, 'docs-only startup should write the normalized tracked-doc mission into canonical state'
+assert proposal['scope'][0] == mission, 'docs-only startup should derive the mission from the tracked-doc scope item'
+assert proposal['acceptance'] == ['Add documentation for the operator-facing refocus flow.'], 'docs-only startup should keep the documentation acceptance item'
+PY
+
+rm -rf .agent
+
+# No workflow yet: assistant-authored completed-plan summaries should fail closed instead of
+# seeding startup proposals when the user has not restated an execution-ready mission.
+SESSION_ZERO_ASSISTANT_SUMMARY="$TMPDIR/session-zero-assistant-summary.jsonl"
+DISCUSSION_SNAPSHOT_ZERO_ASSISTANT_SUMMARY="$TMPDIR/context-proposal-assistant-summary.json"
+python3 - "$SESSION_ZERO_ASSISTANT_SUMMARY" "$ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session_path = Path(sys.argv[1])
+cwd = sys.argv[2]
+session_path.parent.mkdir(parents=True, exist_ok=True)
+entries = [
+    {
+        "type": "session",
+        "version": 3,
+        "id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": cwd,
+    },
+    {
+        "type": "message",
+        "id": "b2c3d4e5",
+        "parentId": None,
+        "timestamp": "2026-01-01T00:00:02.000Z",
+        "message": {
+            "role": "assistant",
+            "content": "Mission: Ship the replacement workflow from the completed plan.\nScope:\n- Rewrite bare /cook around the finished plan summary.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Start immediately from this summary without more user clarification.",
+            "timestamp": 1767225602000,
+        },
+    },
+]
+with session_path.open('w', encoding='utf-8') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_ASSISTANT_SUMMARY" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_ASSISTANT_SUMMARY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-assistant-summary.out" 2>"$TMPDIR/pi-completion-context-proposal-assistant-summary.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-assistant-summary.out" "$TMPDIR/pi-completion-context-proposal-assistant-summary.err" "$DISCUSSION_SNAPSHOT_ZERO_ASSISTANT_SUMMARY" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+assert not Path('.agent').exists(), 'assistant-only startup summary should fail closed without writing canonical state'
+assert not snapshot.exists(), 'assistant-only startup summary should not emit a proposal snapshot when bare /cook fails closed'
+assert 'Bare /cook failed closed' in output, 'assistant-only startup summary should explain the fail-closed startup outcome'
+assert 'concrete repo changes' in output, 'assistant-only startup summary should explain that bare /cook expects execution-ready repo changes from main-chat discussion'
 PY
 
 rm -rf .agent
@@ -445,6 +500,80 @@ assert not chooser_path.exists(), 'active bare /cook continue should not open th
 assert state['mission_anchor'] == mission, 'active bare /cook continue should keep state.json unchanged'
 assert plan['mission_anchor'] == mission, 'active bare /cook continue should keep plan.json unchanged'
 assert active['mission_anchor'] == mission, 'active bare /cook continue should keep active-slice.json unchanged'
+PY
+
+# Active workflow: summary-only replacement artifacts should fail closed and keep the current
+# workflow instead of opening the refocus chooser.
+SESSION_ONE_SUMMARY_ONLY="$TMPDIR/session-one-summary-only.jsonl"
+SUMMARY_ROUTING_ONE="$TMPDIR/active-summary-only-routing.json"
+SUMMARY_RESUME_PROMPT_ONE="$TMPDIR/active-summary-only-resume.txt"
+SUMMARY_CHOOSER_ONE="$TMPDIR/unexpected-active-summary-only-chooser.json"
+SUMMARY_PROPOSAL_ONE="$TMPDIR/unexpected-active-summary-only-proposal.json"
+python3 - "$SESSION_ONE_SUMMARY_ONLY" "$ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session_path = Path(sys.argv[1])
+cwd = sys.argv[2]
+session_path.parent.mkdir(parents=True, exist_ok=True)
+entries = [
+    {
+        "type": "session",
+        "version": 3,
+        "id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": cwd,
+    },
+    {
+        "type": "message",
+        "id": "c3d4e5f6",
+        "parentId": None,
+        "timestamp": "2026-01-01T00:00:03.000Z",
+        "message": {
+            "role": "branchSummary",
+            "summary": "Mission: Replace the current workflow from the completed plan summary.\nScope:\n- Refocus to a different mission from this summary artifact alone.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Rewrite canonical state from the summary without new user discussion.",
+        },
+    },
+]
+with session_path.open('w', encoding='utf-8') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$SUMMARY_ROUTING_ONE" \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$SUMMARY_RESUME_PROMPT_ONE" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$SUMMARY_CHOOSER_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$SUMMARY_PROPOSAL_ONE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ONE_SUMMARY_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-active-summary-only.out" 2>"$TMPDIR/pi-completion-context-proposal-active-summary-only.err"
+
+python3 - "$SUMMARY_ROUTING_ONE" "$SUMMARY_RESUME_PROMPT_ONE" "$SUMMARY_CHOOSER_ONE" "$SUMMARY_PROPOSAL_ONE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Remove the completion status line while keeping the completion widget.'
+routing = json.loads(Path(sys.argv[1]).read_text())
+resume = Path(sys.argv[2]).read_text()
+chooser_path = Path(sys.argv[3])
+proposal_path = Path(sys.argv[4])
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert routing['mode'] == 'bare', 'summary-only active bare /cook regression should snapshot bare routing mode'
+assert routing['action'] == 'unclear', 'summary-only active bare /cook should fail closed instead of refocusing'
+assert routing['reason'] == 'missing_proposal', 'summary-only active bare /cook should treat the summary artifact as unreadiness, not a new proposal'
+assert routing['currentMissionAnchor'] == mission, 'summary-only active bare /cook should preserve the current mission anchor'
+assert routing['proposedMissionAnchor'] is None, 'summary-only active bare /cook should not derive a replacement mission from summary artifacts alone'
+assert 'Resume the completion workflow from canonical state.' in resume, 'summary-only active bare /cook should still resume the canonical workflow'
+assert not chooser_path.exists(), 'summary-only active bare /cook should not open the refocus chooser'
+assert not proposal_path.exists(), 'summary-only active bare /cook should not open replacement proposal confirmation'
+assert state['mission_anchor'] == mission, 'summary-only active bare /cook should keep state.json unchanged'
+assert plan['mission_anchor'] == mission, 'summary-only active bare /cook should keep plan.json unchanged'
+assert active['mission_anchor'] == mission, 'summary-only active bare /cook should keep active-slice.json unchanged'
 PY
 
 # Active workflow: bare /cook with a placeholder planning mission should still route through the existing

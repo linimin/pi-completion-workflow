@@ -20,17 +20,23 @@ checks = {
         "approval-only Start/Cancel gate",
         "Start new workflow from recent discussion",
         "fails closed instead of guessing",
+        "README/CHANGELOG updates still count as concrete repo changes",
+        "assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not",
+        "Assistant/summary artifacts or plan/spec/design-doc/proposal-only context do not refocus the workflow.",
     ],
     "CHANGELOG.md": [
         "bare `/cook` as the only supported workflow entrypoint",
         "clarify the mission before rerunning bare `/cook`",
         "packaged parity now fails closed on the bare-only contract",
         "that old inline-argument path is no longer supported now that bare `/cook` is the only public entrypoint",
+        "README/CHANGELOG/docs-only deliverables as concrete repo-change missions",
+        "ignore assistant/branch/compaction summary artifacts for startup/refocus readiness",
+        "plan/spec/design-doc/proposal-only context without rewriting canonical state",
     ],
     "extensions/completion/index.ts": [
         'description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round"',
         "Inline /cook arguments are no longer supported. Clarify the mission in the main chat and rerun bare /cook.",
-        "Bare /cook failed closed because recent discussion did not contain a clear structured Mission/Scope/Constraints/Acceptance proposal. Add that structure in the main chat and rerun bare /cook.",
+        "Bare /cook failed closed because recent discussion did not contain a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun bare /cook.",
     ],
 }
 
