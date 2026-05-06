@@ -178,7 +178,7 @@ output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 snapshot = Path(sys.argv[3])
 assert not Path('.agent').exists(), 'missing-section structured discussion should fail closed without writing canonical state'
 assert not snapshot.exists(), 'missing-section structured discussion should not emit a proposal snapshot when bare /cook fails closed'
-assert 'Bare /cook failed closed' in output, 'missing-section structured discussion should explain the fail-closed startup outcome'
+assert '/cook failed closed' in output, 'missing-section structured discussion should explain the fail-closed startup outcome'
 assert 'Mission/Scope/Constraints/Acceptance' in output, 'missing-section structured discussion should explain the strict fallback requirement'
 PY
 
@@ -198,7 +198,7 @@ from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 assert not Path('.agent').exists(), 'ambiguous structured discussion should fail closed without writing canonical state'
-assert 'Bare /cook failed closed' in output, 'ambiguous structured discussion should explain the fail-closed startup outcome'
+assert '/cook failed closed' in output, 'ambiguous structured discussion should explain the fail-closed startup outcome'
 assert 'Mission/Scope/Constraints/Acceptance' in output, 'ambiguous structured discussion should explain the strict fallback requirement'
 PY
 
@@ -289,7 +289,7 @@ output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 snapshot = Path(sys.argv[3])
 assert not Path('.agent').exists(), 'planning-only startup should fail closed without writing canonical state'
 assert not snapshot.exists(), 'planning-only startup should not emit a proposal snapshot when bare /cook fails closed'
-assert 'Bare /cook failed closed' in output, 'planning-only startup should explain the fail-closed startup outcome'
+assert '/cook failed closed' in output, 'planning-only startup should explain the fail-closed startup outcome'
 assert 'Mission/Scope/Constraints/Acceptance' in output, 'planning-only startup should still explain the structured discussion requirement'
 assert 'concrete repo changes' in output, 'planning-only startup should explain that bare /cook now expects execution-ready repo changes'
 PY
@@ -495,7 +495,7 @@ output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 snapshot = Path(sys.argv[3])
 assert not Path('.agent').exists(), 'assistant-only startup summary should fail closed without writing canonical state'
 assert not snapshot.exists(), 'assistant-only startup summary should not emit a proposal snapshot when bare /cook fails closed'
-assert 'Bare /cook failed closed' in output, 'assistant-only startup summary should explain the fail-closed startup outcome'
+assert '/cook failed closed' in output, 'assistant-only startup summary should explain the fail-closed startup outcome'
 assert 'concrete repo changes' in output, 'assistant-only startup summary should explain that bare /cook expects execution-ready repo changes from main-chat discussion'
 PY
 
@@ -523,7 +523,7 @@ output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 snapshot = Path(sys.argv[3])
 assert not Path('.agent').exists(), 'analyst-derived ambiguous generic discussion should fail closed without writing canonical state'
 assert not snapshot.exists(), 'analyst-derived ambiguous generic discussion should not emit a proposal snapshot when bare /cook fails closed'
-assert 'Bare /cook failed closed' in output, 'analyst-derived ambiguous generic discussion should explain the fail-closed startup outcome'
+assert '/cook failed closed' in output, 'analyst-derived ambiguous generic discussion should explain the fail-closed startup outcome'
 PY
 
 # No workflow yet: /cook with no goal should infer from recent discussion through analyst output.
@@ -836,8 +836,8 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: inline /cook args should be rejected before proposal/routing helpers run
-# and should leave canonical state unchanged.
+# Active workflow: inline /cook hint should flow through routing plus final proposal confirmation
+# and still leave canonical state unchanged when the final proposal is cancelled.
 ACTIVE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-active-inline-arg-routing.json"
 ACTIVE_INLINE_REJECTION_PROPOSAL="$TMPDIR/context-proposal-active-inline-arg-proposal.json"
 ACTIVE_INLINE_REJECTION_CHOOSER="$TMPDIR/context-proposal-active-inline-arg-chooser.json"
@@ -859,8 +859,8 @@ Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in
 PY
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
-PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Replacement mission for the active workflow.","scope":["Review the replacement through the existing workflow chooser first."],"constraints":["Do not rewrite canonical state before the final Start confirmation."],"acceptance":["Show the final replacement proposal only after the chooser selects refocus."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$ACTIVE_INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ACTIVE_INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$ACTIVE_INLINE_REJECTION_CHOOSER" \
@@ -886,16 +886,15 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 
-assert 'Inline /cook arguments are no longer supported.' in output, 'active inline /cook args should explain the hard rejection'
-assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'active inline /cook args should redirect users back to main chat plus bare /cook'
-assert not routing.exists(), 'active inline /cook args should not run active-workflow routing'
-assert not proposal.exists(), 'active inline /cook args should not open proposal confirmation'
-assert not chooser.exists(), 'active inline /cook args should not open the existing-workflow chooser'
+assert routing.exists(), 'active inline /cook hint should run active-workflow routing'
+assert proposal.exists(), 'active inline /cook hint should open final proposal confirmation after refocus is chosen'
+assert chooser.exists(), 'active inline /cook hint should open the existing-workflow chooser'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active inline /cook args should leave canonical files unchanged'
+assert before == after, 'active inline /cook hint should leave canonical files unchanged when confirmation is cancelled'
 PY
 
-# Completed workflow: inline /cook args should also fail closed without starting the next round.
+# Completed workflow: inline /cook hint should also drive the next-round proposal and leave
+# canonical state unchanged when the proposal is cancelled.
 mark_done
 
 DONE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-done-inline-arg-routing.json"
@@ -918,8 +917,8 @@ tracked = [
 Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
 PY
 
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
-PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Update README guidance for the next workflow round.","scope":["Refresh README guidance for /cook hint-driven startup behavior."],"constraints":["Do not rewrite canonical state before Start is accepted."],"acceptance":["Keep the next-round proposal scoped to README updates only."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DONE_INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$DONE_INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$DONE_INLINE_REJECTION_CHOOSER" \
@@ -947,13 +946,11 @@ tracked = [
 state_before = json.loads(before['state.json'])
 assert state_before['current_phase'] == 'done', 'done inline /cook rejection should start from a completed workflow'
 assert state_before['project_done'] is True, 'done inline /cook rejection should start from project_done=true'
-assert 'Inline /cook arguments are no longer supported.' in output, 'done inline /cook args should explain the hard rejection'
-assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'done inline /cook args should redirect users back to main chat plus bare /cook'
 assert not routing.exists(), 'done inline /cook args should not run active/done workflow routing'
-assert not proposal.exists(), 'done inline /cook args should not open next-round proposal confirmation'
+assert proposal.exists(), 'done inline /cook hint should open next-round proposal confirmation'
 assert not chooser.exists(), 'done inline /cook args should not open the chooser flow'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'done inline /cook args should leave canonical files unchanged'
+assert before == after, 'done inline /cook hint cancel should leave canonical files unchanged'
 PY
 
 # Completed workflow again: /cook with no goal should be able to use model-assisted

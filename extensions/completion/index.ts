@@ -539,10 +539,8 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 }
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
-const COOK_INLINE_ARG_REJECTION_MESSAGE =
-	"Inline /cook arguments are no longer supported. Clarify the mission in the main chat and rerun bare /cook.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"Bare /cook failed closed because recent discussion did not contain a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun bare /cook.";
+	"/cook failed closed because recent discussion and any optional inline /cook hint did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -1114,9 +1112,18 @@ function contextProposalAnalystModelArg(model: unknown): string | undefined {
 	return provider && id ? `${provider}/${id}` : undefined;
 }
 
-function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[]): string {
+function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[], hintText?: string): string {
 	const discussion = serializeRecentDiscussionEntries(recentEntries);
-	return [`Project: ${projectName}`, "Infer the current mission from the discussion.", "", "Recent discussion:", discussion].join("\n");
+	const lines = [
+		`Project: ${projectName}`,
+		"Infer the current mission from the discussion.",
+		"If an inline /cook hint is present, treat it as a high-priority user hint that may focus the mission, but do not ignore conflicting discussion or skip missing details.",
+	];
+	if (hintText) {
+		lines.push("", "Inline /cook hint:", hintText);
+	}
+	lines.push("", "Recent discussion:", discussion || "(none)");
+	return lines.join("\n");
 }
 
 function contextProposalAnalystProgressLines(activity: LiveRoleActivity): string[] {
@@ -1145,20 +1152,23 @@ async function runContextProposalAnalystSubprocess(
 	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any },
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
+	hintText?: string,
 ): Promise<string | undefined> {
 	const modelArg = contextProposalAnalystModelArg(ctx.model);
 	if (!modelArg) return undefined;
 	const cwd = getCtxCwd(ctx);
 	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 	const rootKey = completionRootKey(undefined, cwd);
-	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries);
+	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries, hintText);
 	const systemPromptTemp = await writeTempFile("pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
 	const analystRole = "cook-proposal-analyst";
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
 	const invocation = getPiInvocation(args);
 	const liveActivity = createLiveRoleActivity(analystRole);
-	liveActivity.progress = "Analyzing recent discussion";
-	liveActivity.currentAction = "Reading recent discussion and preparing a startup proposal";
+	liveActivity.progress = hintText ? "Analyzing recent discussion and inline hint" : "Analyzing recent discussion";
+	liveActivity.currentAction = hintText
+		? "Reading recent discussion plus the inline /cook hint and preparing a startup proposal"
+		: "Reading recent discussion and preparing a startup proposal";
 	liveActivity.assistantSummary = liveActivity.progress;
 	liveActivity.recentActivity = pushRecentActivity(liveActivity.recentActivity, `assistant: ${liveActivity.progress}`);
 	const messages: RoleMessage[] = [];
@@ -1269,15 +1279,16 @@ async function analyzeContextProposalWithAgent(
 	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any; modelRegistry?: any },
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
+	hintText?: string,
 ): Promise<ContextProposal | undefined> {
 	if (shouldDisableContextProposalAnalyst()) return undefined;
 	const testOutput = completionTestContextProposalAnalystOutput();
 	if (testOutput) {
 		return parseContextProposalAnalystOutput(testOutput, projectName);
 	}
-	if (recentEntries.length === 0) return undefined;
+	if (recentEntries.length === 0 && !hintText?.trim()) return undefined;
 	try {
-		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries);
+		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries, hintText);
 		if (!raw) return undefined;
 		return parseContextProposalAnalystOutput(raw, projectName);
 	} catch (error) {
@@ -1735,17 +1746,19 @@ function extractContextProposalFromStructuredSession(
 async function extractContextProposalFromSession(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
+	hintText?: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx);
-	return (await analyzeContextProposalWithAgent(ctx, projectName, recentEntries)) ??
+	return (await analyzeContextProposalWithAgent(ctx, projectName, recentEntries, hintText)) ??
 		extractContextProposalFromStructuredSession(recentEntries, projectName);
 }
 
 async function deriveCookContextProposal(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
+	hintText?: string,
 ): Promise<ContextProposal | undefined> {
-	return await extractContextProposalFromSession(ctx, projectName);
+	return await extractContextProposalFromSession(ctx, projectName, hintText);
 }
 
 async function confirmContextProposal(
@@ -2021,10 +2034,11 @@ function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role
 async function assessActiveWorkflowProposalRouting(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	snapshot: CompletionStateSnapshot,
+	hintText?: string,
 ): Promise<ActiveWorkflowProposalAssessment> {
 	const currentMission = currentMissionAnchor(snapshot);
 	const projectName = path.basename(snapshot.files.root);
-	const proposal = await deriveCookContextProposal(ctx, projectName);
+	const proposal = await deriveCookContextProposal(ctx, projectName, hintText);
 	if (!proposal) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "unclear",
@@ -4089,11 +4103,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.registerCommand("cook", {
 		description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round",
 		handler: async (args, ctx) => {
-			const inlineArgs = args.trim();
-			if (inlineArgs) {
-				emitCommandText(ctx, COOK_INLINE_ARG_REJECTION_MESSAGE, "info");
-				return;
-			}
+			const inlineHint = args.trim() || undefined;
 			let goal: string | undefined;
 			const cwd = getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);
@@ -4105,7 +4115,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
 				const projectName = path.basename(root);
-				const proposal = await deriveCookContextProposal(ctx, projectName);
+				const proposal = await deriveCookContextProposal(ctx, projectName, inlineHint);
 				if (!proposal) {
 					emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(), "info");
 					return;
@@ -4143,7 +4153,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (!goal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = await deriveCookContextProposal(ctx, projectName);
+					const proposal = await deriveCookContextProposal(ctx, projectName, inlineHint);
 					if (!proposal) {
 						emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage("The previous completion workflow is already done."), "info");
 						return;
@@ -4162,7 +4172,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 				} else {
-					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot);
+					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, inlineHint);
 					if (assessment.action !== "refocus" || !assessment.proposal) {
 						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot);
 						return;

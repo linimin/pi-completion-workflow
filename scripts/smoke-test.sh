@@ -57,12 +57,15 @@ INLINE_REJECTION_ROUTING_SNAPSHOT="$TMPDIR/inline-arg-routing.json"
 INLINE_REJECTION_PROPOSAL_SNAPSHOT="$TMPDIR/inline-arg-proposal.json"
 INLINE_REJECTION_CHOOSER_SNAPSHOT="$TMPDIR/inline-arg-chooser.json"
 BOOTSTRAP_SESSION="$TMPDIR/session-smoke-bootstrap.jsonl"
-BOOTSTRAP_DISCUSSION=$'Mission: Exercise smoke-test bootstrap.\nScope:\n- Materialize the canonical completion control-plane files.\n- Keep the smoke test on supported bare /cook behavior.\nConstraints:\n- Do not rely on inline /cook arguments.\nAcceptance:\n- Scaffold canonical files and kickoff prompts for the smoke fixture.'
+BOOTSTRAP_DISCUSSION=$'Mission: Exercise smoke-test bootstrap.\nScope:\n- Materialize the canonical completion control-plane files.\n- Keep the smoke test on supported /cook startup behavior.\nConstraints:\n- Keep startup proposal confirmation approval-only.\nAcceptance:\n- Scaffold canonical files and kickoff prompts for the smoke fixture.'
+INLINE_HINT_ANALYST_OUTPUT='{"mission":"Smoke-test inline hint startup mission.","scope":["Materialize the canonical completion control-plane files."],"constraints":["Keep startup proposal confirmation approval-only."],"acceptance":["Scaffold canonical files and kickoff prompts for the smoke fixture."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.91}'
 
 mkdir -p "$ROOT"
 cd "$ROOT"
 git init -q
 
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT="$INLINE_HINT_ANALYST_OUTPUT" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$INLINE_REJECTION_ROUTING_SNAPSHOT" \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$INLINE_REJECTION_PROPOSAL_SNAPSHOT" \
@@ -79,12 +82,11 @@ routing = Path(sys.argv[3])
 proposal = Path(sys.argv[4])
 chooser = Path(sys.argv[5])
 
-assert not Path('.agent').exists(), 'startup inline /cook args should fail closed without creating canonical state'
-assert not routing.exists(), 'startup inline /cook args should not open active-workflow routing'
-assert not proposal.exists(), 'startup inline /cook args should not open the proposal confirmation flow'
-assert not chooser.exists(), 'startup inline /cook args should not open the chooser flow'
-assert 'Inline /cook arguments are no longer supported.' in output, 'startup inline /cook args should explain the hard rejection'
-assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'startup inline /cook args should redirect users back to main chat plus bare /cook'
+assert not Path('.agent').exists(), 'startup inline /cook hint cancel should leave canonical state untouched'
+assert not routing.exists(), 'startup inline /cook hint should not open active-workflow routing'
+assert proposal.exists(), 'startup inline /cook hint should still prepare a proposal for confirmation'
+assert not chooser.exists(), 'startup inline /cook hint should not open the chooser flow during startup'
+assert 'Cancelled recent-discussion workflow proposal.' in output, 'startup inline /cook hint cancel should surface the proposal cancellation message'
 PY
 
 write_session "$BOOTSTRAP_SESSION" "$ROOT" "$BOOTSTRAP_DISCUSSION"

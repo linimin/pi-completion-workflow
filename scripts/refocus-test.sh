@@ -103,6 +103,7 @@ Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in
 PY
 
 PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Replacement mission that should stay in the main chat.","scope":["Replace the current workflow only after explicit approval."],"constraints":["Do not rewrite canonical state before the final Start confirmation."],"acceptance":["Surface the chooser before any replacement workflow rewrite."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$INLINE_REJECTION_CHOOSER" \
@@ -131,13 +132,12 @@ tracked = [
 ]
 current_state = json.loads(before['state.json'])
 assert current_state['mission_anchor'] == initial_mission, 'active inline /cook args should start from the current mission anchor'
-assert 'Inline /cook arguments are no longer supported.' in output, 'active inline /cook args should explain the hard rejection'
-assert 'Clarify the mission in the main chat and rerun bare /cook.' in output, 'active inline /cook args should redirect users back to main chat plus bare /cook'
-assert not routing.exists(), 'active inline /cook args should not run active-workflow routing'
-assert not proposal.exists(), 'active inline /cook args should not open proposal confirmation'
-assert not chooser.exists(), 'active inline /cook args should not open the existing-workflow chooser'
+assert 'Cancelled existing workflow confirmation.' in output, 'active inline /cook hint cancel should surface chooser cancellation'
+assert routing.exists(), 'active inline /cook hint should run active-workflow routing'
+assert not proposal.exists(), 'active inline /cook hint cancel at chooser should not open final proposal confirmation'
+assert chooser.exists(), 'active inline /cook hint should open the existing-workflow chooser'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active inline /cook args should leave canonical files unchanged'
+assert before == after, 'active inline /cook hint cancel should leave canonical files unchanged'
 PY
 
 SESSION_INITIAL_REFOCUS="$TMPDIR/session-initial-bare-refocus.jsonl"

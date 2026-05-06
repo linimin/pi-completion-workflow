@@ -7,15 +7,16 @@ cd "$ROOT"
 echo "[release-check] running control-plane validation, bare /cook parity, startup/refocus/context regressions, canonical evidence artifact, active-slice contract, observability, evaluator calibration, and rubric contract coverage"
 bash .agent/verify_completion_control_plane.sh
 
-echo "[release-check] verifying public bare /cook parity"
+echo "[release-check] verifying public /cook parity"
 python3 - <<'PY'
 import re
 from pathlib import Path
 
 checks = {
     "README.md": [
-        "Bare `/cook` is the only supported workflow entrypoint.",
-        "clarify the mission in the main chat before rerunning bare `/cook`",
+        "Bare `/cook` and `/cook <hint>` are the supported workflow entrypoints.",
+        "If the recent context is fuzzy, `/cook <hint>` can provide a short high-priority user hint for the proposal analyst",
+        "clarify the mission in the main chat before rerunning `/cook`",
         "Matching or unclear discussion resumes from canonical `.agent/**` state.",
         "approval-only Start/Cancel gate",
         "Start new workflow from recent discussion",
@@ -35,8 +36,8 @@ checks = {
     ],
     "extensions/completion/index.ts": [
         'description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round"',
-        "Inline /cook arguments are no longer supported. Clarify the mission in the main chat and rerun bare /cook.",
-        "Bare /cook failed closed because recent discussion did not contain a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun bare /cook.",
+        "If an inline /cook hint is present, treat it as a high-priority user hint that may focus the mission, but do not ignore conflicting discussion or skip missing details.",
+        "/cook failed closed because recent discussion and any optional inline /cook hint did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.",
     ],
 }
 
@@ -46,32 +47,17 @@ forbidden = {
     "extensions/completion/index.ts": ["temporary" + " compatibility" + " shim, pass /cook"],
 }
 
-public_doc_paths = [
-    Path("README.md"),
-    Path("CHANGELOG.md"),
-    Path("PUBLISHING.md"),
-]
-inline_cook_pattern = re.compile(r"/cook\s*<[^>]+>")
-
 for path, needles in checks.items():
     text = Path(path).read_text()
     for needle in needles:
         if needle not in text:
-            raise SystemExit(f"[release-check] missing expected bare /cook parity text in {path}: {needle}")
+            raise SystemExit(f"[release-check] missing expected /cook parity text in {path}: {needle}")
 
 for path, needles in forbidden.items():
     text = Path(path).read_text()
     for needle in needles:
         if needle in text:
             raise SystemExit(f"[release-check] found stale compatibility wording in {path}: {needle}")
-
-for path in public_doc_paths:
-    text = path.read_text()
-    match = inline_cook_pattern.search(text)
-    if match:
-        raise SystemExit(
-            f"[release-check] found unsupported inline /cook syntax in {path}: {match.group(0)}"
-        )
 PY
 
 npm run smoke-test

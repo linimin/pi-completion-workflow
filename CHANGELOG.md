@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.42
+
+### Changed
+
+- allowed `/cook <hint>` as an analyst-only high-priority prompt that focuses proposal derivation without bypassing the existing approval-only Start/Cancel confirmation gate or canonical fail-closed routing
+
 ## 0.1.41
 
 ### Changed
