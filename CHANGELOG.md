@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.40
+
 ### Changed
 
 - treated bare `/cook` README/CHANGELOG/docs-only deliverables as concrete repo-change missions instead of preserving generic planning phrasing
