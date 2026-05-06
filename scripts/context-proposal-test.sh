@@ -384,6 +384,66 @@ PY
 
 rm -rf .agent
 
+# No workflow yet: explicit `Docs only:` tracked-doc scope wording should still
+# normalize placeholder planning missions into concrete repo-change missions.
+SESSION_ZERO_EXPLICIT_DOCS_ONLY_SCOPE="$TMPDIR/session-zero-explicit-docs-only-scope.jsonl"
+DISCUSSION_ZERO_EXPLICIT_DOCS_ONLY_SCOPE=$'Mission: 開始實作這個方案\nScope:\n- Docs only: Update README and CHANGELOG for the /cook mission-normalization behavior.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Keep the operator-facing refocus flow guidance truthful.'
+DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCS_ONLY_SCOPE="$TMPDIR/context-proposal-explicit-docs-only-scope.json"
+write_session "$SESSION_ZERO_EXPLICIT_DOCS_ONLY_SCOPE" "$ROOT" "$DISCUSSION_ZERO_EXPLICIT_DOCS_ONLY_SCOPE"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCS_ONLY_SCOPE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_EXPLICIT_DOCS_ONLY_SCOPE" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-explicit-docs-only-scope.out" 2>"$TMPDIR/pi-completion-context-proposal-explicit-docs-only-scope.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCS_ONLY_SCOPE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Update README and CHANGELOG for the /cook mission-normalization behavior.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'explicit docs only scope should strip the docs-only qualifier while normalizing to the tracked-doc repo change'
+assert state['mission_anchor'] == mission, 'explicit docs only scope should write the stripped tracked-doc mission into canonical state'
+assert proposal['scope'] == ['Docs only: Update README and CHANGELOG for the /cook mission-normalization behavior.'], 'explicit docs only scope should preserve the original scope wording in the proposal body'
+assert proposal['acceptance'] == ['Keep the operator-facing refocus flow guidance truthful.'], 'explicit docs only scope should preserve the non-mission acceptance item'
+PY
+
+rm -rf .agent
+
+# No workflow yet: explicit `Documentation only:` tracked-doc acceptance wording should also
+# normalize placeholder planning missions into concrete repo-change missions.
+SESSION_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE="$TMPDIR/session-zero-explicit-documentation-only-acceptance.jsonl"
+DISCUSSION_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE=$'Mission: 開始實作這個方案\nScope:\n- README and CHANGELOG guidance for bare /cook.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Documentation only: Write README and CHANGELOG notes for the bare /cook fail-closed clarification path.'
+DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE="$TMPDIR/context-proposal-explicit-documentation-only-acceptance.json"
+write_session "$SESSION_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE" "$ROOT" "$DISCUSSION_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-explicit-documentation-only-acceptance.out" 2>"$TMPDIR/pi-completion-context-proposal-explicit-documentation-only-acceptance.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_EXPLICIT_DOCUMENTATION_ONLY_ACCEPTANCE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Write README and CHANGELOG notes for the bare /cook fail-closed clarification path.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'explicit documentation only acceptance should strip the docs-only qualifier while normalizing to the tracked-doc repo change'
+assert state['mission_anchor'] == mission, 'explicit documentation only acceptance should write the stripped tracked-doc mission into canonical state'
+assert proposal['scope'] == ['README and CHANGELOG guidance for bare /cook.'], 'explicit documentation only acceptance should preserve the noun-only scope item while deriving the mission from acceptance'
+assert proposal['acceptance'] == ['Documentation only: Write README and CHANGELOG notes for the bare /cook fail-closed clarification path.'], 'explicit documentation only acceptance should preserve the original acceptance wording in the proposal body'
+PY
+
+rm -rf .agent
+
 # No workflow yet: assistant-authored completed-plan summaries should fail closed instead of
 # seeding startup proposals when the user has not restated an execution-ready mission.
 SESSION_ZERO_ASSISTANT_SUMMARY="$TMPDIR/session-zero-assistant-summary.jsonl"

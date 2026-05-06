@@ -759,8 +759,9 @@ const CONTEXT_PROPOSAL_GENERIC_PLANNING_MISSION_REGEX =
 	/(?:\b(?:start(?:ing)?|begin|continue|continu(?:e|ing)|resume|implement(?:ing)?|execute|execut(?:e|ing)|carry out|work on|ship|build(?:ing)?)\b.*\b(?:this|that|the|current|latest)\s+(?:plan|proposal|spec(?:ification)?|design(?: doc(?:ument)?)?|migration plan)\b|(?:開始|著手|繼續|继续|恢復|恢复)?(?:實作|实现|執行|执行|落地|完成)(?:這個|这个|此|該|该)?(?:方案|計畫|计划|提案|規劃|规划|設計|设计))/iu;
 const CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX =
 	/(?:\b(?:write|draft|prepare|create|produce|share|deliver|document|review)\b.*\b(?:plan|spec(?:ification)?|design(?: doc(?:ument)?)?|migration plan|proposal)\b|(?:撰寫|撰写|編寫|编写|起草|準備|准备|產出|产出|整理|分享|交付|審查|审查).*(?:計畫|计划|規格|规格|設計文件|设计文档|提案|方案))/iu;
-const CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX =
-	/(?:\b(?:docs? only|documentation only|no code(?: changes?)?|without code(?: changes?)?|do not implement|don't implement|planning only|proposal only|spec only|design[- ]doc only|no runtime changes?)\b|(?:只改文件|僅文件|仅文件|不改(?:動)?代碼|不改代码|不要實作|不要实现|只規劃|只规划|僅規劃|仅规划|不改(?:動)?執行|不改运行))/iu;
+const CONTEXT_PROPOSAL_DOCS_ONLY_SIGNAL_REGEX = /(?:\b(?:docs? only|documentation only)\b|(?:只改文件|僅文件|仅文件))/iu;
+const CONTEXT_PROPOSAL_NO_IMPLEMENTATION_SIGNAL_REGEX =
+	/(?:\b(?:no code(?: changes?)?|without code(?: changes?)?|do not implement|don't implement|planning only|proposal only|spec only|design[- ]doc only|no runtime changes?)\b|(?:不改(?:動)?代碼|不改代码|不要實作|不要实现|只規劃|只规划|僅規劃|仅规划|不改(?:動)?執行|不改运行))/iu;
 const CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX =
 	/(?:\b(?:normalize|fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep|edit(?:ing)?|document(?:ing)?|writ(?:e|ing))\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|正規化|规范化|規範化|过滤|過濾|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
 
@@ -778,24 +779,37 @@ function hasExplicitPlanningOnlyDeliverable(texts: string[]): boolean {
 	return texts.some((text) => CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX.test(normalizeProposalLine(text)));
 }
 
-function hasClearNoCodeOrDocsOnlySignal(texts: string[]): boolean {
-	return texts.some((text) => CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX.test(normalizeProposalLine(text)));
+function normalizeImplementationMissionSourceText(text: string): string {
+	const normalized = normalizeProposalLine(text);
+	if (!normalized) return "";
+	return normalized
+		.replace(new RegExp(`${CONTEXT_PROPOSAL_DOCS_ONLY_SIGNAL_REGEX.source}[\\s:：;,/\\-]*`, "giu"), " ")
+		.replace(/\s+([,.;:!?])/g, "$1")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
-function isImplementationMissionSourceCandidate(text: string): boolean {
-	const normalized = normalizeProposalLine(text);
-	if (!normalized) return false;
-	if (hasExplicitPlanningOnlyDeliverable([normalized])) return false;
-	if (hasClearNoCodeOrDocsOnlySignal([normalized])) return false;
-	return CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalized);
+function hasClearNoImplementationSignal(texts: string[]): boolean {
+	return texts.some((text) => CONTEXT_PROPOSAL_NO_IMPLEMENTATION_SIGNAL_REGEX.test(normalizeProposalLine(text)));
+}
+
+function implementationMissionSourceCandidateText(text: string): string | undefined {
+	const normalized = normalizeImplementationMissionSourceText(text);
+	if (!normalized) return undefined;
+	if (hasExplicitPlanningOnlyDeliverable([normalized])) return undefined;
+	if (hasClearNoImplementationSignal([normalized])) return undefined;
+	if (!CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalized)) return undefined;
+	return normalized;
 }
 
 function pickImplementationMissionSource(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string | undefined {
 	for (const item of proposal.scope) {
-		if (isImplementationMissionSourceCandidate(item)) return item;
+		const candidate = implementationMissionSourceCandidateText(item);
+		if (candidate) return candidate;
 	}
 	for (const item of proposal.acceptance) {
-		if (isImplementationMissionSourceCandidate(item)) return item;
+		const candidate = implementationMissionSourceCandidateText(item);
+		if (candidate) return candidate;
 	}
 	return undefined;
 }
