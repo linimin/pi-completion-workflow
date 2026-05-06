@@ -7,6 +7,7 @@
 - treated bare `/cook` README/CHANGELOG/docs-only deliverables as concrete repo-change missions instead of preserving generic planning phrasing
 - made bare `/cook` ignore assistant/branch/compaction summary artifacts for startup/refocus readiness and fail closed on plan/spec/design-doc/proposal-only context without rewriting canonical state
 - refreshed the context-proposal regressions, README guidance, and packaged release parity so the new execution-ready bare `/cook` behavior stays truthful
+- internalized the repo-local `pi --no-extensions` isolation inside the packaged verifier scripts so direct `npm run smoke-test`, direct `npm run release-check`, and direct `bash .agent/verify_completion_stop.sh` stay truthful even when `@linimin/pi-letscook` is also installed globally on the same machine
 
 ## 0.1.39
 

@@ -9,6 +9,8 @@ npm run smoke-test
 npm run release-check
 ```
 
+Those direct verifier entrypoints self-isolate the repo-local extension when they shell back into `pi`, so no extra `pi --no-extensions` wrapper is required even if this package is also installed globally on the publishing machine.
+
 ## GitHub release flow
 
 ```bash
