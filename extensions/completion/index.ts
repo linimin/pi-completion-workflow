@@ -762,7 +762,7 @@ const CONTEXT_PROPOSAL_PLANNING_ONLY_DELIVERABLE_REGEX =
 const CONTEXT_PROPOSAL_NO_CODE_DOCS_ONLY_REGEX =
 	/(?:\b(?:docs? only|documentation only|no code(?: changes?)?|without code(?: changes?)?|do not implement|don't implement|planning only|proposal only|spec only|design[- ]doc only|no runtime changes?)\b|(?:只改文件|僅文件|仅文件|不改(?:動)?代碼|不改代码|不要實作|不要实现|只規劃|只规划|僅規劃|仅规划|不改(?:動)?執行|不改运行))/iu;
 const CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX =
-	/(?:\b(?:normalize|fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|正規化|规范化|規範化|过滤|過濾|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
+	/(?:\b(?:normalize|fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep|edit(?:ing)?|document(?:ing)?|writ(?:e|ing))\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|正規化|规范化|規範化|过滤|過濾|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
 
 function contextProposalBodyTexts(proposal: Pick<ContextProposal, "scope" | "constraints" | "acceptance">): string[] {
 	return [...proposal.scope, ...proposal.constraints, ...proposal.acceptance];

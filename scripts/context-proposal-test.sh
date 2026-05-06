@@ -321,6 +321,66 @@ PY
 
 rm -rf .agent
 
+# No workflow yet: reviewer-reproduced docs-only phrasing with edit/document wording should
+# also normalize placeholder planning missions into concrete repo-change missions.
+SESSION_ZERO_EDIT_DOCUMENT_DOCS_ONLY="$TMPDIR/session-zero-edit-document-docs-only.jsonl"
+DISCUSSION_ZERO_EDIT_DOCUMENT_DOCS_ONLY=$'Mission: 開始實作這個方案\nScope:\n- Edit README to explain the /cook mission-normalization behavior.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Document the operator-facing refocus flow.'
+DISCUSSION_SNAPSHOT_ZERO_EDIT_DOCUMENT_DOCS_ONLY="$TMPDIR/context-proposal-edit-document-docs-only.json"
+write_session "$SESSION_ZERO_EDIT_DOCUMENT_DOCS_ONLY" "$ROOT" "$DISCUSSION_ZERO_EDIT_DOCUMENT_DOCS_ONLY"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_EDIT_DOCUMENT_DOCS_ONLY" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_EDIT_DOCUMENT_DOCS_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-edit-document-docs-only.out" 2>"$TMPDIR/pi-completion-context-proposal-edit-document-docs-only.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_EDIT_DOCUMENT_DOCS_ONLY" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Edit README to explain the /cook mission-normalization behavior.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'edit/document docs-only startup should normalize the placeholder planning mission to the tracked-doc repo change'
+assert state['mission_anchor'] == mission, 'edit/document docs-only startup should write the normalized tracked-doc mission into canonical state'
+assert proposal['scope'][0] == mission, 'edit/document docs-only startup should derive the mission from the tracked-doc scope item'
+assert proposal['acceptance'] == ['Document the operator-facing refocus flow.'], 'edit/document docs-only startup should keep the documentation acceptance item'
+PY
+
+rm -rf .agent
+
+# No workflow yet: acceptance-only docs deliverables using write phrasing should also
+# normalize placeholder planning missions into concrete repo-change missions.
+SESSION_ZERO_WRITE_DOCS_ONLY="$TMPDIR/session-zero-write-docs-only.jsonl"
+DISCUSSION_ZERO_WRITE_DOCS_ONLY=$'Mission: 開始實作這個方案\nScope:\n- README and CHANGELOG guidance for bare /cook.\nConstraints:\n- Keep the approval-only Start/Cancel gate unchanged.\nAcceptance:\n- Write README and CHANGELOG notes for the bare /cook fail-closed clarification path.'
+DISCUSSION_SNAPSHOT_ZERO_WRITE_DOCS_ONLY="$TMPDIR/context-proposal-write-docs-only.json"
+write_session "$SESSION_ZERO_WRITE_DOCS_ONLY" "$ROOT" "$DISCUSSION_ZERO_WRITE_DOCS_ONLY"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_WRITE_DOCS_ONLY" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_WRITE_DOCS_ONLY" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-write-docs-only.out" 2>"$TMPDIR/pi-completion-context-proposal-write-docs-only.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_WRITE_DOCS_ONLY" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Write README and CHANGELOG notes for the bare /cook fail-closed clarification path.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'write docs-only startup should normalize the placeholder planning mission from acceptance-only tracked-doc work'
+assert state['mission_anchor'] == mission, 'write docs-only startup should write the acceptance-derived tracked-doc mission into canonical state'
+assert proposal['scope'] == ['README and CHANGELOG guidance for bare /cook.'], 'write docs-only startup should preserve the noun-only scope item while deriving the mission from acceptance'
+assert proposal['acceptance'] == [mission], 'write docs-only startup should keep the acceptance-derived docs deliverable intact'
+PY
+
+rm -rf .agent
+
 # No workflow yet: assistant-authored completed-plan summaries should fail closed instead of
 # seeding startup proposals when the user has not restated an execution-ready mission.
 SESSION_ZERO_ASSISTANT_SUMMARY="$TMPDIR/session-zero-assistant-summary.jsonl"
