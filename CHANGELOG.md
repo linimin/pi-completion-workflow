@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.41
+
+### Changed
+
+- fixed the `/cook proposal analyst` startup overlay so `Ctrl+C` cancels the in-flight analysis the same way as `Esc`, and updated the helper text to advertise both cancellation paths
+
 ## 0.1.40
 
 ### Changed

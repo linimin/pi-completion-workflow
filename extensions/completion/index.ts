@@ -205,11 +205,11 @@ class StartupAnalystOverlay extends Container {
 	private updateDisplay(): void {
 		this.title.setText(this.theme.fg("accent", this.theme.bold("/cook proposal analyst")));
 		this.body.setText(formatInlineRunningText(this.theme, this.lines, { primaryAssistant: true }));
-		this.footer.setText(this.theme.fg("muted", "Esc cancel • This analysis runs before /cook writes canonical workflow state"));
+		this.footer.setText(this.theme.fg("muted", "Esc/Ctrl+C cancel • This analysis runs before /cook writes canonical workflow state"));
 	}
 
 	override handleInput(data: string): void {
-		if (data === "\u001b") {
+		if (data === "\u001b" || data === "\u0003") {
 			this.onAbort?.();
 			return;
 		}
