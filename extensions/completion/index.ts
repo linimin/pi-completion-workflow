@@ -1188,6 +1188,17 @@ async function runContextProposalAnalystSubprocess(
 					stdio: ["ignore", "pipe", "pipe"],
 					shell: false,
 				});
+				let settled = false;
+				const resolveOnce = (value: string | undefined) => {
+					if (settled) return;
+					settled = true;
+					resolve(value);
+				};
+				const abort = () => {
+					proc.kill("SIGTERM");
+					resolveOnce(undefined);
+				};
+				const handleSigint = () => abort();
 				let buffer = "";
 				const processLine = (line: string) => {
 					if (!line.trim()) return;
@@ -1208,14 +1219,19 @@ async function runContextProposalAnalystSubprocess(
 					stderr += chunk.toString();
 				});
 				proc.on("close", (code) => {
+					process.off("SIGINT", handleSigint);
 					if (buffer.trim()) processLine(buffer);
-					resolve(code === 0 ? liveActivity.lastAssistantText?.trim() || undefined : undefined);
+					resolveOnce(code === 0 ? liveActivity.lastAssistantText?.trim() || undefined : undefined);
 				});
-				proc.on("error", () => resolve(undefined));
+				proc.on("error", () => {
+					process.off("SIGINT", handleSigint);
+					resolveOnce(undefined);
+				});
+				process.once("SIGINT", handleSigint);
 				if (overlay) {
 					overlay.onAbort = () => {
-						proc.kill("SIGTERM");
-						resolve(undefined);
+						process.off("SIGINT", handleSigint);
+						abort();
 					};
 				}
 			});
