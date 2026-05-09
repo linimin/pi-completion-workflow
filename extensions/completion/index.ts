@@ -562,6 +562,10 @@ function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean 
 	return asString(snapshot?.state?.continuation_policy) === "done";
 }
 
+function shouldInjectCompletionWorkflowContext(snapshot: CompletionStateSnapshot | undefined): boolean {
+	return Boolean(snapshot) && !isWorkflowDone(snapshot);
+}
+
 function extractTextFromMessageContent(content: unknown): string {
 	if (typeof content === "string") return content.trim();
 	if (!Array.isArray(content)) return "";
@@ -3733,7 +3737,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			const fingerprint = completionContinuationFingerprint(loaded.snapshot);
 			if (fingerprint) markQueuedDriverPromptInFlight(rootKey, fingerprint);
 		}
-		if (!loaded) return;
+		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
 		const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
 		let marker: JsonRecord | undefined;
 		if (markerText) {
@@ -3756,7 +3760,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
-		if (!loaded) return;
+		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
 		const { preparation } = event;
 		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
 		await fsp.mkdir(loaded.snapshot.files.tmpDir, { recursive: true });

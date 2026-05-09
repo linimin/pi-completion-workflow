@@ -392,4 +392,48 @@ assert 'Verification evidence summary:' in text, text
 assert 'selected_slice' in text, text
 PY
 
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+state_path = Path('.agent/state.json')
+plan_path = Path('.agent/plan.json')
+active_path = Path('.agent/active-slice.json')
+
+state = json.loads(state_path.read_text())
+state.update({
+    'current_phase': 'done',
+    'continuation_policy': 'done',
+    'continuation_reason': 'Fixture is complete; ordinary primary-agent turns should stay outside completion until /cook runs again.',
+    'project_done': True,
+    'remaining_high_value_gaps': 0,
+    'unsatisfied_contract_ids': [],
+    'next_mandatory_action': None,
+    'next_mandatory_role': None,
+    'remaining_stop_judges': 0,
+    'contract_status': 'done',
+})
+state_path.write_text(json.dumps(state, indent=2) + '\n')
+
+plan = json.loads(plan_path.read_text())
+for slice_data in plan.get('candidate_slices', []):
+    if slice_data.get('slice_id') == 'evidence-fixture':
+        slice_data['status'] = 'done'
+plan_path.write_text(json.dumps(plan, indent=2) + '\n')
+
+active = json.loads(active_path.read_text())
+active['status'] = 'done'
+active_path.write_text(json.dumps(active, indent=2) + '\n')
+PY
+
+rm -f "$SYSTEM_REMINDER"
+PI_COMPLETION_TEST_SYSTEM_REMINDER_PATH="$SYSTEM_REMINDER" \
+pi -e "$PKG_ROOT" -p "Summarize the latest release briefly." \
+  >"$TMPDIR/pi-canonical-evidence-done-reminder.out" 2>"$TMPDIR/pi-canonical-evidence-done-reminder.err"
+
+[[ ! -f "$SYSTEM_REMINDER" ]] || {
+  echo "expected no completion reminder snapshot when continuation_policy is done" >&2
+  exit 1
+}
+
 echo "canonical evidence artifact test passed: $TMPDIR"

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- stopped injecting completion-workflow reminder and compaction-resume context into ordinary primary-agent turns after canonical `continuation_policy` reaches `done`, so users must rerun `/cook` before the workflow protocol reactivates
+
 ## 0.1.42
 
 ### Changed
