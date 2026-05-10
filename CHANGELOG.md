@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.44
+
+### Fixed
+
+- inject a done-workflow boundary prompt into ordinary primary-agent turns so finished completion state is treated as historical context only and the agent must not resume/reground/refocus the workflow unless the user explicitly reruns `/cook`
+
 ## 0.1.43
 
 ### Fixed

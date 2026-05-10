@@ -431,9 +431,17 @@ PI_COMPLETION_TEST_SYSTEM_REMINDER_PATH="$SYSTEM_REMINDER" \
 pi -e "$PKG_ROOT" -p "Summarize the latest release briefly." \
   >"$TMPDIR/pi-canonical-evidence-done-reminder.out" 2>"$TMPDIR/pi-canonical-evidence-done-reminder.err"
 
-[[ ! -f "$SYSTEM_REMINDER" ]] || {
-  echo "expected no completion reminder snapshot when continuation_policy is done" >&2
-  exit 1
-}
+python3 - "$SYSTEM_REMINDER" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+assert 'A previous completion workflow exists for this repo, but it is closed.' in text, text
+assert 'Treat the previous completion workflow as historical context only.' in text, text
+assert 'Do not resume, reground, refocus, reopen, or otherwise restart completion workflow from this context unless the user explicitly runs /cook.' in text, text
+assert 'For ordinary user requests, respond normally and ignore prior completion-protocol instructions that were only relevant to the finished workflow.' in text, text
+assert 'Only /cook may reactivate workflow routing for the next round.' in text, text
+assert 'Completion workflow detected.' not in text, text
+PY
 
 echo "canonical evidence artifact test passed: $TMPDIR"

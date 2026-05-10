@@ -563,7 +563,22 @@ function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean 
 }
 
 function shouldInjectCompletionWorkflowContext(snapshot: CompletionStateSnapshot | undefined): boolean {
-	return Boolean(snapshot) && !isWorkflowDone(snapshot);
+	return Boolean(snapshot);
+}
+
+function buildDoneWorkflowBoundaryReminder(snapshot: CompletionStateSnapshot): string {
+	const missionAnchor = asString(snapshot.state?.mission_anchor) ?? asString(snapshot.plan?.mission_anchor) ?? "(unknown)";
+	const continuationReason = asString(snapshot.state?.continuation_reason) ?? "(unknown)";
+	return [
+		"A previous completion workflow exists for this repo, but it is closed.",
+		`Mission anchor: ${missionAnchor}`,
+		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
+		`Continuation reason: ${continuationReason}`,
+		"Treat the previous completion workflow as historical context only.",
+		"Do not resume, reground, refocus, reopen, or otherwise restart completion workflow from this context unless the user explicitly runs /cook.",
+		"For ordinary user requests, respond normally and ignore prior completion-protocol instructions that were only relevant to the finished workflow.",
+		"Only /cook may reactivate workflow routing for the next round.",
+	].join(" ");
 }
 
 function extractTextFromMessageContent(content: unknown): string {
@@ -3738,18 +3753,22 @@ export default function completionExtension(pi: ExtensionAPI) {
 			if (fingerprint) markQueuedDriverPromptInFlight(rootKey, fingerprint);
 		}
 		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
-		const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
-		let marker: JsonRecord | undefined;
-		if (markerText) {
-			try {
-				const parsed = JSON.parse(markerText);
-				marker = isRecord(parsed) ? parsed : undefined;
-			} catch {
-				marker = undefined;
+		const additions = isWorkflowDone(loaded.snapshot)
+			? [buildDoneWorkflowBoundaryReminder(loaded.snapshot)]
+			: [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
+		if (!isWorkflowDone(loaded.snapshot)) {
+			const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
+			let marker: JsonRecord | undefined;
+			if (markerText) {
+				try {
+					const parsed = JSON.parse(markerText);
+					marker = isRecord(parsed) ? parsed : undefined;
+				} catch {
+					marker = undefined;
+				}
 			}
+			if (marker) additions.push(buildPostCompactionDriverInstructions(loaded.snapshot, marker));
 		}
-		const additions = [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
-		if (marker) additions.push(buildPostCompactionDriverInstructions(loaded.snapshot, marker));
 		maybeWriteTestSnapshot(completionTestSystemReminderPath(), additions.join("\n\n"));
 		const systemPrompt = getSystemPromptSafe(ctx);
 		if (!systemPrompt) return;
@@ -3760,7 +3779,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
-		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
+		if (!loaded || isWorkflowDone(loaded.snapshot)) return;
 		const { preparation } = event;
 		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
 		await fsp.mkdir(loaded.snapshot.files.tmpDir, { recursive: true });
