@@ -84,11 +84,11 @@ routing = Path(sys.argv[3])
 proposal = Path(sys.argv[4])
 chooser = Path(sys.argv[5])
 
-assert not Path('.agent').exists(), 'startup inline /cook hint cancel should leave canonical state untouched'
-assert not routing.exists(), 'startup inline /cook hint should not open active-workflow routing'
-assert proposal.exists(), 'startup inline /cook hint should still prepare a proposal for confirmation'
-assert not chooser.exists(), 'startup inline /cook hint should not open the chooser flow during startup'
-assert 'Cancelled recent-discussion workflow proposal.' in output, 'startup inline /cook hint cancel should surface the proposal cancellation message'
+assert not Path('.agent').exists(), 'startup /cook <text> rejection should leave canonical state untouched'
+assert not routing.exists(), 'startup /cook <text> rejection should not open active-workflow routing'
+assert not proposal.exists(), 'startup /cook <text> rejection should not prepare a proposal snapshot'
+assert not chooser.exists(), 'startup /cook <text> rejection should not open the chooser flow'
+assert '/cook only supports the bare /cook entrypoint.' in output, 'startup /cook <text> rejection should explain the bare-only contract'
 PY
 
 write_session "$BOOTSTRAP_SESSION" "$ROOT" "$BOOTSTRAP_DISCUSSION"

@@ -836,8 +836,8 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: inline /cook hint should flow through routing plus final proposal confirmation
-# and still leave canonical state unchanged when the final proposal is cancelled.
+# Active workflow: /cook <text> should be rejected before routing or proposal confirmation
+# and still leave canonical state unchanged.
 ACTIVE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-active-inline-arg-routing.json"
 ACTIVE_INLINE_REJECTION_PROPOSAL="$TMPDIR/context-proposal-active-inline-arg-proposal.json"
 ACTIVE_INLINE_REJECTION_CHOOSER="$TMPDIR/context-proposal-active-inline-arg-chooser.json"
@@ -886,15 +886,16 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 
-assert routing.exists(), 'active inline /cook hint should run active-workflow routing'
-assert proposal.exists(), 'active inline /cook hint should open final proposal confirmation after refocus is chosen'
-assert chooser.exists(), 'active inline /cook hint should open the existing-workflow chooser'
+assert '/cook only supports the bare /cook entrypoint.' in output, 'active /cook <text> rejection should explain the bare-only contract'
+assert not routing.exists(), 'active /cook <text> rejection should not run active-workflow routing'
+assert not proposal.exists(), 'active /cook <text> rejection should not open proposal confirmation'
+assert not chooser.exists(), 'active /cook <text> rejection should not open the existing-workflow chooser'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active inline /cook hint should leave canonical files unchanged when confirmation is cancelled'
+assert before == after, 'active /cook <text> rejection should leave canonical files unchanged'
 PY
 
-# Completed workflow: inline /cook hint should also drive the next-round proposal and leave
-# canonical state unchanged when the proposal is cancelled.
+# Completed workflow: /cook <text> should be rejected before any next-round proposal is derived
+# and still leave canonical state unchanged.
 mark_done
 
 DONE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-done-inline-arg-routing.json"
@@ -944,13 +945,14 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 state_before = json.loads(before['state.json'])
-assert state_before['current_phase'] == 'done', 'done inline /cook rejection should start from a completed workflow'
-assert state_before['project_done'] is True, 'done inline /cook rejection should start from project_done=true'
-assert not routing.exists(), 'done inline /cook args should not run active/done workflow routing'
-assert proposal.exists(), 'done inline /cook hint should open next-round proposal confirmation'
-assert not chooser.exists(), 'done inline /cook args should not open the chooser flow'
+assert state_before['current_phase'] == 'done', 'done /cook <text> rejection should start from a completed workflow'
+assert state_before['project_done'] is True, 'done /cook <text> rejection should start from project_done=true'
+assert '/cook only supports the bare /cook entrypoint.' in output, 'done /cook <text> rejection should explain the bare-only contract'
+assert not routing.exists(), 'done /cook <text> rejection should not run active/done workflow routing'
+assert not proposal.exists(), 'done /cook <text> rejection should not open next-round proposal confirmation'
+assert not chooser.exists(), 'done /cook <text> rejection should not open the chooser flow'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'done inline /cook hint cancel should leave canonical files unchanged'
+assert before == after, 'done /cook <text> rejection should leave canonical files unchanged'
 PY
 
 # Completed workflow again: /cook with no goal should be able to use model-assisted

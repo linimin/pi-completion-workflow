@@ -131,13 +131,13 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 current_state = json.loads(before['state.json'])
-assert current_state['mission_anchor'] == initial_mission, 'active inline /cook args should start from the current mission anchor'
-assert 'Cancelled existing workflow confirmation.' in output, 'active inline /cook hint cancel should surface chooser cancellation'
-assert routing.exists(), 'active inline /cook hint should run active-workflow routing'
-assert not proposal.exists(), 'active inline /cook hint cancel at chooser should not open final proposal confirmation'
-assert chooser.exists(), 'active inline /cook hint should open the existing-workflow chooser'
+assert current_state['mission_anchor'] == initial_mission, 'active /cook <text> rejection should start from the current mission anchor'
+assert '/cook only supports the bare /cook entrypoint.' in output, 'active /cook <text> rejection should explain the bare-only contract'
+assert not routing.exists(), 'active /cook <text> rejection should not run active-workflow routing'
+assert not proposal.exists(), 'active /cook <text> rejection should not open final proposal confirmation'
+assert not chooser.exists(), 'active /cook <text> rejection should not open the existing-workflow chooser'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active inline /cook hint cancel should leave canonical files unchanged'
+assert before == after, 'active /cook <text> rejection should leave canonical files unchanged'
 PY
 
 SESSION_INITIAL_REFOCUS="$TMPDIR/session-initial-bare-refocus.jsonl"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- removed inline `/cook <text>` argument support so bare `/cook` is now the only supported workflow entrypoint
+- made runtime, deterministic regressions, README guidance, and packaged release parity fail closed when command arguments are passed instead of discussion driving proposal derivation
+
 ## 0.1.44
 
 ### Fixed
@@ -18,7 +23,7 @@
 
 ### Changed
 
-- allowed `/cook <hint>` as an analyst-only high-priority prompt that focuses proposal derivation without bypassing the existing approval-only Start/Cancel confirmation gate or canonical fail-closed routing
+- historically allowed `/cook <hint>` as an analyst-only high-priority prompt that focused proposal derivation without bypassing the existing approval-only Start/Cancel confirmation gate or canonical fail-closed routing; that inline-argument path has since been removed so bare `/cook` is now the only supported entrypoint
 
 ## 0.1.41
 

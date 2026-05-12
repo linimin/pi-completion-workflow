@@ -14,9 +14,9 @@ from pathlib import Path
 
 checks = {
     "README.md": [
-        "Bare `/cook` and `/cook <hint>` are the supported workflow entrypoints.",
-        "If the recent context is fuzzy, `/cook <hint>` can provide a short high-priority user hint for the proposal analyst",
-        "clarify the mission in the main chat before rerunning `/cook`",
+        "Bare `/cook` is the only supported workflow entrypoint.",
+        "`/cook <text>` is no longer supported; put mission text in the main chat, then rerun bare `/cook`.",
+        "clarify the mission in the main chat before rerunning bare `/cook`",
         "Matching or unclear discussion resumes from canonical `.agent/**` state.",
         "approval-only Start/Cancel gate",
         "Start new workflow from recent discussion",
@@ -24,27 +24,26 @@ checks = {
         "README/CHANGELOG updates still count as concrete repo changes",
         "assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not",
         "Assistant/summary artifacts or plan/spec/design-doc/proposal-only context do not refocus the workflow.",
+        "`/cook <text>` is rejected without running proposal routing or rewriting workflow state.",
     ],
     "CHANGELOG.md": [
-        "bare `/cook` as the only supported workflow entrypoint",
-        "clarify the mission before rerunning bare `/cook`",
-        "packaged parity now fails closed on the bare-only contract",
-        "that old inline-argument path is no longer supported now that bare `/cook` is the only public entrypoint",
-        "README/CHANGELOG/docs-only deliverables as concrete repo-change missions",
-        "ignore assistant/branch/compaction summary artifacts for startup/refocus readiness",
-        "plan/spec/design-doc/proposal-only context without rewriting canonical state",
+        "removed inline `/cook <text>` argument support so bare `/cook` is now the only supported workflow entrypoint",
+        "packaged release parity fail closed when command arguments are passed instead of discussion driving proposal derivation",
+        "historically allowed `/cook <hint>` as an analyst-only high-priority prompt",
+        "that inline-argument path has since been removed so bare `/cook` is now the only supported entrypoint",
     ],
     "extensions/completion/index.ts": [
-        'description: "Discussion-driven /cook workflow: start, continue, refocus, or start the next round"',
-        "If an inline /cook hint is present, treat it as a high-priority user hint that may focus the mission, but do not ignore conflicting discussion or skip missing details.",
-        "/cook failed closed because recent discussion and any optional inline /cook hint did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.",
+        'description: "Bare /cook workflow: start, continue, refocus, or start the next round"',
+        'const COOK_BARE_ONLY_GUIDANCE =',
+        '"/cook only supports the bare /cook entrypoint. Move mission text into the main chat, then rerun /cook."',
+        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook."',
     ],
 }
 
 forbidden = {
-    "README.md": ["compatibility" + " shim"],
+    "README.md": ["compatibility" + " shim", "/cook <hint>", "optional inline /cook hint"],
     "CHANGELOG.md": ["compatibility" + " shim"],
-    "extensions/completion/index.ts": ["temporary" + " compatibility" + " shim, pass /cook"],
+    "extensions/completion/index.ts": ["temporary" + " compatibility" + " shim, pass /cook", "inline /cook hint", "optional inline /cook hint"],
 }
 
 for path, needles in checks.items():
