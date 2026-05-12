@@ -83,7 +83,8 @@ assertIncludes('extensions/completion/index.ts', '`task_type: ${currentTaskType(
 assertIncludes('extensions/completion/index.ts', '`evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
 assertIncludes('extensions/completion/index.ts', 'Canonical evaluation handoff for ${role}:');
 assertIncludes('extensions/completion/index.ts', 'buildEvaluationRoleReminderText(snapshot, nextRole)');
-assertIncludes('extensions/completion/index.ts', 'roleReporting.transcribeCanonicalRoleReport');
+assertIncludes('extensions/completion/index.ts', 'import { parseFirstNumber, parseReportFields, parseYesNo, transcribeRoleOutput } from "./transcription";');
+assertIncludes('extensions/completion/transcription.ts', 'roleReporting.transcribeCanonicalRoleReport');
 assertIncludes('extensions/completion/role-reporting.js', 'Missing Rubric heading for ${role}.');
 assertIncludes('extensions/completion/role-reporting.js', 'Reviewer output cannot mark \'Acceptable as-is: yes\' when any rubric line is fail.');
 assertIncludes('extensions/completion/role-reporting.js', 'Auditor output must answer \'Tracked and unignored worktree is clean\' with yes or no.');
