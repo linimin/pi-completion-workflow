@@ -3,7 +3,7 @@ set -euo pipefail
 
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pi() {
-  command pi --no-extensions "$@"
+  env -u PI_COMPLETION_ROLE command pi --no-extensions "$@"
 }
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -50,8 +50,10 @@ PY
 ROOT="$TMPDIR/repo"
 KICKOFF_PROMPT="$TMPDIR/kickoff-prompt.txt"
 RESUME_PROMPT="$TMPDIR/resume-prompt.txt"
+ORDINARY_SYSTEM_REMINDER="$TMPDIR/ordinary-system-reminder.txt"
 UNCLEAR_ROUTING_SNAPSHOT="$TMPDIR/active-unclear-routing.json"
 UNCLEAR_CHOOSER_SNAPSHOT="$TMPDIR/unexpected-existing-workflow-chooser.json"
+ORDINARY_AUTO_RESUME_PROMPT="$TMPDIR/ordinary-auto-resume-prompt.txt"
 AUTO_RESUME_PROMPT="$TMPDIR/auto-resume-prompt.txt"
 INLINE_REJECTION_ROUTING_SNAPSHOT="$TMPDIR/inline-arg-routing.json"
 INLINE_REJECTION_PROPOSAL_SNAPSHOT="$TMPDIR/inline-arg-proposal.json"
@@ -137,6 +139,27 @@ assert evidence['outcome'] == 'not_recorded', 'verification-evidence.json should
 assert 'Canonical routing profile:' in kickoff, 'kickoff prompt should expose canonical routing profile'
 assert f'- task_type: {expected_task_type}' in kickoff, 'kickoff prompt missing canonical task_type'
 assert f'- evaluation_profile: {expected_eval_profile}' in kickoff, 'kickoff prompt missing canonical evaluation_profile'
+PY
+
+rm -f "$ORDINARY_SYSTEM_REMINDER" "$ORDINARY_AUTO_RESUME_PROMPT"
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_SYSTEM_REMINDER_PATH="$ORDINARY_SYSTEM_REMINDER" \
+PI_COMPLETION_TEST_AUTO_CONTINUE_ON_SESSION_START=1 \
+PI_COMPLETION_TEST_AUTO_CONTINUE_PROMPT_PATH="$ORDINARY_AUTO_RESUME_PROMPT" \
+pi -e "$PKG_ROOT" -p "Summarize the repo briefly." \
+  >"$TMPDIR/pi-completion-smoke-ordinary.out" 2>"$TMPDIR/pi-completion-smoke-ordinary.err"
+
+python3 - "$TMPDIR/pi-completion-smoke-ordinary.out" "$TMPDIR/pi-completion-smoke-ordinary.err" "$ORDINARY_SYSTEM_REMINDER" "$ORDINARY_AUTO_RESUME_PROMPT" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+reminder = Path(sys.argv[3])
+auto_resume = Path(sys.argv[4])
+
+assert not reminder.exists(), 'ordinary non-/cook turn should not inject completion reminder solely from canonical state'
+assert not auto_resume.exists(), 'ordinary non-/cook turn should not queue auto-resume before /cook activation'
+assert 'Skipped completion workflow auto-resume prompt (test mode)' not in output, 'ordinary non-/cook turn should not attempt auto-resume'
 PY
 
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \

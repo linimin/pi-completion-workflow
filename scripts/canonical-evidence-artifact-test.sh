@@ -3,7 +3,7 @@ set -euo pipefail
 
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pi() {
-  command pi --no-extensions "$@"
+  env -u PI_COMPLETION_ROLE command pi --no-extensions "$@"
 }
 TMPDIR="$(mktemp -d)"
 CURRENT_EVIDENCE_BACKUP=""
@@ -377,6 +377,7 @@ PY
 bash .agent/verify_completion_control_plane.sh >/dev/null
 bash .agent/verify_completion_stop.sh >/dev/null
 
+rm -f "$SYSTEM_REMINDER"
 PI_COMPLETION_TEST_SYSTEM_REMINDER_PATH="$SYSTEM_REMINDER" \
 pi -e "$PKG_ROOT" -p "Summarize the completion reminder briefly." \
   >"$TMPDIR/pi-canonical-evidence-reminder.out" 2>"$TMPDIR/pi-canonical-evidence-reminder.err"
@@ -385,11 +386,8 @@ python3 - "$SYSTEM_REMINDER" <<'PY'
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-assert 'Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json.' in text, text
-assert 'Verification evidence artifact: .agent/verification-evidence.json (present)' in text, text
-assert 'Verification evidence summary:' in text, text
-assert 'selected_slice' in text, text
+reminder = Path(sys.argv[1])
+assert not reminder.exists(), 'ordinary non-/cook turn should not inject completion reminder solely from selected-slice canonical state'
 PY
 
 python3 - <<'PY'
@@ -435,13 +433,8 @@ python3 - "$SYSTEM_REMINDER" <<'PY'
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-assert 'A previous completion workflow exists for this repo, but it is closed.' in text, text
-assert 'Treat the previous completion workflow as historical context only.' in text, text
-assert 'Do not resume, reground, refocus, reopen, or otherwise restart completion workflow from this context unless the user explicitly runs /cook.' in text, text
-assert 'For ordinary user requests, respond normally and ignore prior completion-protocol instructions that were only relevant to the finished workflow.' in text, text
-assert 'Only /cook may reactivate workflow routing for the next round.' in text, text
-assert 'Completion workflow detected.' not in text, text
+reminder = Path(sys.argv[1])
+assert not reminder.exists(), 'ordinary non-/cook turn should not inject closed-workflow boundary routing before /cook reactivation'
 PY
 
 echo "canonical evidence artifact test passed: $TMPDIR"

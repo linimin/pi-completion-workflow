@@ -223,6 +223,7 @@ class StartupAnalystOverlay extends Container {
 }
 
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
+const activatedCompletionRoutingRoots = new Set<string>();
 const LIVE_ROLE_WAITING_MS = 15_000;
 const LIVE_ROLE_STALLED_MS = 45_000;
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
@@ -562,8 +563,19 @@ function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean 
 	return asString(snapshot?.state?.continuation_policy) === "done";
 }
 
+function activateCompletionRoutingForRoot(root: string | undefined): void {
+	if (!root) return;
+	activatedCompletionRoutingRoots.add(path.resolve(root));
+}
+
+function hasCompletionRoutingActivation(snapshot: CompletionStateSnapshot | undefined): boolean {
+	if (!snapshot) return false;
+	if (roleFromEnv()) return true;
+	return activatedCompletionRoutingRoots.has(path.resolve(snapshot.files.root));
+}
+
 function shouldInjectCompletionWorkflowContext(snapshot: CompletionStateSnapshot | undefined): boolean {
-	return Boolean(snapshot);
+	return hasCompletionRoutingActivation(snapshot);
 }
 
 function buildDoneWorkflowBoundaryReminder(snapshot: CompletionStateSnapshot): string {
@@ -1933,6 +1945,7 @@ async function autoContinueWorkflowIfNeeded(pi: ExtensionAPI, ctx: { cwd: string
 		clearDriverContinuationTracker(rootKey);
 		return;
 	}
+	if (!hasCompletionRoutingActivation(snapshot)) return;
 	const fingerprint = completionContinuationFingerprint(snapshot);
 	if (!fingerprint) {
 		clearDriverContinuationTracker(rootKey);
@@ -2102,6 +2115,7 @@ async function resumeActiveWorkflowFromCanonicalState(
 	ctx: { cwd: string; hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
 ): Promise<void> {
+	activateCompletionRoutingForRoot(snapshot.files.root);
 	const mission = currentMissionAnchor(snapshot);
 	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
 	const resumePrompt = completionResumePrompt(
@@ -4230,6 +4244,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 				}
 			}
 			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
+			activateCompletionRoutingForRoot(snapshot.files.root);
 			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
 			const kickoffPrompt = completionKickoff(
 				goal,
