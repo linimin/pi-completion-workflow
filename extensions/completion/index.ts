@@ -8,6 +8,12 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, matchesKey, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+import {
+	autoContinueWorkflowIfNeeded,
+	completionContinuationFingerprint,
+	markQueuedDriverPromptInFlight,
+	registerCookCommand,
+} from "./driver";
 import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
 import {
 	buildProfileRecord,
@@ -167,16 +173,6 @@ const activatedCompletionRoutingRoots = new Set<string>();
 const LIVE_ROLE_WAITING_MS = 15_000;
 const LIVE_ROLE_STALLED_MS = 45_000;
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
-const DRIVER_AUTO_CONTINUE_MAX_ATTEMPTS = 2;
-
-type DriverContinuationTracker = {
-	fingerprint: string;
-	attempts: number;
-	inFlight: boolean;
-	warned: boolean;
-};
-
-const driverContinuationByRoot = new Map<string, DriverContinuationTracker>();
 
 function isRecord(value: unknown): value is JsonRecord {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1610,413 +1606,6 @@ async function confirmContextProposal(
 	return await resolveContextProposalConfirmationAction(proposal, choice);
 }
 
-function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
-	return (
-		asString(snapshot.state?.mission_anchor) ??
-		asString(snapshot.plan?.mission_anchor) ??
-		asString(snapshot.active?.mission_anchor) ??
-		path.basename(snapshot.files.root)
-	);
-}
-
-function currentTaskType(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.task_type) ??
-		asString(snapshot.state?.task_type) ??
-		asString(snapshot.plan?.task_type) ??
-		asString(snapshot.profile?.task_type)
-	);
-}
-
-function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.evaluation_profile) ??
-		asString(snapshot.state?.evaluation_profile) ??
-		asString(snapshot.plan?.evaluation_profile) ??
-		asString(snapshot.profile?.evaluation_profile)
-	);
-}
-
-function completionContinuationFingerprint(snapshot: CompletionStateSnapshot): string | undefined {
-	if (asString(snapshot.state?.continuation_policy) !== "continue") return undefined;
-	const nextMandatoryRole = asString(snapshot.state?.next_mandatory_role);
-	if (!nextMandatoryRole) return undefined;
-	return JSON.stringify({
-		mission_anchor: asString(snapshot.state?.mission_anchor) ?? asString(snapshot.plan?.mission_anchor) ?? null,
-		task_type: currentTaskType(snapshot) ?? null,
-		evaluation_profile: currentEvaluationProfile(snapshot) ?? null,
-		current_phase: asString(snapshot.state?.current_phase) ?? null,
-		next_mandatory_role: nextMandatoryRole,
-		next_mandatory_action: asString(snapshot.state?.next_mandatory_action) ?? null,
-		active_status: asString(snapshot.active?.status) ?? null,
-		active_slice_id: asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? null,
-		latest_completed_slice: asString(snapshot.state?.latest_completed_slice) ?? null,
-		latest_verified_slice: asString(snapshot.state?.latest_verified_slice) ?? null,
-	});
-}
-
-function noteQueuedDriverPrompt(rootKey: string, fingerprint: string): void {
-	const tracker = driverContinuationByRoot.get(rootKey);
-	if (tracker && tracker.fingerprint === fingerprint) {
-		tracker.attempts += 1;
-		tracker.inFlight = false;
-		tracker.warned = false;
-		return;
-	}
-	driverContinuationByRoot.set(rootKey, {
-		fingerprint,
-		attempts: 1,
-		inFlight: false,
-		warned: false,
-	});
-}
-
-function markQueuedDriverPromptInFlight(rootKey: string, fingerprint: string): void {
-	const tracker = driverContinuationByRoot.get(rootKey);
-	if (!tracker || tracker.fingerprint !== fingerprint) return;
-	tracker.inFlight = true;
-}
-
-function clearDriverContinuationTracker(rootKey: string): void {
-	driverContinuationByRoot.delete(rootKey);
-}
-
-function hasRunningCompletionRole(rootKey: string): boolean {
-	return liveRoleActivityByRoot.get(rootKey)?.status === "running";
-}
-
-function isWorkflowDriverActive(snapshot: CompletionStateSnapshot | undefined): boolean {
-	return Boolean(snapshot) && asString(snapshot?.state?.continuation_policy) === "continue";
-}
-
-function isDriverContinuationStateParked(rootKey: string, fingerprint: string): boolean {
-	const tracker = driverContinuationByRoot.get(rootKey);
-	if (!tracker || tracker.fingerprint !== fingerprint) return false;
-	return tracker.warned;
-}
-
-function rememberParkedDriverContinuation(rootKey: string, fingerprint: string): void {
-	const tracker = driverContinuationByRoot.get(rootKey);
-	if (!tracker || tracker.fingerprint !== fingerprint) return;
-	tracker.warned = true;
-	tracker.inFlight = false;
-}
-
-async function queueCompletionDriverPrompt(
-	pi: ExtensionAPI,
-	ctx: { cwd: string; hasUI: boolean; ui: any },
-	rootKey: string,
-	fingerprint: string,
-	prompt: string,
-	kind: "kickoff" | "resume" | "auto-resume",
-): Promise<boolean> {
-	const snapshotPath = kind === "auto-resume" ? completionTestAutoContinuePromptPath() : completionTestDriverPromptPath();
-	maybeWriteTestSnapshot(snapshotPath, `${prompt}\n`);
-	noteQueuedDriverPrompt(rootKey, fingerprint);
-	if (shouldSkipDriverKickoffForTests()) {
-		emitCommandText(ctx, `Skipped completion workflow ${kind} prompt (test mode)`, "info");
-		return false;
-	}
-	pi.sendUserMessage(prompt);
-	emitCommandText(ctx, `Queued completion workflow ${kind}`, "info");
-	return true;
-}
-
-async function autoContinueWorkflowIfNeeded(pi: ExtensionAPI, ctx: { cwd: string; hasUI: boolean; ui: any }): Promise<void> {
-	if (roleFromEnv()) return;
-	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
-	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
-	if (!snapshot) {
-		clearDriverContinuationTracker(rootKey);
-		return;
-	}
-	if (!hasCompletionRoutingActivation(snapshot)) return;
-	const fingerprint = completionContinuationFingerprint(snapshot);
-	if (!fingerprint) {
-		clearDriverContinuationTracker(rootKey);
-		return;
-	}
-	if (!isWorkflowDriverActive(snapshot) || hasRunningCompletionRole(rootKey)) return;
-	const tracker = driverContinuationByRoot.get(rootKey);
-	if (tracker && tracker.fingerprint === fingerprint) {
-		if (tracker.inFlight) {
-			tracker.inFlight = false;
-			if (tracker.attempts >= DRIVER_AUTO_CONTINUE_MAX_ATTEMPTS) {
-				if (!isDriverContinuationStateParked(rootKey, fingerprint)) {
-					rememberParkedDriverContinuation(rootKey, fingerprint);
-					emitCommandText(
-						ctx,
-						`Completion workflow is parked before mandatory role dispatch: ${asString(snapshot.state?.next_mandatory_role) ?? "(unknown)"}. Rerun /cook to continue from canonical state.`,
-						"warning",
-					);
-				}
-				return;
-			}
-		} else {
-			return;
-		}
-	}
-	const resumePrompt = completionResumePrompt(currentTaskType(snapshot) ?? "(missing)", currentEvaluationProfile(snapshot) ?? "(missing)");
-	await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, "auto-resume");
-}
-
-function isRubricEvaluationRole(role: string | undefined): role is RubricEvaluationRole {
-	return RUBRIC_EVALUATION_ROLES.includes(role as RubricEvaluationRole);
-}
-
-function activeSliceContext(snapshot: CompletionStateSnapshot) {
-	const active = snapshot.active;
-	const activeSlice = snapshot.activeSlice;
-	return {
-		sliceId: asString(active?.slice_id) ?? asString(activeSlice?.slice_id),
-		status: asString(active?.status) ?? asString(activeSlice?.status),
-		goal: asString(active?.goal) ?? asString(activeSlice?.goal),
-		contractIds:
-			asStringArray(active?.contract_ids).length > 0 ? asStringArray(active?.contract_ids) : asStringArray(activeSlice?.contract_ids),
-		acceptance:
-			asStringArray(active?.acceptance_criteria).length > 0
-				? asStringArray(active?.acceptance_criteria)
-				: asStringArray(activeSlice?.acceptance_criteria),
-		implementationSurfaces: asStringArray(active?.implementation_surfaces),
-		verificationCommands: asStringArray(active?.verification_commands),
-		lockedNotes: asStringArray(active?.locked_notes),
-		mustFixFindings: asStringArray(active?.must_fix_findings),
-		remainingBefore: asStringArray(active?.remaining_contract_ids_before),
-		basisCommit: asString(active?.basis_commit),
-		releaseBlockerCountBefore: asNumber(active?.release_blocker_count_before),
-		highValueGapCountBefore: asNumber(active?.high_value_gap_count_before),
-	};
-}
-
-function verificationEvidenceContext(snapshot: CompletionStateSnapshot) {
-	const evidence = snapshot.verificationEvidence;
-	return {
-		path: path.relative(snapshot.files.root, snapshot.files.verificationEvidencePath) || ".agent/verification-evidence.json",
-		status: evidence ? "present" : "missing",
-		subjectType: asString(evidence?.subject_type),
-		sliceId: asString(evidence?.slice_id),
-		goal: asString(evidence?.goal),
-		contractIds: asStringArray(evidence?.contract_ids),
-		basisCommit: asString(evidence?.basis_commit),
-		headSha: asString(evidence?.head_sha),
-		verificationCommands: asStringArray(evidence?.verification_commands),
-		outcome: asString(evidence?.outcome),
-		recordedAt: asString(evidence?.recorded_at),
-		summary:
-			asString(evidence?.summary) ??
-			(evidence ? "Canonical verification evidence is present but its summary is missing." : "Canonical verification evidence is missing."),
-	};
-}
-
-function buildEvaluationRoleContextLines(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string[] {
-	const context = activeSliceContext(snapshot);
-	const evidence = verificationEvidenceContext(snapshot);
-	const lines = [
-		`Canonical evaluation handoff for ${role}:`,
-		`- task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
-		`- evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
-		`- latest_completed_slice: ${asString(snapshot.state?.latest_completed_slice) ?? "(none)"}`,
-		`- active_slice_id: ${context.sliceId ?? "(none)"}`,
-		`- active_slice_status: ${context.status ?? "(unknown)"}`,
-		`- active_slice_goal: ${context.goal ?? "(unknown)"}`,
-		`- contract_ids: ${context.contractIds.length > 0 ? context.contractIds.join(", ") : "(none)"}`,
-		`- acceptance_criteria: ${context.acceptance.length > 0 ? context.acceptance.join(" | ") : "(none)"}`,
-		`- implementation_surfaces: ${context.implementationSurfaces.length > 0 ? context.implementationSurfaces.join(" | ") : "(none)"}`,
-		`- verification_commands: ${context.verificationCommands.length > 0 ? context.verificationCommands.join(" | ") : "(none)"}`,
-		`- locked_notes: ${context.lockedNotes.length > 0 ? context.lockedNotes.join(" | ") : "(none)"}`,
-		`- must_fix_findings: ${context.mustFixFindings.length > 0 ? context.mustFixFindings.join(" | ") : "(none)"}`,
-		`- basis_commit: ${context.basisCommit ?? "(none)"}`,
-		`- remaining_contract_ids_before: ${context.remainingBefore.length > 0 ? context.remainingBefore.join(", ") : "(none)"}`,
-		`- release_blocker_count_before: ${context.releaseBlockerCountBefore ?? "(unknown)"}`,
-		`- high_value_gap_count_before: ${context.highValueGapCountBefore ?? "(unknown)"}`,
-		`- verification_evidence_path: ${evidence.path}`,
-		`- verification_evidence_status: ${evidence.status}`,
-		`- verification_evidence_subject_type: ${evidence.subjectType ?? "(missing)"}`,
-		`- verification_evidence_slice_id: ${evidence.sliceId ?? "(none)"}`,
-		`- verification_evidence_contract_ids: ${evidence.contractIds.length > 0 ? evidence.contractIds.join(", ") : "(none)"}`,
-		`- verification_evidence_outcome: ${evidence.outcome ?? "(missing)"}`,
-		`- verification_evidence_recorded_at: ${evidence.recordedAt ?? "(missing)"}`,
-		`- verification_evidence_head_sha: ${evidence.headSha ?? "(missing)"}`,
-		`- verification_evidence_basis_commit: ${evidence.basisCommit ?? "(missing)"}`,
-		`- verification_evidence_commands: ${evidence.verificationCommands.length > 0 ? evidence.verificationCommands.join(" | ") : "(none)"}`,
-		`- verification_evidence_summary: ${evidence.summary}`,
-	];
-	return lines;
-}
-
-function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string {
-	return buildEvaluationRoleContextLines(snapshot, role).join(" ");
-}
-
-async function assessActiveWorkflowProposalRouting(
-	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
-	snapshot: CompletionStateSnapshot,
-): Promise<ActiveWorkflowProposalAssessment> {
-	const currentMission = currentMissionAnchor(snapshot);
-	const projectName = path.basename(snapshot.files.root);
-	const proposal = await deriveCookContextProposal(ctx, projectName);
-	if (!proposal) {
-		const assessment: ActiveWorkflowProposalAssessment = {
-			action: "unclear",
-			currentMissionAnchor: currentMission,
-			reason: "missing_proposal",
-		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
-		return assessment;
-	}
-	if (missionAnchorsLikelyEquivalent(currentMission, proposal.mission)) {
-		const assessment: ActiveWorkflowProposalAssessment = {
-			action: "continue",
-			currentMissionAnchor: currentMission,
-			proposal,
-			reason: "matching_mission",
-		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
-		return assessment;
-	}
-	if (shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal)) {
-		const assessment: ActiveWorkflowProposalAssessment = {
-			action: "refocus",
-			currentMissionAnchor: currentMission,
-			proposal,
-			reason: "clear_refocus",
-		};
-		maybeWriteActiveWorkflowRoutingSnapshot(assessment);
-		return assessment;
-	}
-	const assessment: ActiveWorkflowProposalAssessment = {
-		action: "unclear",
-		currentMissionAnchor: currentMission,
-		proposal,
-		reason: "ambiguous_discussion",
-	};
-	maybeWriteActiveWorkflowRoutingSnapshot(assessment);
-	return assessment;
-}
-
-async function resumeActiveWorkflowFromCanonicalState(
-	pi: any,
-	ctx: { cwd: string; hasUI: boolean; ui: any },
-	snapshot: CompletionStateSnapshot,
-): Promise<void> {
-	activateCompletionRoutingForRoot(snapshot.files.root);
-	const mission = currentMissionAnchor(snapshot);
-	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
-	const resumePrompt = completionResumePrompt(
-		currentTaskType(snapshot) ?? "(missing)",
-		currentEvaluationProfile(snapshot) ?? "(missing)",
-	);
-	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
-	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
-		kind: "resume",
-		mission_anchor: mission,
-		current_phase: asString(snapshot.state?.current_phase) ?? null,
-		next_mandatory_role: asString(snapshot.state?.next_mandatory_role) ?? null,
-	});
-	const resumeKind = shouldTestAutoContinueOnSessionStart() && completionTestAutoContinuePromptPath() ? "auto-resume" : "resume";
-	await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, resumePrompt, resumeKind);
-}
-
-async function confirmExistingWorkflowProposal(
-	ctx: { hasUI: boolean; ui: any },
-	snapshot: CompletionStateSnapshot,
-	proposal: ContextProposal,
-	options: ExistingWorkflowChooserOptions = {},
-): Promise<ExistingWorkflowDecision | undefined> {
-	const currentMission = currentMissionAnchor(snapshot);
-	const comparison = options.comparison ?? "semantic";
-	const missionsMatch =
-		comparison === "strict"
-			? missionAnchorsStrictlyEquivalent(currentMission, proposal.mission)
-			: missionAnchorsLikelyEquivalent(currentMission, proposal.mission);
-	if (missionsMatch) {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	const title = [
-		"Existing completion workflow found",
-		"",
-		options.intro ?? "A workflow is already in progress. Choose how /cook should proceed:",
-		"",
-		"Current mission",
-		currentMission,
-		"",
-		options.proposedMissionLabel ?? "New proposed mission",
-		proposal.mission,
-	].join("\n");
-	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new goal as extra direction only.";
-	const refocusChoice =
-		options.refocusChoiceLabel ??
-		"Abandon current workflow and start this new one\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.";
-	const cancelChoice = `Cancel\n\nKeep the current workflow unchanged. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
-	maybeWriteTestSnapshot(
-		completionTestExistingWorkflowChooserSnapshotPath(),
-		`${JSON.stringify({ title, choices: [continueChoice, refocusChoice, cancelChoice] }, null, 2)}\n`,
-	);
-	const actionOverride = completionTestWorkflowActionOverride();
-	if (actionOverride === "continue") {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	if (actionOverride === "refocus") {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
-	}
-	if (actionOverride === "cancel") return undefined;
-	if (!getCtxHasUI(ctx)) {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	const ui = getCtxUi(ctx);
-	if (!ui) {
-		return { action: "continue", currentMissionAnchor: currentMission };
-	}
-	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
-	if (!choice || choice === cancelChoice) return undefined;
-	if (choice === refocusChoice) {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
-	}
-	return { action: "continue", currentMissionAnchor: currentMission };
-}
-
-async function refocusCompletionMission(
-	snapshot: CompletionStateSnapshot,
-	missionAnchor: string,
-	rawGoal: string,
-	analysis?: ContextProposalAnalysis,
-): Promise<void> {
-	const requiredStopJudges = asNumber(snapshot.profile?.required_stop_judges) ?? 3;
-	const root = snapshot.files.root;
-	const routing = finalizeContextProposalAnalysis(analysis, [rawGoal, missionAnchor]);
-	const docsSurfaces = asStringArray(snapshot.profile?.docs_surfaces);
-	const nextProfile = buildProfileRecord({
-		projectName: asString(snapshot.profile?.project_name) ?? path.basename(root),
-		requiredStopJudges,
-		priorityPolicyId: asString(snapshot.profile?.priority_policy_id) ?? "completion-default",
-		docsSurfaces: docsSurfaces.length > 0 ? docsSurfaces : await detectDocsSurfaces(root),
-		taskType: routing.taskType,
-		evaluationProfile: routing.evaluationProfile,
-	});
-	const nextState = {
-		...defaultState(missionAnchor, {
-			taskType: routing.taskType,
-			evaluationProfile: routing.evaluationProfile,
-			continuationReason: buildContextProposalContinuationReason("User refocused workflow via /cook:", rawGoal, routing),
-		}),
-		remaining_stop_judges: requiredStopJudges,
-		next_mandatory_action: "Reconcile canonical state from current repo truth for the refocused mission",
-	};
-	const nextPlan = {
-		...defaultPlan(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }),
-		plan_basis: "user_refocus",
-	};
-	const nextActive = defaultActiveSlice(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile });
-	await Promise.all([
-		fsp.writeFile(path.join(snapshot.files.agentDir, "mission.md"), buildMission(path.basename(root), missionAnchor), "utf8"),
-		writeJsonFile(snapshot.files.profilePath, nextProfile),
-		writeJsonFile(snapshot.files.statePath, nextState),
-		writeJsonFile(snapshot.files.planPath, nextPlan),
-		writeJsonFile(snapshot.files.activePath, nextActive),
-		writeJsonFile(snapshot.files.verificationEvidencePath, defaultVerificationEvidence()),
-	]);
-}
-
 function deriveMissionAnchor(rawGoal: string, projectName: string): string {
 	const normalized = normalizeMissionAnchorText(rawGoal);
 	if (!normalized || isWeakMissionAnchor(normalized)) {
@@ -2490,6 +2079,116 @@ function handoffSnapshotState(active: JsonRecord | undefined): "present" | "miss
 	return activeCarriesExactHandoff(active) && exactArrays.every((items) => items.length > 0) && required.every((value) => value !== undefined && value !== null)
 		? "present"
 		: "missing_or_unclear";
+}
+
+function currentTaskType(snapshot: CompletionStateSnapshot): string | undefined {
+	return (
+		asString(snapshot.active?.task_type) ??
+		asString(snapshot.state?.task_type) ??
+		asString(snapshot.plan?.task_type) ??
+		asString(snapshot.profile?.task_type)
+	);
+}
+
+function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | undefined {
+	return (
+		asString(snapshot.active?.evaluation_profile) ??
+		asString(snapshot.state?.evaluation_profile) ??
+		asString(snapshot.plan?.evaluation_profile) ??
+		asString(snapshot.profile?.evaluation_profile)
+	);
+}
+
+function hasRunningCompletionRole(rootKey: string): boolean {
+	return liveRoleActivityByRoot.get(rootKey)?.status === "running";
+}
+
+function isRubricEvaluationRole(role: string | undefined): role is RubricEvaluationRole {
+	return RUBRIC_EVALUATION_ROLES.includes(role as RubricEvaluationRole);
+}
+
+function activeSliceContext(snapshot: CompletionStateSnapshot) {
+	const active = snapshot.active;
+	const activeSlice = snapshot.activeSlice;
+	return {
+		sliceId: asString(active?.slice_id) ?? asString(activeSlice?.slice_id),
+		status: asString(active?.status) ?? asString(activeSlice?.status),
+		goal: asString(active?.goal) ?? asString(activeSlice?.goal),
+		contractIds:
+			asStringArray(active?.contract_ids).length > 0 ? asStringArray(active?.contract_ids) : asStringArray(activeSlice?.contract_ids),
+		acceptance:
+			asStringArray(active?.acceptance_criteria).length > 0
+				? asStringArray(active?.acceptance_criteria)
+				: asStringArray(activeSlice?.acceptance_criteria),
+		implementationSurfaces: asStringArray(active?.implementation_surfaces),
+		verificationCommands: asStringArray(active?.verification_commands),
+		lockedNotes: asStringArray(active?.locked_notes),
+		mustFixFindings: asStringArray(active?.must_fix_findings),
+		remainingBefore: asStringArray(active?.remaining_contract_ids_before),
+		basisCommit: asString(active?.basis_commit),
+		releaseBlockerCountBefore: asNumber(active?.release_blocker_count_before),
+		highValueGapCountBefore: asNumber(active?.high_value_gap_count_before),
+	};
+}
+
+function verificationEvidenceContext(snapshot: CompletionStateSnapshot) {
+	const evidence = snapshot.verificationEvidence;
+	return {
+		path: path.relative(snapshot.files.root, snapshot.files.verificationEvidencePath) || ".agent/verification-evidence.json",
+		status: evidence ? "present" : "missing",
+		subjectType: asString(evidence?.subject_type),
+		sliceId: asString(evidence?.slice_id),
+		goal: asString(evidence?.goal),
+		contractIds: asStringArray(evidence?.contract_ids),
+		basisCommit: asString(evidence?.basis_commit),
+		headSha: asString(evidence?.head_sha),
+		verificationCommands: asStringArray(evidence?.verification_commands),
+		outcome: asString(evidence?.outcome),
+		recordedAt: asString(evidence?.recorded_at),
+		summary:
+			asString(evidence?.summary) ??
+			(evidence ? "Canonical verification evidence is present but its summary is missing." : "Canonical verification evidence is missing."),
+	};
+}
+
+function buildEvaluationRoleContextLines(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string[] {
+	const context = activeSliceContext(snapshot);
+	const evidence = verificationEvidenceContext(snapshot);
+	const lines = [
+		`Canonical evaluation handoff for ${role}:`,
+		`- task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
+		`- evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
+		`- latest_completed_slice: ${asString(snapshot.state?.latest_completed_slice) ?? "(none)"}`,
+		`- active_slice_id: ${context.sliceId ?? "(none)"}`,
+		`- active_slice_status: ${context.status ?? "(unknown)"}`,
+		`- active_slice_goal: ${context.goal ?? "(unknown)"}`,
+		`- contract_ids: ${context.contractIds.length > 0 ? context.contractIds.join(", ") : "(none)"}`,
+		`- acceptance_criteria: ${context.acceptance.length > 0 ? context.acceptance.join(" | ") : "(none)"}`,
+		`- implementation_surfaces: ${context.implementationSurfaces.length > 0 ? context.implementationSurfaces.join(" | ") : "(none)"}`,
+		`- verification_commands: ${context.verificationCommands.length > 0 ? context.verificationCommands.join(" | ") : "(none)"}`,
+		`- locked_notes: ${context.lockedNotes.length > 0 ? context.lockedNotes.join(" | ") : "(none)"}`,
+		`- must_fix_findings: ${context.mustFixFindings.length > 0 ? context.mustFixFindings.join(" | ") : "(none)"}`,
+		`- basis_commit: ${context.basisCommit ?? "(none)"}`,
+		`- remaining_contract_ids_before: ${context.remainingBefore.length > 0 ? context.remainingBefore.join(", ") : "(none)"}`,
+		`- release_blocker_count_before: ${context.releaseBlockerCountBefore ?? "(unknown)"}`,
+		`- high_value_gap_count_before: ${context.highValueGapCountBefore ?? "(unknown)"}`,
+		`- verification_evidence_path: ${evidence.path}`,
+		`- verification_evidence_status: ${evidence.status}`,
+		`- verification_evidence_subject_type: ${evidence.subjectType ?? "(missing)"}`,
+		`- verification_evidence_slice_id: ${evidence.sliceId ?? "(none)"}`,
+		`- verification_evidence_contract_ids: ${evidence.contractIds.length > 0 ? evidence.contractIds.join(", ") : "(none)"}`,
+		`- verification_evidence_outcome: ${evidence.outcome ?? "(missing)"}`,
+		`- verification_evidence_recorded_at: ${evidence.recordedAt ?? "(missing)"}`,
+		`- verification_evidence_head_sha: ${evidence.headSha ?? "(missing)"}`,
+		`- verification_evidence_basis_commit: ${evidence.basisCommit ?? "(missing)"}`,
+		`- verification_evidence_commands: ${evidence.verificationCommands.length > 0 ? evidence.verificationCommands.join(" | ") : "(none)"}`,
+		`- verification_evidence_summary: ${evidence.summary}`,
+	];
+	return lines;
+}
+
+function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role: RubricEvaluationRole): string {
+	return buildEvaluationRoleContextLines(snapshot, role).join(" ");
 }
 
 function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
@@ -3324,10 +3023,43 @@ function completionResumePrompt(taskType: string, evaluationProfile: string): st
 }
 
 export default function completionExtension(pi: ExtensionAPI) {
+	const driverDeps = {
+		bareOnlyGuidance: COOK_BARE_ONLY_GUIDANCE,
+		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
+		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
+		cookCommandSpec: {
+			description: "Bare /cook workflow: start, continue, refocus, or start the next round",
+		},
+		buildContextProposalContinuationReason,
+		completionKickoff,
+		completionResumePrompt,
+		completionRootKey,
+		completionTestAutoContinuePromptPath,
+		completionTestDriverPromptPath,
+		completionTestExistingWorkflowChooserSnapshotPath,
+		completionTestWorkflowActionOverride,
+		confirmContextProposal,
+		deriveCookContextProposal,
+		emitCommandText,
+		finalizeContextProposalAnalysis,
+		getCtxCwd,
+		getCtxHasUI,
+		getCtxUi,
+		hasRunningCompletionRole,
+		maybeWriteActiveWorkflowRoutingSnapshot,
+		maybeWriteTestSnapshot,
+		missionAnchorsLikelyEquivalent,
+		missionAnchorsStrictlyEquivalent,
+		scaffoldCompletionFiles,
+		shouldSkipDriverKickoffForTests,
+		shouldTestAutoContinueOnSessionStart,
+		shouldTreatBareActiveWorkflowProposalAsClearRefocus,
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		await refreshStatus(ctx);
 		if (shouldTestAutoContinueOnSessionStart()) {
-			await autoContinueWorkflowIfNeeded(pi, ctx);
+			await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 		}
 	});
 
@@ -3341,7 +3073,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
 		await refreshStatus(ctx);
-		await autoContinueWorkflowIfNeeded(pi, ctx);
+		await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
@@ -3657,135 +3389,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("cook", {
-		description: "Bare /cook workflow: start, continue, refocus, or start the next round",
-		handler: async (args, ctx) => {
-			if (args.trim().length > 0) {
-				emitCommandText(ctx, COOK_BARE_ONLY_GUIDANCE, "info");
-				return;
-			}
-			let goal: string | undefined;
-			const cwd = getCtxCwd(ctx);
-			let snapshot = await loadCompletionSnapshot(cwd);
-			const workflowDone = isWorkflowDone(snapshot);
-			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
-			let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
-			let kickoffAnalysis: ContextProposalAnalysis | undefined;
+	registerCookCommand(pi, driverDeps);
 
-			if (!snapshot) {
-				const root = findRepoRoot(cwd) ?? cwd;
-				const projectName = path.basename(root);
-				const proposal = await deriveCookContextProposal(ctx, projectName);
-				if (!proposal) {
-					emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(), "info");
-					return;
-				}
-				const decision = await confirmContextProposal(ctx, proposal, {
-					title: "Start a completion workflow from the recent discussion?",
-				});
-				if (!decision) {
-					emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal"), "info");
-					return;
-				}
-				goal = decision.goalText;
-				kickoffMissionAnchor = decision.missionAnchor;
-				kickoffAnalysis = decision.analysis;
-				const startupRouting = finalizeContextProposalAnalysis(kickoffAnalysis, [goal ?? kickoffMissionAnchor ?? projectName]);
-				const created = await scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName, {
-					analysis: startupRouting,
-					continuationReason: buildContextProposalContinuationReason(
-						"User started workflow via /cook:",
-						goal ?? kickoffMissionAnchor ?? projectName,
-						startupRouting,
-					),
-				});
-				emitCommandText(
-					ctx,
-					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
-					"info",
-				);
-				snapshot = await loadCompletionSnapshot(root);
-			}
-			if (!snapshot) {
-				emitCommandText(ctx, "Failed to load completion workflow state", "error");
-				return;
-			}
-			if (!goal) {
-				if (workflowDone) {
-					const projectName = path.basename(snapshot.files.root);
-					const proposal = await deriveCookContextProposal(ctx, projectName);
-					if (!proposal) {
-						emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage("The previous completion workflow is already done."), "info");
-						return;
-					}
-					const decision = await confirmContextProposal(ctx, proposal, {
-						title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
-					});
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal"), "info");
-						return;
-					}
-					goal = decision.goalText;
-					kickoffIntent = "refocus";
-					kickoffMissionAnchor = decision.missionAnchor;
-					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-					emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
-				} else {
-					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot);
-					if (assessment.action !== "refocus" || !assessment.proposal) {
-						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot);
-						return;
-					}
-					const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, {
-						intro: "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:",
-						proposedMissionLabel: "Proposed mission from recent discussion",
-						refocusChoiceLabel:
-							"Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.",
-					});
-					if (!decision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation"), "info");
-						return;
-					}
-					if (decision.action === "continue") {
-						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot);
-						return;
-					}
-					const proposalDecision = await confirmContextProposal(ctx, assessment.proposal, {
-						title: "Start the replacement workflow from recent discussion?",
-					});
-					if (!proposalDecision) {
-						emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal"), "info");
-						return;
-					}
-					goal = proposalDecision.goalText;
-					kickoffIntent = "refocus";
-					kickoffMissionAnchor = proposalDecision.missionAnchor;
-					await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText, proposalDecision.analysis);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-					emitCommandText(ctx, `Refocused completion mission from recent discussion to: ${proposalDecision.missionAnchor}`, "info");
-				}
-			}
-			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
-			activateCompletionRoutingForRoot(snapshot.files.root);
-			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
-			const kickoffPrompt = completionKickoff(
-				goal,
-				currentTaskType(snapshot) ?? "(missing)",
-				currentEvaluationProfile(snapshot) ?? "(missing)",
-				kickoffIntent,
-				kickoffMissionAnchor,
-			);
-			const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
-			const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
-				kind: "kickoff",
-				mission_anchor: kickoffMissionAnchor,
-				goal,
-				intent: kickoffIntent,
-				task_type: currentTaskType(snapshot) ?? "(missing)",
-				evaluation_profile: currentEvaluationProfile(snapshot) ?? "(missing)",
-			});
-			await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, kickoffPrompt, "kickoff");
-		},
-	});
 }
