@@ -5,10 +5,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, matchesKey, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { runCompletionRole } from "./role-runner";
+import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
 import {
 	buildProfileRecord,
 	defaultActiveSlice,
@@ -26,9 +26,9 @@ import {
 	resolveFiles,
 	writeJsonFile,
 } from "./state-store";
-import { parseFirstNumber, parseReportFields, parseYesNo, transcribeRoleOutput } from "./transcription";
+import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
-import type { AgentDefinition, CompletionStateSnapshot, CompletionStatusSurface, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
+import type { CompletionStateSnapshot, CompletionStatusSurface, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
 
 const PROTOCOL_ID = "completion";
 const ROLE_NAMES = [
@@ -48,7 +48,6 @@ const PACKAGE_SKILL_PATH = PACKAGE_ROOT ? path.join(PACKAGE_ROOT, "skills", "com
 const PACKAGE_REFERENCE_PATH = PACKAGE_ROOT
 	? path.join(PACKAGE_ROOT, "skills", "completion-protocol", "references", "completion.md")
 	: undefined;
-const PACKAGE_AGENTS_DIR = PACKAGE_ROOT ? path.join(PACKAGE_ROOT, "agents") : undefined;
 const SKILL_PATH = PACKAGE_SKILL_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "SKILL.md");
 const REFERENCE_PATH = PACKAGE_REFERENCE_PATH ?? path.join(AGENT_HOME, "skills", "completion-protocol", "references", "completion.md");
 const DEFAULT_TASK_TYPE = "completion-workflow";
@@ -982,7 +981,7 @@ async function runContextProposalAnalystSubprocess(
 	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 	const rootKey = completionRootKey(undefined, cwd);
 	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries);
-	const systemPromptTemp = await writeTempFile("pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
+	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
 	const analystRole = "cook-proposal-analyst";
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
 	const invocation = getPiInvocation(args);
@@ -3291,47 +3290,6 @@ function isMutatingBash(command: string): boolean {
 	]) || normalized.includes(">") || normalized.includes("| tee") || normalized.includes("apply_patch");
 }
 
-async function loadAgentDefinition(cwd: string, role: CompletionRole): Promise<AgentDefinition> {
-	const projectAgent = walkUpForDir(cwd, [".pi", "agents", `${role}.md`]);
-	const packageAgent = PACKAGE_AGENTS_DIR ? path.join(PACKAGE_AGENTS_DIR, `${role}.md`) : undefined;
-	const candidates = [projectAgent, packageAgent, path.join(AGENT_HOME, "agents", `${role}.md`)].filter(
-		(candidate): candidate is string => Boolean(candidate),
-	);
-	for (const candidate of candidates) {
-		if (!fs.existsSync(candidate)) continue;
-		const raw = await fsp.readFile(candidate, "utf8");
-		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(raw);
-		return {
-			name: frontmatter.name ?? role,
-			description: frontmatter.description,
-			tools: frontmatter.tools?.split(",").map((tool) => tool.trim()).filter(Boolean),
-			model: frontmatter.model,
-			systemPrompt: body.trim(),
-			filePath: candidate,
-		};
-	}
-	throw new Error(`Missing completion agent definition for ${role}`);
-}
-
-async function writeTempFile(prefix: string, content: string): Promise<{ dir: string; filePath: string }> {
-	const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-	const filePath = path.join(dir, "prompt.md");
-	await fsp.writeFile(filePath, content, { encoding: "utf8", mode: 0o600 });
-	return { dir, filePath };
-}
-
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	const currentScript = process.argv[1];
-	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-		return { command: process.execPath, args: [currentScript, ...args] };
-	}
-	const execName = path.basename(process.execPath).toLowerCase();
-	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-	if (!isGenericRuntime) return { command: process.execPath, args };
-	return { command: "pi", args };
-}
-
 function lastAssistantText(messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -3579,10 +3537,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 				applyLiveRoleEvent,
 				nowMs,
 				heartbeatMs: LIVE_ROLE_HEARTBEAT_MS,
-				loadReminderData: loadCompletionDataForReminder,
-				loadAgentDefinition,
-				parseReportFields,
-				transcribeRoleOutput,
 			});
 
 			liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(result.activity, { status: result.ok ? "ok" : "error" }));

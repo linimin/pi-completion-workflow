@@ -4,8 +4,9 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { loadCompletionDataForReminder } from "./state-store";
+import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";
 import type { AgentDefinition, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
-import type { TranscriptionResult } from "./transcription";
 
 export type RunCompletionRoleParams = {
 	root: string;
@@ -21,10 +22,6 @@ export type RunCompletionRoleParams = {
 	applyLiveRoleEvent: (activity: LiveRoleActivity, event: JsonRecord, messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>) => boolean;
 	nowMs: () => number;
 	heartbeatMs: number;
-	loadReminderData: (cwd: string) => Promise<unknown>;
-	loadAgentDefinition: (cwd: string, role: CompletionRole) => Promise<AgentDefinition>;
-	parseReportFields: (text: string) => Record<string, string>;
-	transcribeRoleOutput: (role: CompletionRole, cwd: string, output: string, reportFields: Record<string, string>) => Promise<TranscriptionResult>;
 };
 
 export type RunCompletionRoleResult = {
@@ -110,8 +107,8 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 }
 
 export async function runCompletionRole(params: RunCompletionRoleParams): Promise<RunCompletionRoleResult> {
-	const agent = await params.loadAgentDefinition(params.root, params.role);
-	await params.loadReminderData(params.root);
+	const agent = await loadAgentDefinition(params.root, params.role);
+	await loadCompletionDataForReminder(params.root);
 	const systemPromptTemp = await writeTempFile(params.root, "pi-completion-role-", agent.systemPrompt);
 	const taskLines = [...params.systemPromptPreamble];
 	if (params.evaluationContextLines?.length) taskLines.push("", ...params.evaluationContextLines);
@@ -175,8 +172,8 @@ export async function runCompletionRole(params: RunCompletionRoleParams): Promis
 		});
 
 		const output = liveActivity.lastAssistantText || stderr.trim() || `${params.role} finished with no text output.`;
-		const reportFields = params.parseReportFields(output);
-		const transcription = exitCode === 0 ? await params.transcribeRoleOutput(params.role, params.root, output, reportFields) : undefined;
+		const reportFields = parseReportFields(output);
+		const transcription = exitCode === 0 ? await transcribeRoleOutput(params.role, params.root, output, reportFields) : undefined;
 		if (transcription?.appended.length) params.onConsoleMessage?.("info", `Completion transcription appended: ${transcription.appended.join(", ")}`);
 		if (transcription?.errors.length) params.onConsoleMessage?.("warning", `Completion transcription warning: ${transcription.errors.join(" | ")}`);
 		return {
