@@ -201,6 +201,7 @@ export function buildContextProposalAnalystPrompt(projectName: string, discussio
 		"Infer the current implementation mission from the discussion.",
 		"Prefer the latest clear user implementation intent over older background context.",
 		"Treat stale, completed, or explicitly negated topics as context to ignore unless the latest discussion clearly reopens them.",
+		"If canonical workflow context includes a /cook hint, use it as a high-priority cue for how to interpret the recent discussion without treating it as an unconditional override.",
 	];
 	if (contextLines.length > 0) lines.push("", "Canonical workflow context:", ...contextLines);
 	lines.push("", "Recent discussion:", discussion || "(none)");

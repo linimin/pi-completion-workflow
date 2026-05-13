@@ -79,6 +79,7 @@ const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 	"You may additionally include optional keys alternate_missions, completed_topics, and negated_topics when they are clearly supported by the discussion and canonical workflow context.",
 	"mission must be a concise implementation mission anchor sentence.",
 	"Prefer the latest clear user implementation intent over older background context when they differ.",
+	"If canonical workflow context includes a /cook hint, treat it as a high-priority disambiguation signal, but do not let it bypass clear contradictory repo truth or approval-only confirmation.",
 	"Do not reopen work that the canonical workflow context says is done, completed, historical, or already covered unless the latest discussion clearly asks to revisit it.",
 	"Treat stale, weakly related, or explicitly negated topics as noise instead of mission scope.",
 	"scope must contain only work items that directly support the mission.",

@@ -342,6 +342,11 @@ export function serializeRecentDiscussionEntries(entries: RecentDiscussionEntry[
 		.join("\n\n");
 }
 
+function contextHintEntry(hintText: string | undefined): RecentDiscussionEntry[] {
+	const normalized = normalizeProposalLine(hintText ?? "");
+	return normalized ? [{ role: "user", text: `Hint: ${normalized}` }] : [];
+}
+
 const RECENT_DISCUSSION_IMPLEMENTATION_INTENT_REGEX =
 	/(?:\b(?:fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep|edit|document|write)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|過濾|过滤|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
 
@@ -716,11 +721,61 @@ function missionTextOverlapsTopic(mission: string, topic: string): boolean {
 	return overlap.length >= Math.min(2, Math.min(missionTokens.length, topicTokens.length));
 }
 
-function proposalOverlapsTopic(proposal: ContextProposal, topic: string): boolean {
+function proposalOverlapsTopic(proposal: ContextProposal | ContextProposalAlternate, topic: string): boolean {
 	if (!topic.trim()) return false;
 	if (missionTextOverlapsTopic(proposal.mission, topic)) return true;
 	const bodyTexts = [proposal.basisPreview, ...proposal.scope, ...proposal.constraints, ...proposal.acceptance].filter(Boolean);
 	return bodyTexts.some((text) => missionTextOverlapsTopic(text, topic) || missionTextOverlapsTopic(topic, text));
+}
+
+function hintOverlapScore(text: string, hintText: string): number {
+	const normalizedText = normalizeMissionAnchorText(text).toLowerCase();
+	const normalizedHint = normalizeMissionAnchorText(hintText).toLowerCase();
+	if (!normalizedText || !normalizedHint) return 0;
+	if (normalizedText === normalizedHint) return 10;
+	if (normalizedText.includes(normalizedHint) || normalizedHint.includes(normalizedText)) return 6;
+	const textTokens = missionAnchorSemanticTokens(normalizedText);
+	const hintTokens = missionAnchorSemanticTokens(normalizedHint);
+	if (textTokens.length === 0 || hintTokens.length === 0) return 0;
+	const hintSet = new Set(hintTokens);
+	const overlap = textTokens.filter((token) => hintSet.has(token));
+	if (overlap.length === 0) return 0;
+	return overlap.length / Math.max(textTokens.length, hintTokens.length);
+}
+
+function proposalHintScore(proposal: ContextProposal | ContextProposalAlternate, hintText: string): number {
+	return (
+		hintOverlapScore(proposal.mission, hintText) * 4 +
+		proposal.scope.reduce((sum, item) => sum + hintOverlapScore(item, hintText) * 2, 0) +
+		proposal.constraints.reduce((sum, item) => sum + hintOverlapScore(item, hintText), 0) +
+		proposal.acceptance.reduce((sum, item) => sum + hintOverlapScore(item, hintText), 0)
+	);
+}
+
+function selectHintPreferredProposal(proposal: ContextProposal | undefined, hintText: string | undefined): ContextProposal | undefined {
+	if (!proposal || !hintText) return proposal;
+	const candidates = [proposal, ...(proposal.alternateProposals ?? [])].filter((candidate, index, list) =>
+		list.findIndex((other) => missionAnchorsStrictlyEquivalent(other.mission, candidate.mission)) === index,
+	);
+	if (candidates.length <= 1) return proposal;
+	const scored = candidates.map((candidate, index) => ({ candidate, index, score: proposalHintScore(candidate, hintText) }));
+	const best = scored.reduce((current, item) => (item.score > current.score ? item : current), scored[0]);
+	if (best.score <= 0 || best.index === 0) return proposal;
+	const selected = best.candidate;
+	const alternates = candidates
+		.filter((_, index) => index !== best.index)
+		.map((candidate) => ({ ...candidate, analysis: finalizeContextProposalAnalysis(candidate.analysis, [candidate.goalText, candidate.mission]) }));
+	return {
+		...selected,
+		alternateProposals: alternates,
+		analysis: finalizeContextProposalAnalysis(
+			{
+				...selected.analysis,
+				alternateMissions: alternates.map((candidate) => candidate.mission),
+			},
+			[selected.goalText, selected.mission, hintText, ...alternates.map((candidate) => candidate.mission)],
+		),
+	};
 }
 
 function extractSuppressedNegatedTopics(proposal: ContextProposal): string[] {
@@ -1186,20 +1241,25 @@ export async function deriveCookContextProposalFromRecentDiscussion(
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
 	deps: ProposalParseDeps & {
-		analyzeContextProposal?: (recentEntries: RecentDiscussionEntry[]) => Promise<ContextProposal | undefined>;
+		analyzeContextProposal?: (recentEntries: RecentDiscussionEntry[], hintText?: string) => Promise<ContextProposal | undefined>;
 		workflowContext?: ContextProposalWorkflowContext;
+		hintText?: string;
 	},
 ): Promise<ContextProposal | undefined> {
-	if (recentEntries.length === 0) return undefined;
-	for (const candidateEntries of recentDiscussionWindows(recentEntries, deps.stripCodeBlocks)) {
-		const analyzed = applyWorkflowContextToProposal(await deps.analyzeContextProposal?.(candidateEntries), deps.workflowContext, deps);
+	const effectiveEntries = [...contextHintEntry(deps.hintText), ...recentEntries];
+	if (effectiveEntries.length === 0) return undefined;
+	for (const candidateEntries of recentDiscussionWindows(effectiveEntries, deps.stripCodeBlocks)) {
+		const analyzed = selectHintPreferredProposal(
+			applyWorkflowContextToProposal(await deps.analyzeContextProposal?.(candidateEntries, deps.hintText), deps.workflowContext, deps) ?? undefined,
+			deps.hintText,
+		);
 		if (analyzed) return analyzed;
 		const structured = applyWorkflowContextToProposal(
 			extractContextProposalFromStructuredSession(candidateEntries, projectName, deps),
 			deps.workflowContext,
 			deps,
 		);
-		if (structured) return structured;
+		if (structured) return selectHintPreferredProposal(structured, deps.hintText);
 	}
 	return undefined;
 }

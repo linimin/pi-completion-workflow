@@ -106,7 +106,7 @@ export type CompletionDriverDeps = {
 		missionAnchor?: string,
 	) => string;
 	completionResumePrompt: (taskType: string, evaluationProfile: string) => string;
-	deriveCookContextProposal: (ctx: DriverContext, projectName: string) => Promise<ContextProposal | undefined>;
+	deriveCookContextProposal: (ctx: DriverContext, projectName: string, hintText?: string) => Promise<ContextProposal | undefined>;
 	confirmContextProposal: (
 		ctx: { hasUI: boolean; ui: any },
 		proposal: ContextProposal,
@@ -325,10 +325,11 @@ async function assessActiveWorkflowProposalRouting(
 	ctx: DriverContext,
 	snapshot: CompletionStateSnapshot,
 	deps: CompletionDriverDeps,
+	hintText?: string,
 ): Promise<ActiveWorkflowProposalAssessment> {
 	const currentMission = currentMissionAnchor(snapshot);
 	const projectName = path.basename(snapshot.files.root);
-	const proposal = await deps.deriveCookContextProposal(ctx, projectName);
+	const proposal = await deps.deriveCookContextProposal(ctx, projectName, hintText);
 	if (!proposal) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "unclear",
@@ -533,10 +534,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 	pi.registerCommand("cook", {
 		description: deps.cookCommandSpec.description,
 		handler: async (args, ctx) => {
-			if (args.trim().length > 0) {
-				deps.emitCommandText(ctx, deps.bareOnlyGuidance, "info");
-				return;
-			}
+			const explicitHint = args.trim().length > 0 ? args.trim() : undefined;
 			let goal: string | undefined;
 			const cwd = deps.getCtxCwd(ctx);
 			let snapshot = await loadCompletionSnapshot(cwd);
@@ -548,7 +546,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 			if (!snapshot) {
 				const root = findRepoRoot(cwd) ?? cwd;
 				const projectName = path.basename(root);
-				const proposal = await deps.deriveCookContextProposal(ctx, projectName);
+				const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
 				if (!proposal) {
 					deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps), "info");
 					return;
@@ -587,7 +585,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 			if (!goal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
-					const proposal = await deps.deriveCookContextProposal(ctx, projectName);
+					const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
 					if (!proposal) {
 						deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps, "The previous completion workflow is already done."), "info");
 						return;
@@ -606,7 +604,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 					deps.emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 				} else {
-					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps);
+					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
 					if (!assessment.proposal || assessment.action === "continue") {
 						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 						return;

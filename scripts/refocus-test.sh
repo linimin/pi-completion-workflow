@@ -117,9 +117,9 @@ import sys
 from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
-routing = Path(sys.argv[3])
+routing = json.loads(Path(sys.argv[3]).read_text())
 proposal = Path(sys.argv[4])
-chooser = Path(sys.argv[5])
+chooser = json.loads(Path(sys.argv[5]).read_text())
 initial_mission = sys.argv[6]
 before = json.loads(Path(sys.argv[7]).read_text())
 tracked = [
@@ -131,13 +131,14 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 current_state = json.loads(before['state.json'])
-assert current_state['mission_anchor'] == initial_mission, 'active /cook <text> rejection should start from the current mission anchor'
-assert '/cook only supports the bare /cook entrypoint.' in output, 'active /cook <text> rejection should explain the bare-only contract'
-assert not routing.exists(), 'active /cook <text> rejection should not run active-workflow routing'
-assert not proposal.exists(), 'active /cook <text> rejection should not open final proposal confirmation'
-assert not chooser.exists(), 'active /cook <text> rejection should not open the existing-workflow chooser'
+assert current_state['mission_anchor'] == initial_mission, 'active /cook <hint> should start from the current mission anchor'
+assert routing['action'] == 'refocus', 'active /cook <hint> should route through active-workflow replacement assessment'
+assert routing['proposedMissionAnchor'] == 'Replacement mission that should stay in the main chat.', 'active /cook <hint> should preserve the hinted replacement mission'
+assert not proposal.exists(), 'active /cook <hint> chooser cancel should not open final proposal confirmation'
+assert chooser['choices'][1].startswith('Start new workflow from recent discussion'), 'active /cook <hint> should open the existing-workflow chooser'
+assert 'Cancelled existing workflow confirmation.' in output, 'active /cook <hint> chooser cancel should report cancellation'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active /cook <text> rejection should leave canonical files unchanged'
+assert before == after, 'active /cook <hint> chooser cancel should leave canonical files unchanged'
 PY
 
 SESSION_INITIAL_REFOCUS="$TMPDIR/session-initial-bare-refocus.jsonl"

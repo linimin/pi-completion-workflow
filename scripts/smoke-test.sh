@@ -76,19 +76,20 @@ pi -e "$PKG_ROOT" -p "/cook smoke-test mission" \
   >"$TMPDIR/pi-completion-smoke-inline-arg.out" 2>"$TMPDIR/pi-completion-smoke-inline-arg.err"
 
 python3 - "$TMPDIR/pi-completion-smoke-inline-arg.out" "$TMPDIR/pi-completion-smoke-inline-arg.err" "$INLINE_REJECTION_ROUTING_SNAPSHOT" "$INLINE_REJECTION_PROPOSAL_SNAPSHOT" "$INLINE_REJECTION_CHOOSER_SNAPSHOT" <<'PY'
+import json
 import sys
 from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 routing = Path(sys.argv[3])
-proposal = Path(sys.argv[4])
+proposal = json.loads(Path(sys.argv[4]).read_text())
 chooser = Path(sys.argv[5])
 
-assert not Path('.agent').exists(), 'startup /cook <text> rejection should leave canonical state untouched'
-assert not routing.exists(), 'startup /cook <text> rejection should not open active-workflow routing'
-assert not proposal.exists(), 'startup /cook <text> rejection should not prepare a proposal snapshot'
-assert not chooser.exists(), 'startup /cook <text> rejection should not open the chooser flow'
-assert '/cook only supports the bare /cook entrypoint.' in output, 'startup /cook <text> rejection should explain the bare-only contract'
+assert not Path('.agent').exists(), 'startup /cook <hint> cancel should leave canonical state untouched'
+assert not routing.exists(), 'startup /cook <hint> should not open active-workflow routing before a workflow exists'
+assert proposal['mission'] == 'Smoke-test inline hint startup mission.', 'startup /cook <hint> should bias proposal derivation toward the hinted mission'
+assert not chooser.exists(), 'startup /cook <hint> should not open the existing-workflow chooser before a workflow exists'
+assert 'Cancelled recent-discussion workflow proposal.' in output, 'startup /cook <hint> cancel should report proposal cancellation'
 PY
 
 write_session "$BOOTSTRAP_SESSION" "$ROOT" "$BOOTSTRAP_DISCUSSION"
