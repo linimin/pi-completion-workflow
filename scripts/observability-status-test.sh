@@ -262,7 +262,9 @@ assertIncludes('extensions/completion/status-surface.ts', 'export function build
 assertIncludes('extensions/completion/policy-guards.ts', 'export function toolCallBlockReason(');
 assertIncludes('extensions/completion/state-store.ts', 'export function completionRootKey(');
 assertIncludes('extensions/completion/index.ts', 'import { toolCallBlockReason } from "./policy-guards";');
-assertIncludes('extensions/completion/index.ts', 'import { refreshCompletionStatus } from "./status-surface";');
+assertIncludes('extensions/completion/index.ts', 'buildInlineRunningLines');
+assertIncludes('extensions/completion/index.ts', 'formatInlineRunningText');
+assertIncludes('extensions/completion/index.ts', 'refreshCompletionStatus');
 assertIncludes('extensions/completion/index.ts', 'const reason = toolCallBlockReason({');
 assertIncludes('extensions/completion/index.ts', 'await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });');
 assertNotIncludes('extensions/completion/index.ts', 'function buildCompletionStatusSurface(');
@@ -270,6 +272,8 @@ assertNotIncludes('extensions/completion/index.ts', 'async function writeComplet
 assertNotIncludes('extensions/completion/index.ts', 'function isAllowedControlPlanePath(');
 assertNotIncludes('extensions/completion/index.ts', 'function isMutatingBash(');
 assertNotIncludes('extensions/completion/index.ts', 'async function refreshStatus(');
+assertNotIncludes('extensions/completion/index.ts', 'function buildInlineRunningLines(');
+assertNotIncludes('extensions/completion/index.ts', 'function formatInlineRunningText(');
 NODE
 
 echo "observability status test passed: $TMPDIR"

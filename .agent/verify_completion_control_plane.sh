@@ -111,7 +111,29 @@ for (const [index, slice] of plan.candidate_slices.entries()) {
 
 const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
 const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
-const allowedActive = [...requiredActiveBase, 'priority', 'why_now'];
+const activeOptionalMetadata = [
+  'priority',
+  'why_now',
+  'verification_evidence_path',
+  'verification_evidence_status',
+  'verification_evidence_subject_type',
+  'verification_evidence_slice_id',
+  'verification_evidence_contract_ids',
+  'verification_evidence_outcome',
+  'verification_evidence_recorded_at',
+  'verification_evidence_head_sha',
+  'verification_evidence_basis_commit',
+  'verification_evidence_commands',
+  'verification_evidence_summary',
+  'review_recorded_at',
+  'review_verdict',
+  'review_summary',
+  'audit_recorded_at',
+  'last_auditor_verdict',
+  'worktree_clean',
+  'next_mandatory_action'
+];
+const allowedActive = [...requiredActiveBase, ...activeOptionalMetadata];
 const activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];
 requireKeys(active, requiredActiveBase, '.agent/active-slice.json');
 hasOnlyKeys(active, allowedActive, '.agent/active-slice.json');
@@ -126,6 +148,24 @@ assert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_
 assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be an array of strings');
 assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
 assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
+if (hasOwn(active, 'verification_evidence_path')) assert(isNonEmptyString(active.verification_evidence_path), '.agent/active-slice.json: verification_evidence_path must be a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_status')) assert(isNonEmptyString(active.verification_evidence_status), '.agent/active-slice.json: verification_evidence_status must be a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_subject_type')) assert(isNonEmptyString(active.verification_evidence_subject_type), '.agent/active-slice.json: verification_evidence_subject_type must be a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_slice_id')) assert(active.verification_evidence_slice_id === null || isNonEmptyString(active.verification_evidence_slice_id), '.agent/active-slice.json: verification_evidence_slice_id must be null or a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_contract_ids')) assert(isStringArray(active.verification_evidence_contract_ids), '.agent/active-slice.json: verification_evidence_contract_ids must be an array of strings when present');
+if (hasOwn(active, 'verification_evidence_outcome')) assert(isNonEmptyString(active.verification_evidence_outcome), '.agent/active-slice.json: verification_evidence_outcome must be a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_recorded_at')) assert(active.verification_evidence_recorded_at === null || typeof active.verification_evidence_recorded_at === 'number' || (isNonEmptyString(active.verification_evidence_recorded_at) && !Number.isNaN(Date.parse(active.verification_evidence_recorded_at))), '.agent/active-slice.json: verification_evidence_recorded_at must be null, a timestamp number, or an ISO-8601 string when present');
+if (hasOwn(active, 'verification_evidence_head_sha')) assert(active.verification_evidence_head_sha === null || isNonEmptyString(active.verification_evidence_head_sha), '.agent/active-slice.json: verification_evidence_head_sha must be null or a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_basis_commit')) assert(active.verification_evidence_basis_commit === null || isNonEmptyString(active.verification_evidence_basis_commit), '.agent/active-slice.json: verification_evidence_basis_commit must be null or a non-empty string when present');
+if (hasOwn(active, 'verification_evidence_commands')) assert(isStringArray(active.verification_evidence_commands), '.agent/active-slice.json: verification_evidence_commands must be an array of strings when present');
+if (hasOwn(active, 'verification_evidence_summary')) assert(isNonEmptyString(active.verification_evidence_summary), '.agent/active-slice.json: verification_evidence_summary must be a non-empty string when present');
+if (hasOwn(active, 'review_recorded_at')) assert(active.review_recorded_at === null || typeof active.review_recorded_at === 'number' || (isNonEmptyString(active.review_recorded_at) && !Number.isNaN(Date.parse(active.review_recorded_at))), '.agent/active-slice.json: review_recorded_at must be null, a timestamp number, or an ISO-8601 string when present');
+if (hasOwn(active, 'review_verdict')) assert(isNonEmptyString(active.review_verdict), '.agent/active-slice.json: review_verdict must be a non-empty string when present');
+if (hasOwn(active, 'review_summary')) assert(isNonEmptyString(active.review_summary), '.agent/active-slice.json: review_summary must be a non-empty string when present');
+if (hasOwn(active, 'audit_recorded_at')) assert(active.audit_recorded_at === null || typeof active.audit_recorded_at === 'number' || (isNonEmptyString(active.audit_recorded_at) && !Number.isNaN(Date.parse(active.audit_recorded_at))), '.agent/active-slice.json: audit_recorded_at must be null, a timestamp number, or an ISO-8601 string when present');
+if (hasOwn(active, 'last_auditor_verdict')) assert(active.last_auditor_verdict === null || isNonEmptyString(active.last_auditor_verdict), '.agent/active-slice.json: last_auditor_verdict must be null or a non-empty string when present');
+if (hasOwn(active, 'worktree_clean')) assert(typeof active.worktree_clean === 'boolean', '.agent/active-slice.json: worktree_clean must be boolean when present');
+if (hasOwn(active, 'next_mandatory_action')) assert(isNonEmptyString(active.next_mandatory_action), '.agent/active-slice.json: next_mandatory_action must be a non-empty string when present');
 
 const requiredEvidence = ['schema_version', 'artifact_type', 'subject_type', 'slice_id', 'goal', 'contract_ids', 'basis_commit', 'head_sha', 'verification_commands', 'outcome', 'recorded_at', 'summary'];
 const evidenceSubjectTypes = ['none', 'selected_slice', 'current_head'];

@@ -44,7 +44,7 @@ import {
 } from "./prompt-surfaces";
 import { toolCallBlockReason } from "./policy-guards";
 import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
-import { refreshCompletionStatus } from "./status-surface";
+import { buildInlineRunningLines, formatInlineRunningText, refreshCompletionStatus } from "./status-surface";
 import {
 	buildProfileRecord,
 	completionRootKey,
@@ -1984,109 +1984,6 @@ function pushRecentActivity(items: string[], line: string, maxItems = 8): string
 	if (items[items.length - 1] === normalized) return items;
 	const next = [...items, normalized];
 	return next.slice(-maxItems);
-}
-
-function collapseRecentActivity(items: string[], maxItems = 4): string[] {
-	const collapsed: string[] = [];
-	for (const rawItem of items) {
-		const item = truncateInline(rawItem, 120);
-		if (!item || item.startsWith("done ") || item.startsWith("result ")) continue;
-		if (item.startsWith("assistant:")) continue;
-		if (collapsed[collapsed.length - 1] === item) continue;
-		collapsed.push(item);
-	}
-	return collapsed.slice(-maxItems);
-}
-
-function formatInlineRunningText(theme: any, lines: string[], options?: { primaryAssistant?: boolean }): string {
-	let text = "";
-	for (const [index, line] of lines.entries()) {
-		if (index > 0) text += "\n";
-		if (index === 0) {
-			const [prefix, ...rest] = line.split(" ");
-			text += theme.fg("warning", prefix);
-			if (rest.length > 0) text += ` ${theme.fg("accent", rest.join(" "))}`;
-			continue;
-		}
-		if (line.startsWith("tool:") || line.startsWith("progress:")) {
-			text += theme.fg("toolOutput", line);
-			continue;
-		}
-		if (line.startsWith("activity:")) {
-			text += line.includes("stalled") ? theme.fg("warning", line) : line;
-			continue;
-		}
-		if (line === "recent tools:") {
-			text += theme.fg("muted", line);
-			continue;
-		}
-		if (line.startsWith("- ")) {
-			text += `${theme.fg("muted", "- ")}${theme.fg("muted", line.slice(2))}`;
-			continue;
-		}
-		if (line.startsWith("elapsed:")) {
-			text += line;
-			continue;
-		}
-		if (line.startsWith("assistant:")) {
-			text += options?.primaryAssistant ? line : theme.fg("muted", line);
-			continue;
-		}
-		if (line.startsWith("next:") || line.startsWith("verifying:")) {
-			text += theme.fg("muted", line);
-			continue;
-		}
-		if (line.startsWith("rationale:") || line.startsWith("state-delta:")) {
-			text += line;
-			continue;
-		}
-		text += theme.fg("muted", line);
-	}
-	return text;
-}
-
-function buildInlineRunningLines(details: {
-	role?: string;
-	startedAt?: number;
-	updatedAt?: number;
-	currentAction?: string;
-	toolActivity?: string;
-	toolRecentActivity?: string[];
-	recentActivity?: string[];
-	assistantSummary?: string;
-	progress?: string;
-	rationale?: string;
-	nextStep?: string;
-	verifying?: string;
-	stateDeltas?: string[];
-}): string[] {
-	const lines: string[] = [];
-	let header = "running completion role";
-	if (details.role) header += ` ${details.role}`;
-	lines.push(header);
-	if (details.startedAt !== undefined) lines.push(`elapsed: ${formatElapsed(nowMs() - details.startedAt)}`);
-	const signalLine = formatLiveActivitySignal(
-		liveActivitySignal({ status: "running", startedAt: details.startedAt, updatedAt: details.updatedAt }),
-	);
-	if (signalLine) lines.push(signalLine);
-	const toolLine = details.toolActivity;
-	if (toolLine) lines.push(`tool: ${toolLine}`);
-	if (details.progress) lines.push(`progress: ${details.progress}`);
-	else if (details.assistantSummary) lines.push(`assistant: ${details.assistantSummary}`);
-	else if (details.currentAction && details.currentAction !== toolLine) {
-		lines.push(`assistant: ${details.currentAction.replace(/^assistant:\s*/, "")}`);
-	}
-	if (details.rationale) lines.push(`rationale: ${details.rationale}`);
-	if (details.nextStep) lines.push(`next: ${details.nextStep}`);
-	if (details.verifying) lines.push(`verifying: ${details.verifying}`);
-	for (const delta of (details.stateDeltas ?? []).slice(-4)) lines.push(`state-delta: ${delta}`);
-	const recentTools = collapseRecentActivity(details.toolRecentActivity ?? details.recentActivity ?? []);
-	const recentWithoutCurrent = recentTools.filter((item) => item !== toolLine);
-	if (recentWithoutCurrent.length > 0) {
-		lines.push("recent tools:");
-		for (const item of recentWithoutCurrent) lines.push(`- ${item}`);
-	}
-	return lines;
 }
 
 function parseStructuredProgress(text: string): {
