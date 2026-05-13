@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.49
+
 ### Changed
 
 - restored optional `/cook <hint>` support as a soft intent hint that biases context analysis, proposal ranking, active-workflow disambiguation, and next-round startup without bypassing fail-closed routing or the approval-only Start/Cancel gate
