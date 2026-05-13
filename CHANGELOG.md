@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.48
+
+### Fixed
+
+- stopped injecting active completion workflow routing into ordinary non-`/cook` main-chat turns after a repo had been activated earlier in the same Pi process, so stale canonical stop-wave state can no longer pull unrelated user requests into `completion-regrounder` unless a fresh `/cook` driver prompt is actually in flight
+
 ## 0.1.47
 
 ### Changed

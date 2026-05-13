@@ -242,8 +242,19 @@ function hasCompletionRoutingActivation(snapshot: CompletionStateSnapshot | unde
 	return activatedCompletionRoutingRoots.has(path.resolve(snapshot.files.root));
 }
 
-function shouldInjectCompletionWorkflowContext(snapshot: CompletionStateSnapshot | undefined): boolean {
-	return hasCompletionRoutingActivation(snapshot);
+function latestUserOrCustomTurnText(ctx: { sessionManager?: any }): string | undefined {
+	return collectRecentDiscussionEntries(ctx as { sessionManager: any }, { isRecord, asString, isStaleContextError }, 1)[0]?.text;
+}
+
+function isCompletionDriverPromptTurn(ctx: { sessionManager?: any }): boolean {
+	const latest = latestUserOrCustomTurnText(ctx);
+	if (!latest) return false;
+	if (!/^\/skill:completion-protocol\b/.test(latest)) return false;
+	return /(?:Start or continue the completion workflow for this repo\.|Resume the completion workflow from canonical state\.)/.test(latest);
+}
+
+function shouldInjectCompletionWorkflowContext(snapshot: CompletionStateSnapshot | undefined, ctx: { sessionManager?: any }): boolean {
+	return hasCompletionRoutingActivation(snapshot) && isCompletionDriverPromptTurn(ctx);
 }
 
 function buildDoneWorkflowBoundaryReminder(snapshot: CompletionStateSnapshot): string {
@@ -939,7 +950,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
 		if (shouldTestAutoContinueOnSessionStart()) {
 			const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
-			if (hasCompletionRoutingActivation(snapshot)) {
+			if (hasCompletionRoutingActivation(snapshot) && isCompletionDriverPromptTurn(ctx)) {
 				await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 			}
 		}
@@ -955,19 +966,20 @@ export default function completionExtension(pi: ExtensionAPI) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
-		if (hasCompletionRoutingActivation(snapshot)) {
+		if (hasCompletionRoutingActivation(snapshot) && isCompletionDriverPromptTurn(ctx)) {
 			await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 		}
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
-		if (loaded) {
+		const driverPromptTurn = isCompletionDriverPromptTurn(ctx);
+		if (loaded && driverPromptTurn) {
 			const rootKey = completionRootKey(loaded.snapshot, getCtxCwd(ctx));
 			const fingerprint = completionContinuationFingerprint(loaded.snapshot);
 			if (fingerprint) markQueuedDriverPromptInFlight(rootKey, fingerprint);
 		}
-		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
+		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot, ctx)) return;
 		const additions = isWorkflowDone(loaded.snapshot)
 			? [buildDoneWorkflowBoundaryReminder(loaded.snapshot)]
 			: [composeSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
