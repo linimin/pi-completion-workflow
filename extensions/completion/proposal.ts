@@ -85,6 +85,256 @@ type AnalystParseDeps = ProposalCommonDeps & {
 	isRecord: (value: unknown) => value is JsonRecord;
 };
 
+function localAsString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function localAsStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+		: [];
+}
+
+function localIsRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractTextFromMessageContent(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((item) => {
+			if (!localIsRecord(item)) return "";
+			if (item.type !== "text") return "";
+			return localAsString(item.text) ?? "";
+		})
+		.filter((item) => item.length > 0)
+		.join("\n")
+		.trim();
+}
+
+export function normalizeMissionAnchorText(value: string): string {
+	return value
+		.replace(/^\/(?:cook|complete)\s+/i, "")
+		.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+		.replace(/^\s*(please|pls|can you|could you|help me|i want to|we need to|let'?s|continue to|continue|resume)\s+/i, "")
+		.replace(/\s+/g, " ")
+		.replace(/[。！？.!?]+$/u, "")
+		.trim();
+}
+
+export function isWeakMissionAnchor(value: string): boolean {
+	const normalized = value.trim().toLowerCase();
+	if (normalized.length < 8) return true;
+	if (["continue", "resume", "fix", "fix it", "work on this", "help", "do it", "try again"].includes(normalized)) return true;
+	if (/^(continue|resume|fix|help|work on)(\s+.*)?$/i.test(normalized) && normalized.split(/\s+/).length <= 3) return true;
+	return false;
+}
+
+export function deriveMissionAnchor(rawGoal: string, projectName: string): string {
+	const normalized = normalizeMissionAnchorText(rawGoal);
+	if (!normalized || isWeakMissionAnchor(normalized)) {
+		return `Drive ${projectName} to truthful, verifiable completion.`;
+	}
+
+	let mission = normalized
+		.replace(/\b(end[- ]to[- ]end|for me|thanks|thank you)\b/gi, "")
+		.replace(/\s+/g, " ")
+		.trim();
+
+	mission = mission
+		.replace(/\bwith tests and docs\b/gi, "with tests and docs parity")
+		.replace(/\bwith tests and documentation\b/gi, "with tests and docs parity")
+		.replace(/\bwith docs\b/gi, "with docs parity")
+		.trim();
+
+	if (!/[.!?。！？]$/u.test(mission)) mission += ".";
+	return mission;
+}
+
+export function assessMissionAnchor(rawGoal: string, projectName: string): { derived: string } {
+	return { derived: deriveMissionAnchor(rawGoal, projectName) };
+}
+
+export function stripCodeBlocks(text: string): string {
+	return text.replace(/```[\s\S]*?```/g, " ");
+}
+
+const MISSION_SCOPE_FILTER_STOPWORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"by",
+	"for",
+	"from",
+	"goal",
+	"goals",
+	"in",
+	"into",
+	"is",
+	"it",
+	"its",
+	"mission",
+	"of",
+	"on",
+	"or",
+	"scope",
+	"that",
+	"the",
+	"their",
+	"this",
+	"to",
+	"using",
+	"with",
+	"workflow",
+]);
+
+function missionScopeFilterTokens(text: string): string[] {
+	const normalized = normalizeProposalLine(text).toLowerCase();
+	const tokens = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+	return tokens.filter((token) => {
+		if (/^[\p{Script=Han}]+$/u.test(token)) return token.length >= 2;
+		if (token.length < 2) return false;
+		return !MISSION_SCOPE_FILTER_STOPWORDS.has(token);
+	});
+}
+
+export function isSessionScopeItemMissionRelevant(item: string, mission: string): boolean {
+	const normalizedItem = normalizeProposalLine(item).toLowerCase();
+	const normalizedMission = normalizeMissionAnchorText(mission).toLowerCase();
+	if (!normalizedItem || !normalizedMission) return true;
+	if (normalizedItem.includes(normalizedMission) || normalizedMission.includes(normalizedItem)) return true;
+	const itemTokens = [...new Set(missionScopeFilterTokens(normalizedItem))];
+	const missionTokens = new Set(missionScopeFilterTokens(normalizedMission));
+	if (itemTokens.length === 0 || missionTokens.size === 0) return true;
+	const overlap = itemTokens.filter((token) => missionTokens.has(token));
+	if (overlap.length >= 2) return true;
+	return overlap.some((token) => token.length >= 6 || /[\p{Script=Han}]/u.test(token));
+}
+
+function missionAnchorSemanticTokens(text: string): string[] {
+	return [...new Set(missionScopeFilterTokens(normalizeMissionAnchorText(text).toLowerCase()))];
+}
+
+function missionAnchorOrderedTokenOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
+	if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+	const dp = new Array(rightTokens.length + 1).fill(0);
+	for (const leftToken of leftTokens) {
+		let previous = 0;
+		for (let index = 0; index < rightTokens.length; index += 1) {
+			const nextPrevious = dp[index + 1];
+			if (leftToken === rightTokens[index]) {
+				dp[index + 1] = previous + 1;
+			} else {
+				dp[index + 1] = Math.max(dp[index + 1], dp[index]);
+			}
+			previous = nextPrevious;
+		}
+	}
+	return dp[rightTokens.length] / Math.max(leftTokens.length, rightTokens.length);
+}
+
+function missionAnchorBigramOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
+	if (leftTokens.length < 2 || rightTokens.length < 2) return 0;
+	const leftBigrams = new Set(leftTokens.slice(0, -1).map((token, index) => `${token} ${leftTokens[index + 1]}`));
+	const rightBigrams = new Set(rightTokens.slice(0, -1).map((token, index) => `${token} ${rightTokens[index + 1]}`));
+	if (leftBigrams.size === 0 || rightBigrams.size === 0) return 0;
+	let overlap = 0;
+	for (const bigram of leftBigrams) {
+		if (rightBigrams.has(bigram)) overlap += 1;
+	}
+	return overlap / Math.max(leftBigrams.size, rightBigrams.size);
+}
+
+export function missionAnchorsStrictlyEquivalent(left: string, right: string): boolean {
+	return normalizeMissionAnchorText(left).toLowerCase() === normalizeMissionAnchorText(right).toLowerCase();
+}
+
+const MISSION_NEGATION_CUE_REGEX = /(?:^|[^\p{L}\p{N}_])(?:no|not|without|never|cannot|don['’]?t)(?=$|[^\p{L}\p{N}_])/u;
+
+function missionAnchorHasNegationCue(text: string): boolean {
+	return MISSION_NEGATION_CUE_REGEX.test(text);
+}
+
+export function missionAnchorsLikelyEquivalent(left: string, right: string): boolean {
+	const normalizedLeft = normalizeMissionAnchorText(left).toLowerCase();
+	const normalizedRight = normalizeMissionAnchorText(right).toLowerCase();
+	if (!normalizedLeft || !normalizedRight) return false;
+	const leftHasNegationCue = missionAnchorHasNegationCue(normalizedLeft);
+	const rightHasNegationCue = missionAnchorHasNegationCue(normalizedRight);
+	if (leftHasNegationCue !== rightHasNegationCue) return false;
+	if (normalizedLeft === normalizedRight) return true;
+	if (!leftHasNegationCue && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft))) return true;
+	const leftTokens = missionAnchorSemanticTokens(normalizedLeft);
+	const rightTokens = missionAnchorSemanticTokens(normalizedRight);
+	if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+	const rightSet = new Set(rightTokens);
+	const overlap = leftTokens.filter((token) => rightSet.has(token));
+	if (overlap.length < 3) return false;
+	const maxLen = Math.max(leftTokens.length, rightTokens.length);
+	if (overlap.length / maxLen < 0.75) return false;
+	if (missionAnchorOrderedTokenOverlapRatio(leftTokens, rightTokens) < 0.75) return false;
+	if (Math.min(leftTokens.length, rightTokens.length) < 4) return true;
+	return missionAnchorBigramOverlapRatio(leftTokens, rightTokens) >= 0.5;
+}
+
+export function collectRecentDiscussionEntries(ctx: { sessionManager: any }, deps: {
+	isRecord: (value: unknown) => boolean;
+	asString?: (value: unknown) => string | undefined;
+	isStaleContextError?: (error: unknown) => boolean;
+}, limit = 8): RecentDiscussionEntry[] {
+	let branch: any[] = [];
+	try {
+		branch = ctx.sessionManager?.getBranch?.() ?? [];
+	} catch (error) {
+		if (deps.isStaleContextError?.(error)) return [];
+		throw error;
+	}
+	const asStringValue = deps.asString ?? localAsString;
+	const entries: RecentDiscussionEntry[] = [];
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const entry = branch[index];
+		if (!deps.isRecord(entry) || entry.type !== "message" || !deps.isRecord(entry.message)) continue;
+		const message = entry.message as JsonRecord;
+		let text = "";
+		let role: RecentDiscussionEntry["role"] | undefined;
+		const messageRole = asStringValue(message.role);
+		if (messageRole === "user" || messageRole === "custom") {
+			text = extractTextFromMessageContent(message.content);
+			role = messageRole;
+		}
+		if (!text || !role) continue;
+		const trimmed = text.trim();
+		if (!trimmed || /^\/(?:cook|complete)\b/i.test(trimmed)) continue;
+		entries.push({ role, text: trimmed });
+		if (entries.length >= limit) break;
+	}
+	return entries;
+}
+
+export function serializeRecentDiscussionEntries(entries: RecentDiscussionEntry[]): string {
+	return entries
+		.slice()
+		.reverse()
+		.map((entry, index) => `[${index + 1}] ${entry.role.toUpperCase()}\n${entry.text}`)
+		.join("\n\n");
+}
+
+export function extractJsonObjectFromText(text: string): string | undefined {
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+	const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+	if (unfenced.startsWith("{") && unfenced.endsWith("}")) return unfenced;
+	const start = unfenced.indexOf("{");
+	const end = unfenced.lastIndexOf("}");
+	if (start < 0 || end <= start) return undefined;
+	return unfenced.slice(start, end + 1);
+}
+
 export function normalizeProposalLine(line: string): string {
 	return line
 		.replace(/^[-*+]\s+/, "")
@@ -372,7 +622,20 @@ export function shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal: Co
 	);
 }
 
-export function parseContextProposalAnalystOutput(raw: string, projectName: string, deps: AnalystParseDeps): ContextProposal | undefined {
+export function parseContextProposalAnalystOutput(
+	raw: string,
+	projectName: string,
+	deps: AnalystParseDeps = {
+		extractJsonObjectFromText,
+		isRecord: localIsRecord,
+		asString: localAsString,
+		asStringArray: localAsStringArray,
+		assessMissionAnchor,
+		normalizeMissionAnchorText,
+		isWeakMissionAnchor,
+		missionAnchorsStrictlyEquivalent,
+	},
+): ContextProposal | undefined {
 	const jsonText = deps.extractJsonObjectFromText(raw);
 	if (!jsonText) return undefined;
 	let parsed: unknown;
@@ -422,9 +685,9 @@ export function parseContextProposalAnalystOutput(raw: string, projectName: stri
 export function buildContextProposalAnalystPromptFromEntries(
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
-	serializeRecentDiscussionEntries: (entries: RecentDiscussionEntry[]) => string,
+	serializeEntries: (entries: RecentDiscussionEntry[]) => string = serializeRecentDiscussionEntries,
 ): string {
-	return buildContextProposalAnalystPrompt(projectName, serializeRecentDiscussionEntries(recentEntries));
+	return buildContextProposalAnalystPrompt(projectName, serializeEntries(recentEntries));
 }
 
 export function parseContextProposal(text: string, projectName: string, deps: ProposalParseDeps): ContextProposal | undefined {

@@ -77,10 +77,10 @@ assertIncludes('scripts/release-check.sh', 'bash ./scripts/active-slice-contract
 assertIncludes('.agent/verify_completion_stop.sh', 'npm run release-check >/dev/null');
 assertIncludes('extensions/completion/state-store.ts', 'export function buildVerifyControlPlaneScript(');
 assertIncludes('extensions/completion/state-store.ts', 'return fs.readFileSync(trackedScriptPath, "utf8");');
-assertIncludes('extensions/completion/index.ts', 'Selected/in-progress/committed/done .agent/active-slice.json is the canonical implementation contract.');
-assertIncludes('extensions/completion/index.ts', 'Active slice contract drift: ${activeContractDrift}');
+assertIncludes('extensions/completion/prompt-surfaces.ts', 'Selected/in-progress/committed/done .agent/active-slice.json is the canonical implementation contract.');
+assertIncludes('extensions/completion/prompt-surfaces.ts', 'Active slice contract drift: ${args.activeContractDrift}');
 assertIncludes('extensions/completion/index.ts', 'Canonical active-slice contract drift is currently: ${activeContractDrift}');
-assertIncludes('extensions/completion/index.ts', '`active_slice_contract_drift_fields: ${activeContractDrift}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`active_slice_contract_drift_fields: ${args.activeSliceContractDrift}`');
 assertIncludes('extensions/completion/index.ts', 'treat .agent/active-slice.json as the canonical implementation contract');
 assertIncludes('.agent/verify_completion_control_plane.sh', "const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];");
 assertIncludes('.agent/verify_completion_control_plane.sh', 'slice_id must match a slice in .agent/plan.json when status carries an exact handoff');

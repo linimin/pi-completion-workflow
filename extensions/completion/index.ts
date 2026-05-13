@@ -15,13 +15,17 @@ import {
 	registerCookCommand,
 } from "./driver";
 import {
-	buildContextProposalAnalystPromptFromEntries,
+	assessMissionAnchor,
+	collectRecentDiscussionEntries,
 	deriveCookContextProposalFromRecentDiscussion,
 	finalizeContextProposalAnalysis,
-	normalizeProposalLine,
-	parseContextProposalAnalystOutput as parseExtractedContextProposalAnalystOutput,
+	isWeakMissionAnchor,
+	missionAnchorsLikelyEquivalent,
+	missionAnchorsStrictlyEquivalent,
+	normalizeMissionAnchorText,
 	resolveContextProposalConfirmationAction,
 	shouldTreatBareActiveWorkflowProposalAsClearRefocus,
+	stripCodeBlocks,
 } from "./proposal";
 import type {
 	ContextProposal,
@@ -30,7 +34,6 @@ import type {
 	ContextProposalConfirmOptions,
 	ContextProposalConfirmationLayout,
 	ContextProposalDecision,
-	RecentDiscussionEntry,
 } from "./proposal";
 import {
 	buildContextProposalConfirmationLayout as buildExtractedContextProposalConfirmationLayout,
@@ -38,12 +41,13 @@ import {
 	buildContextProposalContinuationReason as buildExtractedContextProposalContinuationReason,
 	buildEvaluationRoleContextLines as buildExtractedEvaluationRoleContextLines,
 	buildEvaluationRoleReminderText as buildExtractedEvaluationRoleReminderText,
-	contextProposalAnalystProgressLines as buildExtractedContextProposalAnalystProgressLines,
+	buildResumeCapsule as buildExtractedResumeCapsule,
+	buildSystemReminder as buildExtractedSystemReminder,
 	maybeWriteContextProposalConfirmationSnapshot,
 	maybeWriteContextProposalSnapshot,
 } from "./prompt-surfaces";
 import { toolCallBlockReason } from "./policy-guards";
-import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
+import { analyzeContextProposalWithAgent, runCompletionRole } from "./role-runner";
 import {
 	applyLiveRoleEvent,
 	buildInlineRunningLines,
@@ -52,7 +56,6 @@ import {
 	formatElapsed,
 	formatInlineRunningText,
 	nowMs,
-	pushRecentActivity,
 	refreshCompletionStatus,
 	truncateInline,
 } from "./status-surface";
@@ -102,53 +105,6 @@ const RUBRIC_EVALUATION_ROLES = ["completion-reviewer", "completion-auditor", "c
 
 type RubricEvaluationRole = (typeof RUBRIC_EVALUATION_ROLES)[number];
 
-class StartupAnalystOverlay extends Container {
-	private readonly border: DynamicBorder;
-	private readonly title: Text;
-	private readonly body: Text;
-	private readonly footer: Text;
-	private lines: string[] = [];
-	onAbort?: () => void;
-
-	constructor(private readonly theme: any) {
-		super();
-		this.border = new DynamicBorder((s: string) => this.theme.fg("accent", s));
-		this.title = new Text("", 1, 0);
-		this.body = new Text("", 1, 1);
-		this.footer = new Text("", 1, 0);
-		this.addChild(this.border);
-		this.addChild(this.title);
-		this.addChild(this.body);
-		this.addChild(this.footer);
-		this.updateDisplay();
-	}
-
-	setLines(lines: string[]): void {
-		this.lines = [...lines];
-		this.updateDisplay();
-		this.invalidate();
-	}
-
-	private updateDisplay(): void {
-		this.title.setText(this.theme.fg("accent", this.theme.bold("/cook proposal analyst")));
-		this.body.setText(formatInlineRunningText(this.theme, this.lines, { primaryAssistant: true }));
-		this.footer.setText(this.theme.fg("muted", "Esc/Ctrl+C cancel • This analysis runs before /cook writes canonical workflow state"));
-	}
-
-	override handleInput(data: string): void {
-		if (data === "\u001b" || data === "\u0003") {
-			this.onAbort?.();
-			return;
-		}
-		// Container does not implement handleInput; ignore all other keys.
-	}
-
-	override invalidate(): void {
-		super.invalidate();
-		this.updateDisplay();
-	}
-}
-
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const activatedCompletionRoutingRoots = new Set<string>();
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
@@ -164,32 +120,6 @@ function roleFromEnv(): string | undefined {
 function candidateSlices(plan: JsonRecord | undefined): JsonRecord[] {
 	const slices = plan?.candidate_slices;
 	return Array.isArray(slices) ? slices.filter(isRecord) : [];
-}
-
-function normalizeMissionAnchorText(value: string): string {
-	return value
-		.replace(/^\/(?:cook|complete)\s+/i, "")
-		.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
-		.replace(/^\s*(please|pls|can you|could you|help me|i want to|we need to|let'?s|continue to|continue|resume)\s+/i, "")
-		.replace(/\s+/g, " ")
-		.replace(/[。！？.!?]+$/u, "")
-		.trim();
-}
-
-function isWeakMissionAnchor(value: string): boolean {
-	const normalized = value.trim().toLowerCase();
-	if (normalized.length < 8) return true;
-	if (["continue", "resume", "fix", "fix it", "work on this", "help", "do it", "try again"].includes(normalized)) return true;
-	if (/^(continue|resume|fix|help|work on)(\s+.*)?$/i.test(normalized) && normalized.split(/\s+/).length <= 3) return true;
-	return false;
-}
-
-type MissionAnchorAssessment = {
-	derived: string;
-};
-
-function assessMissionAnchor(rawGoal: string, projectName: string): MissionAnchorAssessment {
-	return { derived: deriveMissionAnchor(rawGoal, projectName) };
 }
 
 type ExistingWorkflowDecision =
@@ -327,146 +257,6 @@ function buildDoneWorkflowBoundaryReminder(snapshot: CompletionStateSnapshot): s
 	].join(" ");
 }
 
-function extractTextFromMessageContent(content: unknown): string {
-	if (typeof content === "string") return content.trim();
-	if (!Array.isArray(content)) return "";
-	return content
-		.map((item) => {
-			if (!isRecord(item)) return "";
-			if (item.type !== "text") return "";
-			return asString(item.text) ?? "";
-		})
-		.filter((item) => item.length > 0)
-		.join("\n")
-		.trim();
-}
-
-function stripCodeBlocks(text: string): string {
-	return text.replace(/```[\s\S]*?```/g, " ");
-}
-
-const MISSION_SCOPE_FILTER_STOPWORDS = new Set([
-	"a",
-	"an",
-	"and",
-	"are",
-	"as",
-	"at",
-	"be",
-	"by",
-	"for",
-	"from",
-	"goal",
-	"goals",
-	"in",
-	"into",
-	"is",
-	"it",
-	"its",
-	"mission",
-	"of",
-	"on",
-	"or",
-	"scope",
-	"that",
-	"the",
-	"their",
-	"this",
-	"to",
-	"using",
-	"with",
-	"workflow",
-]);
-
-function missionScopeFilterTokens(text: string): string[] {
-	const normalized = normalizeProposalLine(text).toLowerCase();
-	const tokens = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
-	return tokens.filter((token) => {
-		if (/^[\p{Script=Han}]+$/u.test(token)) return token.length >= 2;
-		if (token.length < 2) return false;
-		return !MISSION_SCOPE_FILTER_STOPWORDS.has(token);
-	});
-}
-
-function isSessionScopeItemMissionRelevant(item: string, mission: string): boolean {
-	const normalizedItem = normalizeProposalLine(item).toLowerCase();
-	const normalizedMission = normalizeMissionAnchorText(mission).toLowerCase();
-	if (!normalizedItem || !normalizedMission) return true;
-	if (normalizedItem.includes(normalizedMission) || normalizedMission.includes(normalizedItem)) return true;
-	const itemTokens = [...new Set(missionScopeFilterTokens(normalizedItem))];
-	const missionTokens = new Set(missionScopeFilterTokens(normalizedMission));
-	if (itemTokens.length === 0 || missionTokens.size === 0) return true;
-	const overlap = itemTokens.filter((token) => missionTokens.has(token));
-	if (overlap.length >= 2) return true;
-	return overlap.some((token) => token.length >= 6 || /[\p{Script=Han}]/u.test(token));
-}
-
-function missionAnchorSemanticTokens(text: string): string[] {
-	return [...new Set(missionScopeFilterTokens(normalizeMissionAnchorText(text).toLowerCase()))];
-}
-
-function missionAnchorOrderedTokenOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
-	if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
-	const dp = new Array(rightTokens.length + 1).fill(0);
-	for (const leftToken of leftTokens) {
-		let previous = 0;
-		for (let index = 0; index < rightTokens.length; index += 1) {
-			const nextPrevious = dp[index + 1];
-			if (leftToken === rightTokens[index]) {
-				dp[index + 1] = previous + 1;
-			} else {
-				dp[index + 1] = Math.max(dp[index + 1], dp[index]);
-			}
-			previous = nextPrevious;
-		}
-	}
-	return dp[rightTokens.length] / Math.max(leftTokens.length, rightTokens.length);
-}
-
-function missionAnchorBigramOverlapRatio(leftTokens: string[], rightTokens: string[]): number {
-	if (leftTokens.length < 2 || rightTokens.length < 2) return 0;
-	const leftBigrams = new Set(leftTokens.slice(0, -1).map((token, index) => `${token} ${leftTokens[index + 1]}`));
-	const rightBigrams = new Set(rightTokens.slice(0, -1).map((token, index) => `${token} ${rightTokens[index + 1]}`));
-	if (leftBigrams.size === 0 || rightBigrams.size === 0) return 0;
-	let overlap = 0;
-	for (const bigram of leftBigrams) {
-		if (rightBigrams.has(bigram)) overlap += 1;
-	}
-	return overlap / Math.max(leftBigrams.size, rightBigrams.size);
-}
-
-function missionAnchorsStrictlyEquivalent(left: string, right: string): boolean {
-	return normalizeMissionAnchorText(left).toLowerCase() === normalizeMissionAnchorText(right).toLowerCase();
-}
-
-const MISSION_NEGATION_CUE_REGEX = /(?:^|[^\p{L}\p{N}_])(?:no|not|without|never|cannot|don['’]?t)(?=$|[^\p{L}\p{N}_])/u;
-
-function missionAnchorHasNegationCue(text: string): boolean {
-	return MISSION_NEGATION_CUE_REGEX.test(text);
-}
-
-function missionAnchorsLikelyEquivalent(left: string, right: string): boolean {
-	const normalizedLeft = normalizeMissionAnchorText(left).toLowerCase();
-	const normalizedRight = normalizeMissionAnchorText(right).toLowerCase();
-	if (!normalizedLeft || !normalizedRight) return false;
-	const leftHasNegationCue = missionAnchorHasNegationCue(normalizedLeft);
-	const rightHasNegationCue = missionAnchorHasNegationCue(normalizedRight);
-	if (leftHasNegationCue !== rightHasNegationCue) return false;
-	if (normalizedLeft === normalizedRight) return true;
-	if (!leftHasNegationCue && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft))) return true;
-	const leftTokens = missionAnchorSemanticTokens(normalizedLeft);
-	const rightTokens = missionAnchorSemanticTokens(normalizedRight);
-	if (leftTokens.length === 0 || rightTokens.length === 0) return false;
-	const rightSet = new Set(rightTokens);
-	const overlap = leftTokens.filter((token) => rightSet.has(token));
-	if (overlap.length < 3) return false;
-	const maxLen = Math.max(leftTokens.length, rightTokens.length);
-	if (overlap.length / maxLen < 0.75) return false;
-	if (missionAnchorOrderedTokenOverlapRatio(leftTokens, rightTokens) < 0.75) return false;
-	if (Math.min(leftTokens.length, rightTokens.length) < 4) return true;
-	return missionAnchorBigramOverlapRatio(leftTokens, rightTokens) >= 0.5;
-}
-
 function maybeWriteActiveWorkflowRoutingSnapshot(assessment: ActiveWorkflowProposalAssessment): void {
 	const snapshotPath = completionTestActiveWorkflowRoutingSnapshotPath();
 	if (!snapshotPath) return;
@@ -489,266 +279,6 @@ function maybeWriteActiveWorkflowRoutingSnapshot(assessment: ActiveWorkflowPropo
 			2,
 		)}\n`,
 	);
-}
-
-const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
-	"You analyze recent /cook startup discussion and return a strict JSON object.",
-	"Do not emit markdown, code fences, or commentary.",
-	"Return exactly one JSON object with keys: mission, scope, constraints, acceptance, critique, risks, task_type, evaluation_profile, confidence, possible_noise.",
-	"mission must be a concise implementation mission anchor sentence.",
-	"scope must contain only work items that directly support the mission.",
-	"constraints must contain guardrails or non-goals explicitly stated or strongly implied by the discussion.",
-	"acceptance must contain verifiable outcomes explicitly stated or strongly implied by the discussion.",
-	"critique must contain operator-facing cautions, concerns, or reminders that should be shown separately from mission and scope later.",
-	"risks must contain concrete failure modes or regressions that the later workflow should keep in view.",
-	"task_type and evaluation_profile should be candidate routing hints only; reuse the existing completion vocabulary when it clearly fits instead of inventing new schema names.",
-	"possible_noise should list discussion points that look stale, weakly related, or unsafe to promote into scope.",
-	"When discussion is insufficient, prefer empty arrays and a low confidence value over invention.",
-].join(" ");
-
-function collectRecentDiscussionEntries(ctx: { sessionManager: any }, limit = 8): RecentDiscussionEntry[] {
-	let branch: any[] = [];
-	try {
-		branch = ctx.sessionManager?.getBranch?.() ?? [];
-	} catch (error) {
-		if (isStaleContextError(error)) return [];
-		throw error;
-	}
-	const entries: RecentDiscussionEntry[] = [];
-	for (let index = branch.length - 1; index >= 0; index -= 1) {
-		const entry = branch[index];
-		if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
-		const message = entry.message as JsonRecord;
-		let text = "";
-		let role: RecentDiscussionEntry["role"] | undefined;
-		const messageRole = asString(message.role);
-		if (messageRole === "user" || messageRole === "custom") {
-			text = extractTextFromMessageContent(message.content);
-			role = messageRole;
-		}
-		if (!text || !role) continue;
-		const trimmed = text.trim();
-		if (!trimmed || /^\/(?:cook|complete)\b/i.test(trimmed)) continue;
-		entries.push({ role, text: trimmed });
-		if (entries.length >= limit) break;
-	}
-	return entries;
-}
-
-function serializeRecentDiscussionEntries(entries: RecentDiscussionEntry[]): string {
-	return entries
-		.slice()
-		.reverse()
-		.map((entry, index) => `[${index + 1}] ${entry.role.toUpperCase()}\n${entry.text}`)
-		.join("\n\n");
-}
-
-function extractJsonObjectFromText(text: string): string | undefined {
-	const trimmed = text.trim();
-	if (!trimmed) return undefined;
-	const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-	if (unfenced.startsWith("{") && unfenced.endsWith("}")) return unfenced;
-	const start = unfenced.indexOf("{");
-	const end = unfenced.lastIndexOf("}");
-	if (start < 0 || end <= start) return undefined;
-	return unfenced.slice(start, end + 1);
-}
-
-function parseContextProposalAnalystOutput(raw: string, projectName: string): ContextProposal | undefined {
-	return parseExtractedContextProposalAnalystOutput(raw, projectName, {
-		extractJsonObjectFromText,
-		isRecord,
-		asString,
-		asStringArray,
-		assessMissionAnchor,
-		normalizeMissionAnchorText,
-		isWeakMissionAnchor,
-		missionAnchorsStrictlyEquivalent,
-	});
-}
-
-function contextProposalAnalystModelArg(model: unknown): string | undefined {
-	if (!isRecord(model)) return undefined;
-	const provider = asString(model.provider);
-	const id = asString(model.id);
-	return provider && id ? `${provider}/${id}` : undefined;
-}
-
-function buildContextProposalAnalystPrompt(projectName: string, recentEntries: RecentDiscussionEntry[]): string {
-	return buildContextProposalAnalystPromptFromEntries(projectName, recentEntries, serializeRecentDiscussionEntries);
-}
-
-function contextProposalAnalystProgressLines(activity: LiveRoleActivity): string[] {
-	return buildExtractedContextProposalAnalystProgressLines(activity, buildInlineRunningLines);
-}
-
-async function runContextProposalAnalystSubprocess(
-	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any },
-	projectName: string,
-	recentEntries: RecentDiscussionEntry[],
-): Promise<string | undefined> {
-	const modelArg = contextProposalAnalystModelArg(ctx.model);
-	if (!modelArg) return undefined;
-	const cwd = getCtxCwd(ctx);
-	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
-	const rootKey = completionRootKey(undefined, cwd);
-	const prompt = buildContextProposalAnalystPrompt(projectName, recentEntries);
-	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
-	const analystRole = "cook-proposal-analyst";
-	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
-	const invocation = getPiInvocation(args);
-	const liveActivity = createLiveRoleActivity(analystRole);
-	liveActivity.progress = "Analyzing recent discussion";
-	liveActivity.currentAction = "Reading recent discussion and preparing a startup proposal";
-	liveActivity.assistantSummary = liveActivity.progress;
-	liveActivity.recentActivity = pushRecentActivity(liveActivity.recentActivity, `assistant: ${liveActivity.progress}`);
-	const messages: RoleMessage[] = [];
-	let stderr = "";
-	let overlay: StartupAnalystOverlay | undefined;
-	let finishOverlay: ((value: string | undefined) => void) | undefined;
-	let overlaySettled = false;
-	const settleOverlay = (value: string | undefined) => {
-		if (overlaySettled) return;
-		overlaySettled = true;
-		finishOverlay?.(value);
-	};
-	const updateActivity = (fresh = false) => {
-		if (fresh) liveActivity.updatedAt = nowMs();
-		liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: "running" }));
-		void refreshCompletionStatus({
-			ctx,
-			liveRoleActivityByRoot,
-			completionStatusKey: COMPLETION_STATUS_KEY,
-			safeUiCall,
-			getCtxCwd,
-			getCtxHasUI,
-			getCtxUi,
-		});
-		overlay?.setLines(contextProposalAnalystProgressLines(liveActivity));
-	};
-	const heartbeat = setInterval(() => updateActivity(false), LIVE_ROLE_HEARTBEAT_MS);
-	const run = async (): Promise<string | undefined> => {
-		try {
-			updateActivity(true);
-			const output = await new Promise<string | undefined>((resolve) => {
-				const proc = spawn(invocation.command, invocation.args, {
-					cwd: runCwd,
-					env: process.env,
-					stdio: ["ignore", "pipe", "pipe"],
-					shell: false,
-				});
-				let settled = false;
-				const resolveOnce = (value: string | undefined) => {
-					if (settled) return;
-					settled = true;
-					resolve(value);
-				};
-				const abort = () => {
-					proc.kill("SIGTERM");
-					resolveOnce(undefined);
-				};
-				const handleSigint = () => abort();
-				let buffer = "";
-				const processLine = (line: string) => {
-					if (!line.trim()) return;
-					try {
-						const event = JSON.parse(line) as JsonRecord;
-						if (applyLiveRoleEvent(liveActivity, event, messages)) updateActivity(true);
-					} catch {
-						// ignore malformed lines
-					}
-				};
-				proc.stdout.on("data", (chunk) => {
-					buffer += chunk.toString();
-					const lines = buffer.split("\n");
-					buffer = lines.pop() ?? "";
-					for (const line of lines) processLine(line);
-				});
-				proc.stderr.on("data", (chunk) => {
-					stderr += chunk.toString();
-				});
-				proc.on("close", (code) => {
-					process.off("SIGINT", handleSigint);
-					if (buffer.trim()) processLine(buffer);
-					resolveOnce(code === 0 ? liveActivity.lastAssistantText?.trim() || undefined : undefined);
-				});
-				proc.on("error", () => {
-					process.off("SIGINT", handleSigint);
-					resolveOnce(undefined);
-				});
-				process.once("SIGINT", handleSigint);
-				if (overlay) {
-					overlay.onAbort = () => {
-						process.off("SIGINT", handleSigint);
-						abort();
-					};
-				}
-			});
-			liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: output ? "ok" : "error" }));
-			await refreshCompletionStatus({
-				ctx,
-				liveRoleActivityByRoot,
-				completionStatusKey: COMPLETION_STATUS_KEY,
-				safeUiCall,
-				getCtxCwd,
-				getCtxHasUI,
-				getCtxUi,
-			});
-			return output;
-		} finally {
-			clearInterval(heartbeat);
-			setTimeout(() => {
-				const current = liveRoleActivityByRoot.get(rootKey);
-				if (current && current.role === analystRole && current.status !== "running") {
-					liveRoleActivityByRoot.delete(rootKey);
-					void refreshCompletionStatus({
-						ctx,
-						liveRoleActivityByRoot,
-						completionStatusKey: COMPLETION_STATUS_KEY,
-						safeUiCall,
-						getCtxCwd,
-						getCtxHasUI,
-						getCtxUi,
-					});
-				}
-			}, 10_000);
-			await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
-		}
-	};
-	if (getCtxHasUI(ctx)) {
-		const ui = getCtxUi(ctx);
-		if (ui) {
-			return await ui.custom<string | undefined>((_tui, theme, _kb, done) => {
-				finishOverlay = done;
-				overlay = new StartupAnalystOverlay(theme);
-				overlay.setLines(contextProposalAnalystProgressLines(liveActivity));
-				run().then(settleOverlay).catch(() => settleOverlay(undefined));
-				return overlay;
-			});
-		}
-	}
-	return await run();
-}
-
-async function analyzeContextProposalWithAgent(
-	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any; modelRegistry?: any },
-	projectName: string,
-	recentEntries: RecentDiscussionEntry[],
-): Promise<ContextProposal | undefined> {
-	if (shouldDisableContextProposalAnalyst()) return undefined;
-	const testOutput = completionTestContextProposalAnalystOutput();
-	if (testOutput) {
-		return parseContextProposalAnalystOutput(testOutput, projectName);
-	}
-	if (recentEntries.length === 0) return undefined;
-	try {
-		const raw = await runContextProposalAnalystSubprocess(ctx, projectName, recentEntries);
-		if (!raw) return undefined;
-		return parseContextProposalAnalystOutput(raw, projectName);
-	} catch (error) {
-		console.warn("[completion] context proposal analyst failed", error);
-		return undefined;
-	}
 }
 
 function buildContextProposalContinuationReason(prefix: string, goalText: string, analysis: ContextProposalAnalysis): string {
@@ -830,11 +360,22 @@ async function deriveCookContextProposal(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
 ): Promise<ContextProposal | undefined> {
-	const recentEntries = collectRecentDiscussionEntries(ctx);
+	const recentEntries = collectRecentDiscussionEntries(ctx, { isRecord, asString, isStaleContextError });
 	return await deriveCookContextProposalFromRecentDiscussion(projectName, recentEntries, {
 		asString,
 		asStringArray,
-		analyzeContextProposal: async (entries) => await analyzeContextProposalWithAgent(ctx, projectName, entries),
+		analyzeContextProposal: async (entries) =>
+			await analyzeContextProposalWithAgent({
+				ctx,
+				projectName,
+				recentEntries: entries,
+				liveRoleActivityByRoot,
+				completionStatusKey: COMPLETION_STATUS_KEY,
+				safeUiCall,
+				getCtxCwd,
+				getCtxHasUI,
+				getCtxUi,
+			}),
 		assessMissionAnchor,
 		isWeakMissionAnchor,
 		missionAnchorsStrictlyEquivalent,
@@ -872,26 +413,6 @@ async function confirmContextProposal(
 	return resolveContextProposalConfirmationAction(proposal, choice);
 }
 
-function deriveMissionAnchor(rawGoal: string, projectName: string): string {
-	const normalized = normalizeMissionAnchorText(rawGoal);
-	if (!normalized || isWeakMissionAnchor(normalized)) {
-		return `Drive ${projectName} to truthful, verifiable completion.`;
-	}
-
-	let mission = normalized
-		.replace(/\b(end[- ]to[- ]end|for me|thanks|thank you)\b/gi, "")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	mission = mission
-		.replace(/\bwith tests and docs\b/gi, "with tests and docs parity")
-		.replace(/\bwith tests and documentation\b/gi, "with tests and docs parity")
-		.replace(/\bwith docs\b/gi, "with docs parity")
-		.trim();
-
-	if (!/[.!?。！？]$/u.test(mission)) mission += ".";
-	return mission;
-}
 
 
 async function scaffoldCompletionFiles(
@@ -1085,7 +606,7 @@ function buildEvaluationRoleReminderText(snapshot: CompletionStateSnapshot, role
 	});
 }
 
-function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
+function composeSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
 	const history = historyCounts(sliceHistory, stopHistory);
 	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
@@ -1095,42 +616,37 @@ function buildSystemReminder(snapshot: CompletionStateSnapshot, sliceHistory: Js
 	const exactActiveContract = activeCarriesExactHandoff(snapshot.active);
 	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
 	const evidence = verificationEvidenceContext(snapshot);
-	const lines = [
-		"Completion workflow detected.",
-		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json.",
-		`Mission anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
-		`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`,
-		`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
-		`Current phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
-		`Continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
-		`Continuation reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
-		`Next mandatory role: ${asString(snapshot.state?.next_mandatory_role) ?? "unknown"}`,
-		`Next mandatory action: ${asString(snapshot.state?.next_mandatory_action) ?? "unknown"}`,
-		`Remaining slice count: ${remainingSliceCount(snapshot.plan)}`,
-		`Remaining stop judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
-		`History counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}.`,
-		"Re-read canonical .agent state after compaction or recovery instead of relying on conversation memory.",
-		"If continuation_policy == continue, do not stop after a slice or ask whether to continue; dispatch the next mandatory role directly.",
-		"Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
-		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
-		"When recovering from compaction, prefer a deterministic restart from canonical files over conversational inference.",
-	];
-	if (exactActiveContract) {
-		lines.push("Selected/in-progress/committed/done .agent/active-slice.json is the canonical implementation contract.");
-		lines.push(`Active slice contract drift: ${activeContractDrift}`);
-	}
-	if (activePriority !== undefined) lines.push(`Active slice priority: ${activePriority}`);
-	if (activeWhyNow) lines.push(`Active slice why_now: ${activeWhyNow}`);
-	if (implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${implementationSurfaces.join(", ")}`);
-	if (verificationCommands.length > 0) lines.push(`Active verification commands: ${verificationCommands.join(" | ")}`);
-	lines.push(`Verification evidence artifact: ${evidence.path} (${evidence.status})`);
-	if (evidence.subjectType) lines.push(`Verification evidence subject: ${evidence.subjectType}`);
-	if (evidence.outcome) lines.push(`Verification evidence outcome: ${evidence.outcome}`);
-	if (evidence.recordedAt) lines.push(`Verification evidence recorded_at: ${evidence.recordedAt}`);
-	if (evidence.verificationCommands.length > 0) lines.push(`Verification evidence commands: ${evidence.verificationCommands.join(" | ")}`);
-	lines.push(`Verification evidence summary: ${evidence.summary}`);
-	if (isRubricEvaluationRole(nextRole)) lines.push(buildEvaluationRoleReminderText(snapshot, nextRole));
-	return lines.join(" ");
+	const activePriorityLine = activePriority !== undefined ? `Active slice priority: ${activePriority}` : undefined;
+	const activeWhyNowLine = activeWhyNow ? `Active slice why_now: ${activeWhyNow}` : undefined;
+	const implementationSurfacesLine =
+		implementationSurfaces.length > 0 ? `Active implementation surfaces: ${implementationSurfaces.join(", ")}` : undefined;
+	const verificationCommandsLine =
+		verificationCommands.length > 0 ? `Active verification commands: ${verificationCommands.join(" | ")}` : undefined;
+	return buildExtractedSystemReminder({
+		missionAnchor: asString(snapshot.state?.mission_anchor),
+		taskType: currentTaskType(snapshot),
+		evaluationProfile: currentEvaluationProfile(snapshot),
+		currentPhase: asString(snapshot.state?.current_phase),
+		continuationPolicy: asString(snapshot.state?.continuation_policy),
+		continuationReason: asString(snapshot.state?.continuation_reason),
+		nextMandatoryRole: nextRole,
+		nextMandatoryAction: asString(snapshot.state?.next_mandatory_action),
+		remainingSliceCount: remainingSliceCount(snapshot.plan),
+		remainingStopJudges: asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)",
+		history,
+		exactActiveContract,
+		activeContractDrift,
+		activePriority,
+		activeWhyNow,
+		implementationSurfaces,
+		verificationCommands,
+		activePriorityLine,
+		activeWhyNowLine,
+		implementationSurfacesLine,
+		verificationCommandsLine,
+		evidence,
+		evaluationRoleReminderText: isRubricEvaluationRole(nextRole) ? buildEvaluationRoleReminderText(snapshot, nextRole) : undefined,
+	});
 }
 
 function buildPostCompactionDriverInstructions(snapshot: CompletionStateSnapshot, marker: JsonRecord | undefined): string {
@@ -1246,7 +762,7 @@ function emitCommandText(ctx: { hasUI: boolean; ui: any }, text: string, level: 
 	}
 }
 
-function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
+function composeResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: JsonRecord[], stopHistory: JsonRecord[]): string {
 	const history = historyCounts(sliceHistory, stopHistory);
 	const acceptance = asStringArray(snapshot.active?.acceptance_criteria).length > 0
 		? asStringArray(snapshot.active?.acceptance_criteria)
@@ -1262,79 +778,49 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 	const implementationSurfaces = asStringArray(snapshot.active?.implementation_surfaces);
 	const verificationCommands = asStringArray(snapshot.active?.verification_commands);
 	const remainingBefore = asStringArray(snapshot.active?.remaining_contract_ids_before);
-	const activeContractDrift = activeSliceContractDriftSummary(snapshot);
 	const evidence = verificationEvidenceContext(snapshot);
-	const lines = [
-		"Authoritative completion resume capsule:",
-		"",
-		"<completion-state>",
-		`mission_anchor: ${asString(snapshot.state?.mission_anchor) ?? "(unknown)"}`,
-		`task_type: ${currentTaskType(snapshot) ?? "(missing)"}`,
-		`evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`,
-		`current_phase: ${asString(snapshot.state?.current_phase) ?? "unknown"}`,
-		`continuation_policy: ${asString(snapshot.state?.continuation_policy) ?? "unknown"}`,
-		`continuation_reason: ${asString(snapshot.state?.continuation_reason) ?? "(unknown)"}`,
-		`requires_reground: ${asBoolean(snapshot.state?.requires_reground) ?? "unknown"}`,
-		`next_mandatory_role: ${asString(snapshot.state?.next_mandatory_role) ?? "unknown"}`,
-		`next_mandatory_action: ${asString(snapshot.state?.next_mandatory_action) ?? "unknown"}`,
-		`remaining_slice_count: ${remainingSliceCount(snapshot.plan)}`,
-		`remaining_stop_judges: ${asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)"}`,
-		`active_slice_matches_plan: ${activeSliceMatchesPlan(snapshot)}`,
-		`active_slice_contract_drift_fields: ${activeContractDrift}`,
-		`implementer_handoff_snapshot: ${handoffSnapshotState(snapshot.active)}`,
-		`history_counts: reviewed=${history.reviewed}, audited=${history.audited}, accepted=${history.accepted}, reopened=${history.reopened}, judgments=${history.judgments}`,
-		"",
-		"verification_evidence:",
-		`- path: ${evidence.path}`,
-		`- status: ${evidence.status}`,
-		`- subject_type: ${evidence.subjectType ?? "(missing)"}`,
-		`- slice_id: ${evidence.sliceId ?? "(none)"}`,
-		`- contract_ids: ${evidence.contractIds.length > 0 ? evidence.contractIds.join(", ") : "(none)"}`,
-		`- outcome: ${evidence.outcome ?? "(missing)"}`,
-		`- recorded_at: ${evidence.recordedAt ?? "(missing)"}`,
-		`- head_sha: ${evidence.headSha ?? "(missing)"}`,
-		`- basis_commit: ${evidence.basisCommit ?? "(missing)"}`,
-		`- verification_commands: ${evidence.verificationCommands.length > 0 ? evidence.verificationCommands.join(" | ") : "(none)"}`,
-		`- summary: ${evidence.summary}`,
-		"",
-		"active_slice:",
-		`- slice_id: ${asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)"}`,
-		`- status: ${asString(snapshot.active?.status) ?? asString(snapshot.activeSlice?.status) ?? "unknown"}`,
-		`- goal: ${asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(unknown)"}`,
-		`- priority: ${asNumber(snapshot.active?.priority) ?? "(unknown)"}`,
-		`- why_now: ${asString(snapshot.active?.why_now) ?? "(unknown)"}`,
-		`- contract_ids: ${contractIds.length > 0 ? contractIds.join(", ") : "(none)"}`,
-	];
-	if (blockedOn.length > 0) lines.push(`- blocked_on: ${blockedOn.join(", ")}`);
-	if (lockedNotes.length > 0) lines.push(`- locked_notes: ${lockedNotes.join(" | ")}`);
-	if (mustFixFindings.length > 0) lines.push(`- must_fix_findings: ${mustFixFindings.join(" | ")}`);
-	if (implementationSurfaces.length > 0) lines.push(`- implementation_surfaces: ${implementationSurfaces.join(" | ")}`);
-	if (verificationCommands.length > 0) lines.push(`- verification_commands: ${verificationCommands.join(" | ")}`);
-	lines.push(`- basis_commit: ${asString(snapshot.active?.basis_commit) ?? "(none)"}`);
-	lines.push(`- remaining_contract_ids_before: ${remainingBefore.length > 0 ? remainingBefore.join(", ") : "(none)"}`);
-	lines.push(`- release_blocker_count_before: ${asNumber(snapshot.active?.release_blocker_count_before) ?? "(unknown)"}`);
-	lines.push(`- high_value_gap_count_before: ${asNumber(snapshot.active?.high_value_gap_count_before) ?? "(unknown)"}`);
-	lines.push("", "acceptance_criteria:");
-	if (acceptance.length === 0) lines.push("- (none)");
-	else lines.push(...acceptance.map((item) => `- ${item}`));
-	lines.push(
-		"",
-		"Rules:",
-		"- Treat this block as continuity support derived from canonical .agent state.",
-		"- For selected/in-progress/committed/done slices, .agent/active-slice.json is the canonical implementation contract and the selected plan slice must mirror it exactly.",
-		"- Preserve exact slice_id, goal, contract_ids, acceptance criteria, blocked_on, priority, why_now, implementation surfaces, verification commands, locked notes, must-fix findings, basis_commit, and before-slice counters where still true.",
-		"- When populated, .agent/verification-evidence.json is the durable canonical verification record for the selected slice or current HEAD and should be consumed instead of temp-only artifacts or conversational summaries.",
-		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json before resuming long-running completion work.",
-		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
-		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",
-		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no, active_slice_contract_drift_fields is not none, or implementer_handoff_snapshot is missing_or_unclear.",
-		"- If continuation_policy is continue, do not stop after a slice or ask whether to continue. Dispatch the next mandatory role directly.",
-		"- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
-		"- If you are completion-implementer after compaction, resume from the canonical active-slice implementation contract instead of asking the user to resend the original caller payload.",
-		"- Do not replace canonical .agent state with summary inference.",
-		"</completion-state>",
-	);
-	return lines.join("\n");
+	const implementationSurfacesLine =
+		implementationSurfaces.length > 0 ? `- implementation_surfaces: ${implementationSurfaces.join(" | ")}` : undefined;
+	const verificationCommandsLine =
+		verificationCommands.length > 0 ? `- verification_commands: ${verificationCommands.join(" | ")}` : undefined;
+	return buildExtractedResumeCapsule({
+		missionAnchor: asString(snapshot.state?.mission_anchor),
+		taskType: currentTaskType(snapshot),
+		evaluationProfile: currentEvaluationProfile(snapshot),
+		currentPhase: asString(snapshot.state?.current_phase),
+		continuationPolicy: asString(snapshot.state?.continuation_policy),
+		continuationReason: asString(snapshot.state?.continuation_reason),
+		requiresReground: asBoolean(snapshot.state?.requires_reground) ?? "unknown",
+		nextMandatoryRole: asString(snapshot.state?.next_mandatory_role),
+		nextMandatoryAction: asString(snapshot.state?.next_mandatory_action),
+		remainingSliceCount: remainingSliceCount(snapshot.plan),
+		remainingStopJudges: asNumber(snapshot.state?.remaining_stop_judges) ?? "(unknown)",
+		history,
+		activeSliceMatchesPlan: activeSliceMatchesPlan(snapshot),
+		activeSliceContractDrift: activeSliceContractDriftSummary(snapshot),
+		implementerHandoffSnapshot: handoffSnapshotState(snapshot.active),
+		evidence,
+		activeSlice: {
+			sliceId: asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id),
+			status: asString(snapshot.active?.status) ?? asString(snapshot.activeSlice?.status),
+			goal: asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal),
+			priority: asNumber(snapshot.active?.priority),
+			whyNow: asString(snapshot.active?.why_now),
+			contractIds,
+			blockedOn,
+			lockedNotes,
+			mustFixFindings,
+			implementationSurfaces,
+			verificationCommands,
+			implementationSurfacesLine,
+			verificationCommandsLine,
+			basisCommit: asString(snapshot.active?.basis_commit),
+			remainingContractIdsBefore: remainingBefore,
+			releaseBlockerCountBefore: asNumber(snapshot.active?.release_blocker_count_before),
+			highValueGapCountBefore: asNumber(snapshot.active?.high_value_gap_count_before),
+			acceptanceCriteria: acceptance,
+		},
+	});
 }
 
 async function gitHeadSha(cwd: string): Promise<string | undefined> {
@@ -1443,7 +929,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		if (!loaded || !shouldInjectCompletionWorkflowContext(loaded.snapshot)) return;
 		const additions = isWorkflowDone(loaded.snapshot)
 			? [buildDoneWorkflowBoundaryReminder(loaded.snapshot)]
-			: [buildSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
+			: [composeSystemReminder(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory)];
 		if (!isWorkflowDone(loaded.snapshot)) {
 			const markerText = await readText(loaded.snapshot.files.compactionMarkerPath);
 			let marker: JsonRecord | undefined;
@@ -1469,7 +955,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		const loaded = await loadCompletionDataForReminder(getCtxCwd(ctx));
 		if (!loaded || isWorkflowDone(loaded.snapshot)) return;
 		const { preparation } = event;
-		const summary = buildResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
+		const summary = composeResumeCapsule(loaded.snapshot, loaded.sliceHistory, loaded.stopHistory);
 		await fsp.mkdir(loaded.snapshot.files.tmpDir, { recursive: true });
 		await fsp.writeFile(
 			loaded.snapshot.files.compactionMarkerPath,

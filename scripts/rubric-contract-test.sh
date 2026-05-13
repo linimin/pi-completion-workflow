@@ -77,8 +77,8 @@ assertIncludes('CHANGELOG.md', 'added canonical `task_type: completion-workflow`
 assertIncludes('CHANGELOG.md', 'threaded canonical `evaluation_profile` plus the active-slice implementation contract into reviewer/auditor/stop-judge reminder and dispatch surfaces');
 assertIncludes('CHANGELOG.md', 'made reviewer/auditor/stop-judge transcription fail closed on malformed rubric-bearing outputs while still accepting valid reports');
 assertIncludes('extensions/completion/index.ts', 'Canonical routing profile:\\n- task_type: ${taskType}\\n- evaluation_profile: ${evaluationProfile}');
-assertIncludes('extensions/completion/index.ts', '`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`');
-assertIncludes('extensions/completion/index.ts', '`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`Task type: ${args.taskType ?? "(missing)"}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`Evaluation profile: ${args.evaluationProfile ?? "(missing)"}`');
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`- task_type: ${deps.currentTaskType(snapshot) ?? "(missing)"}`');
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`- evaluation_profile: ${deps.currentEvaluationProfile(snapshot) ?? "(missing)"}`');
 assertIncludes('extensions/completion/prompt-surfaces.ts', 'Canonical evaluation handoff for ${role}:');

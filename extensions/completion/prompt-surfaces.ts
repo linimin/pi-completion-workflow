@@ -300,3 +300,213 @@ export function buildEvaluationRoleReminderText(
 ): string {
 	return buildEvaluationRoleContextLines(snapshot, role, deps).join(" ");
 }
+
+type CompletionHistoryCounts = {
+	reviewed: number;
+	audited: number;
+	accepted: number;
+	reopened: number;
+	judgments: number;
+};
+
+type CompletionVerificationEvidenceSummary = {
+	path: string;
+	status: string;
+	subjectType?: string;
+	sliceId?: string;
+	contractIds: string[];
+	outcome?: string;
+	recordedAt?: string;
+	headSha?: string;
+	basisCommit?: string;
+	verificationCommands: string[];
+	summary: string;
+};
+
+export function buildSystemReminder(args: {
+	missionAnchor?: string;
+	taskType?: string;
+	evaluationProfile?: string;
+	currentPhase?: string;
+	continuationPolicy?: string;
+	continuationReason?: string;
+	nextMandatoryRole?: string;
+	nextMandatoryAction?: string;
+	remainingSliceCount: number | string;
+	remainingStopJudges: number | string;
+	history: CompletionHistoryCounts;
+	exactActiveContract: boolean;
+	activeContractDrift: string;
+	activePriority?: number;
+	activeWhyNow?: string;
+	implementationSurfaces: string[];
+	verificationCommands: string[];
+	activePriorityLine?: string;
+	activeWhyNowLine?: string;
+	implementationSurfacesLine?: string;
+	verificationCommandsLine?: string;
+	evidence: CompletionVerificationEvidenceSummary;
+	evaluationRoleReminderText?: string;
+}): string {
+	const lines = [
+		"Completion workflow detected.",
+		"Canonical truth lives in .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json.",
+		`Mission anchor: ${args.missionAnchor ?? "(unknown)"}`,
+		`Task type: ${args.taskType ?? "(missing)"}`,
+		`Evaluation profile: ${args.evaluationProfile ?? "(missing)"}`,
+		`Current phase: ${args.currentPhase ?? "unknown"}`,
+		`Continuation policy: ${args.continuationPolicy ?? "unknown"}`,
+		`Continuation reason: ${args.continuationReason ?? "(unknown)"}`,
+		`Next mandatory role: ${args.nextMandatoryRole ?? "unknown"}`,
+		`Next mandatory action: ${args.nextMandatoryAction ?? "unknown"}`,
+		`Remaining slice count: ${args.remainingSliceCount}`,
+		`Remaining stop judges: ${args.remainingStopJudges}`,
+		`History counts: reviewed=${args.history.reviewed}, audited=${args.history.audited}, accepted=${args.history.accepted}, reopened=${args.history.reopened}, judgments=${args.history.judgments}.`,
+		"Re-read canonical .agent state after compaction or recovery instead of relying on conversation memory.",
+		"If continuation_policy == continue, do not stop after a slice or ask whether to continue; dispatch the next mandatory role directly.",
+		"Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
+		"If canonical state is stale, invalid, ambiguous, or missing, route to completion-regrounder.",
+		"When recovering from compaction, prefer a deterministic restart from canonical files over conversational inference.",
+	];
+	if (args.exactActiveContract) {
+		lines.push("Selected/in-progress/committed/done .agent/active-slice.json is the canonical implementation contract.");
+		lines.push(`Active slice contract drift: ${args.activeContractDrift}`);
+	}
+	if (args.activePriorityLine) lines.push(args.activePriorityLine);
+	else if (args.activePriority !== undefined) lines.push(`Active slice priority: ${args.activePriority}`);
+	if (args.activeWhyNowLine) lines.push(args.activeWhyNowLine);
+	else if (args.activeWhyNow) lines.push(`Active slice why_now: ${args.activeWhyNow}`);
+	if (args.implementationSurfacesLine) lines.push(args.implementationSurfacesLine);
+	else if (args.implementationSurfaces.length > 0) lines.push(`Active implementation surfaces: ${args.implementationSurfaces.join(", ")}`);
+	if (args.verificationCommandsLine) lines.push(args.verificationCommandsLine);
+	else if (args.verificationCommands.length > 0) lines.push(`Active verification commands: ${args.verificationCommands.join(" | ")}`);
+	lines.push(`Verification evidence artifact: ${args.evidence.path} (${args.evidence.status})`);
+	if (args.evidence.subjectType) lines.push(`Verification evidence subject: ${args.evidence.subjectType}`);
+	if (args.evidence.outcome) lines.push(`Verification evidence outcome: ${args.evidence.outcome}`);
+	if (args.evidence.recordedAt) lines.push(`Verification evidence recorded_at: ${args.evidence.recordedAt}`);
+	if (args.evidence.verificationCommands.length > 0) {
+		lines.push(`Verification evidence commands: ${args.evidence.verificationCommands.join(" | ")}`);
+	}
+	lines.push(`Verification evidence summary: ${args.evidence.summary}`);
+	if (args.evaluationRoleReminderText) lines.push(args.evaluationRoleReminderText);
+	return lines.join(" ");
+}
+
+export function buildResumeCapsule(args: {
+	missionAnchor?: string;
+	taskType?: string;
+	evaluationProfile?: string;
+	currentPhase?: string;
+	continuationPolicy?: string;
+	continuationReason?: string;
+	requiresReground: boolean | string;
+	nextMandatoryRole?: string;
+	nextMandatoryAction?: string;
+	remainingSliceCount: number | string;
+	remainingStopJudges: number | string;
+	history: CompletionHistoryCounts;
+	activeSliceMatchesPlan: "yes" | "no" | "unknown";
+	activeSliceContractDrift: string;
+	implementerHandoffSnapshot: "present" | "missing_or_unclear";
+	evidence: CompletionVerificationEvidenceSummary;
+	activeSlice: {
+		sliceId?: string;
+		status?: string;
+		goal?: string;
+		priority?: number;
+		whyNow?: string;
+		contractIds: string[];
+		blockedOn: string[];
+		lockedNotes: string[];
+		mustFixFindings: string[];
+		implementationSurfaces: string[];
+		verificationCommands: string[];
+		implementationSurfacesLine?: string;
+		verificationCommandsLine?: string;
+		basisCommit?: string;
+		remainingContractIdsBefore: string[];
+		releaseBlockerCountBefore?: number;
+		highValueGapCountBefore?: number;
+		acceptanceCriteria: string[];
+	};
+}): string {
+	const lines = [
+		"Authoritative completion resume capsule:",
+		"",
+		"<completion-state>",
+		`mission_anchor: ${args.missionAnchor ?? "(unknown)"}`,
+		`task_type: ${args.taskType ?? "(missing)"}`,
+		`evaluation_profile: ${args.evaluationProfile ?? "(missing)"}`,
+		`current_phase: ${args.currentPhase ?? "unknown"}`,
+		`continuation_policy: ${args.continuationPolicy ?? "unknown"}`,
+		`continuation_reason: ${args.continuationReason ?? "(unknown)"}`,
+		`requires_reground: ${args.requiresReground}`,
+		`next_mandatory_role: ${args.nextMandatoryRole ?? "unknown"}`,
+		`next_mandatory_action: ${args.nextMandatoryAction ?? "unknown"}`,
+		`remaining_slice_count: ${args.remainingSliceCount}`,
+		`remaining_stop_judges: ${args.remainingStopJudges}`,
+		`active_slice_matches_plan: ${args.activeSliceMatchesPlan}`,
+		`active_slice_contract_drift_fields: ${args.activeSliceContractDrift}`,
+		`implementer_handoff_snapshot: ${args.implementerHandoffSnapshot}`,
+		`history_counts: reviewed=${args.history.reviewed}, audited=${args.history.audited}, accepted=${args.history.accepted}, reopened=${args.history.reopened}, judgments=${args.history.judgments}`,
+		"",
+		"verification_evidence:",
+		`- path: ${args.evidence.path}`,
+		`- status: ${args.evidence.status}`,
+		`- subject_type: ${args.evidence.subjectType ?? "(missing)"}`,
+		`- slice_id: ${args.evidence.sliceId ?? "(none)"}`,
+		`- contract_ids: ${args.evidence.contractIds.length > 0 ? args.evidence.contractIds.join(", ") : "(none)"}`,
+		`- outcome: ${args.evidence.outcome ?? "(missing)"}`,
+		`- recorded_at: ${args.evidence.recordedAt ?? "(missing)"}`,
+		`- head_sha: ${args.evidence.headSha ?? "(missing)"}`,
+		`- basis_commit: ${args.evidence.basisCommit ?? "(missing)"}`,
+		`- verification_commands: ${args.evidence.verificationCommands.length > 0 ? args.evidence.verificationCommands.join(" | ") : "(none)"}`,
+		`- summary: ${args.evidence.summary}`,
+		"",
+		"active_slice:",
+		`- slice_id: ${args.activeSlice.sliceId ?? "(none)"}`,
+		`- status: ${args.activeSlice.status ?? "unknown"}`,
+		`- goal: ${args.activeSlice.goal ?? "(unknown)"}`,
+		`- priority: ${args.activeSlice.priority ?? "(unknown)"}`,
+		`- why_now: ${args.activeSlice.whyNow ?? "(unknown)"}`,
+		`- contract_ids: ${args.activeSlice.contractIds.length > 0 ? args.activeSlice.contractIds.join(", ") : "(none)"}`,
+	];
+	if (args.activeSlice.blockedOn.length > 0) lines.push(`- blocked_on: ${args.activeSlice.blockedOn.join(", ")}`);
+	if (args.activeSlice.lockedNotes.length > 0) lines.push(`- locked_notes: ${args.activeSlice.lockedNotes.join(" | ")}`);
+	if (args.activeSlice.mustFixFindings.length > 0) lines.push(`- must_fix_findings: ${args.activeSlice.mustFixFindings.join(" | ")}`);
+	if (args.activeSlice.implementationSurfacesLine) {
+		lines.push(args.activeSlice.implementationSurfacesLine);
+	} else if (args.activeSlice.implementationSurfaces.length > 0) {
+		lines.push(`- implementation_surfaces: ${args.activeSlice.implementationSurfaces.join(" | ")}`);
+	}
+	if (args.activeSlice.verificationCommandsLine) {
+		lines.push(args.activeSlice.verificationCommandsLine);
+	} else if (args.activeSlice.verificationCommands.length > 0) {
+		lines.push(`- verification_commands: ${args.activeSlice.verificationCommands.join(" | ")}`);
+	}
+	lines.push(`- basis_commit: ${args.activeSlice.basisCommit ?? "(none)"}`);
+	lines.push(`- remaining_contract_ids_before: ${args.activeSlice.remainingContractIdsBefore.length > 0 ? args.activeSlice.remainingContractIdsBefore.join(", ") : "(none)"}`);
+	lines.push(`- release_blocker_count_before: ${args.activeSlice.releaseBlockerCountBefore ?? "(unknown)"}`);
+	lines.push(`- high_value_gap_count_before: ${args.activeSlice.highValueGapCountBefore ?? "(unknown)"}`);
+	lines.push("", "acceptance_criteria:");
+	if (args.activeSlice.acceptanceCriteria.length === 0) lines.push("- (none)");
+	else lines.push(...args.activeSlice.acceptanceCriteria.map((item) => `- ${item}`));
+	lines.push(
+		"",
+		"Rules:",
+		"- Treat this block as continuity support derived from canonical .agent state.",
+		"- For selected/in-progress/committed/done slices, .agent/active-slice.json is the canonical implementation contract and the selected plan slice must mirror it exactly.",
+		"- Preserve exact slice_id, goal, contract_ids, acceptance criteria, blocked_on, priority, why_now, implementation surfaces, verification commands, locked notes, must-fix findings, basis_commit, and before-slice counters where still true.",
+		"- When populated, .agent/verification-evidence.json is the durable canonical verification record for the selected slice or current HEAD and should be consumed instead of temp-only artifacts or conversational summaries.",
+		"- After compaction, re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, .agent/slice-history.jsonl, .agent/stop-check-history.jsonl, and .agent/verification-evidence.json before resuming long-running completion work.",
+		"- Invoke completion-regrounder before continuing when requires_reground is true or unknown.",
+		"- Invoke completion-regrounder before continuing when next_mandatory_role or next_mandatory_action is unknown or ambiguous.",
+		"- Invoke completion-regrounder before continuing when active_slice_matches_plan is no, active_slice_contract_drift_fields is not none, or implementer_handoff_snapshot is missing_or_unclear.",
+		"- If continuation_policy is continue, do not stop after a slice or ask whether to continue. Dispatch the next mandatory role directly.",
+		"- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.",
+		"- If you are completion-implementer after compaction, resume from the canonical active-slice implementation contract instead of asking the user to resend the original caller payload.",
+		"- Do not replace canonical .agent state with summary inference.",
+		"</completion-state>",
+	);
+	return lines.join("\n");
+}

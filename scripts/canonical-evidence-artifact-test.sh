@@ -96,8 +96,8 @@ assertSectionIncludes('skills/completion-protocol/references/completion.md', '##
 assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Canonical Inputs', '- `.agent/verification-evidence.json`');
 assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Compaction And Recovery', '- `.agent/verification-evidence.json`');
 assertSectionIncludes('skills/completion-protocol/references/completion.md', '## Compaction And Recovery', '`completion-implementer` must also re-read canonical `.agent/state.json`, `.agent/plan.json`, `.agent/active-slice.json`, and `.agent/verification-evidence.json` before resuming work.');
-assertIncludes('extensions/completion/index.ts', 'Verification evidence artifact: ${evidence.path}');
-assertIncludes('extensions/completion/index.ts', 'Verification evidence summary: ${evidence.summary}');
+assertIncludes('extensions/completion/prompt-surfaces.ts', 'Verification evidence artifact: ${args.evidence.path} (${args.evidence.status})');
+assertIncludes('extensions/completion/prompt-surfaces.ts', 'Verification evidence summary: ${args.evidence.summary}');
 assertIncludes('extensions/completion/index.ts', 'Canonical verification evidence artifact is currently: ${evidence.path} (${evidence.status})');
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`- verification_evidence_path: ${evidence.path}`');
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`- verification_evidence_summary: ${evidence.summary}`');

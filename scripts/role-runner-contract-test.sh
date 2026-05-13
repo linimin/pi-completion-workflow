@@ -21,7 +21,7 @@ const assertNotIncludes = (file, snippet) => {
   }
 };
 
-assertIncludes('extensions/completion/role-runner.ts', 'import { loadCompletionDataForReminder } from "./state-store";');
+assertIncludes('extensions/completion/role-runner.ts', 'import { completionRootKey, findCompletionRoot, findRepoRoot, loadCompletionDataForReminder } from "./state-store";');
 assertIncludes('extensions/completion/role-runner.ts', 'import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";');
 assertIncludes('extensions/completion/role-runner.ts', 'const agent = await loadAgentDefinition(params.root, params.role);');
 assertIncludes('extensions/completion/role-runner.ts', 'await loadCompletionDataForReminder(params.root);');
@@ -29,10 +29,13 @@ assertIncludes('extensions/completion/role-runner.ts', 'const systemPromptTemp =
 assertIncludes('extensions/completion/role-runner.ts', 'const reportFields = parseReportFields(output);');
 assertIncludes('extensions/completion/role-runner.ts', 'const transcription = exitCode === 0 ? await transcribeRoleOutput(params.role, params.root, output, reportFields) : undefined;');
 assertIncludes('extensions/completion/role-runner.ts', 'env: { ...process.env, PI_COMPLETION_ROLE: params.role },');
-assertIncludes('extensions/completion/index.ts', 'import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";');
-assertIncludes('extensions/completion/index.ts', 'const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);');
-assertIncludes('extensions/completion/index.ts', 'const invocation = getPiInvocation(args);');
+assertIncludes('extensions/completion/role-runner.ts', 'async function runContextProposalAnalystSubprocess(');
+assertIncludes('extensions/completion/role-runner.ts', 'export async function analyzeContextProposalWithAgent(');
+assertIncludes('extensions/completion/index.ts', 'import { analyzeContextProposalWithAgent, runCompletionRole } from "./role-runner";');
 assertIncludes('extensions/completion/index.ts', 'const result = await runCompletionRole({');
+assertIncludes('extensions/completion/index.ts', 'await analyzeContextProposalWithAgent({');
+assertNotIncludes('extensions/completion/index.ts', 'const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);');
+assertNotIncludes('extensions/completion/index.ts', 'const invocation = getPiInvocation(args);');
 assertNotIncludes('extensions/completion/index.ts', 'async function loadAgentDefinition(');
 assertNotIncludes('extensions/completion/index.ts', 'async function writeTempFile(');
 assertNotIncludes('extensions/completion/index.ts', 'function getPiInvocation(');
