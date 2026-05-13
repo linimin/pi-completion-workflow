@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.47
+
 ### Changed
 
 - removed inline `/cook <text>` argument support so bare `/cook` is now the only supported workflow entrypoint
