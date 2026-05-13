@@ -6,6 +6,8 @@
 
 - removed inline `/cook <text>` argument support so bare `/cook` is now the only supported workflow entrypoint
 - made runtime, deterministic regressions, README guidance, and packaged release parity fail closed when command arguments are passed instead of discussion driving proposal derivation
+- made bare `/cook` weight the latest clear implementation intent ahead of older background discussion, preserve alternate recent missions for chooser-driven disambiguation, and summarize each candidate directly in the active-workflow chooser instead of forcing a single guessed replacement path
+- made bare `/cook` suppress reopening already completed or already verified work by comparing recent discussion against canonical mission, active-slice, and verification-evidence context before startup/refocus proposal confirmation
 
 ## 0.1.44
 

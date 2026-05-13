@@ -58,6 +58,7 @@ export type AnalyzeContextProposalWithAgentParams = {
 	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any };
 	projectName: string;
 	recentEntries: RecentDiscussionEntry[];
+	workflowContextLines?: string[];
 	liveRoleActivityByRoot: Map<string, LiveRoleActivity>;
 	completionStatusKey: string;
 	safeUiCall: (action: () => void) => void;
@@ -75,14 +76,18 @@ const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 	"You analyze recent /cook startup discussion and return a strict JSON object.",
 	"Do not emit markdown, code fences, or commentary.",
 	"Return exactly one JSON object with keys: mission, scope, constraints, acceptance, critique, risks, task_type, evaluation_profile, confidence, possible_noise.",
+	"You may additionally include optional keys alternate_missions, completed_topics, and negated_topics when they are clearly supported by the discussion and canonical workflow context.",
 	"mission must be a concise implementation mission anchor sentence.",
+	"Prefer the latest clear user implementation intent over older background context when they differ.",
+	"Do not reopen work that the canonical workflow context says is done, completed, historical, or already covered unless the latest discussion clearly asks to revisit it.",
+	"Treat stale, weakly related, or explicitly negated topics as noise instead of mission scope.",
 	"scope must contain only work items that directly support the mission.",
 	"constraints must contain guardrails or non-goals explicitly stated or strongly implied by the discussion.",
 	"acceptance must contain verifiable outcomes explicitly stated or strongly implied by the discussion.",
 	"critique must contain operator-facing cautions, concerns, or reminders that should be shown separately from mission and scope later.",
 	"risks must contain concrete failure modes or regressions that the later workflow should keep in view.",
 	"task_type and evaluation_profile should be candidate routing hints only; reuse the existing completion vocabulary when it clearly fits instead of inventing new schema names.",
-	"possible_noise should list discussion points that look stale, weakly related, or unsafe to promote into scope.",
+	"possible_noise should list discussion points that look stale, weakly related, unsafe to promote into scope, or already completed elsewhere.",
 	"When discussion is insufficient, prefer empty arrays and a low confidence value over invention.",
 ].join(" ");
 const STARTUP_ANALYST_ROLE = "cook-proposal-analyst";
@@ -167,7 +172,7 @@ async function runContextProposalAnalystSubprocess(params: AnalyzeContextProposa
 	const cwd = params.getCtxCwd(ctx);
 	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 	const rootKey = completionRootKey(undefined, cwd);
-	const prompt = buildContextProposalAnalystPromptFromEntries(projectName, recentEntries);
+	const prompt = buildContextProposalAnalystPromptFromEntries(projectName, recentEntries, params.workflowContextLines);
 	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
 	const invocation = getPiInvocation(args);

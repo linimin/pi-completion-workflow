@@ -55,9 +55,9 @@ Bare `/cook` is the only supported workflow entrypoint.
 
 | Repo state | `/cook` behavior |
 |---|---|
-| No workflow yet | Summarizes recent main-chat discussion into a startup proposal, then asks for approval with **Start** or **Cancel**. If the discussion is weak, ambiguous, assistant-produced, or only a plan/spec/design-doc/proposal artifact instead of concrete repo changes, `/cook` fails closed without writing `.agent/**` state and tells you to clarify the mission in the main chat before rerunning bare `/cook`. |
-| Active workflow exists | Reads the current mission plus recent non-command main-chat discussion. Matching or unclear discussion resumes from canonical `.agent/**` state. Clear replacement discussion about different concrete repo changes opens a chooser first, then only rewrites canonical state after the follow-on **Start** confirmation. Assistant/summary artifacts or plan/spec/design-doc/proposal-only context do not refocus the workflow. `/cook <text>` is rejected without running proposal routing or rewriting workflow state. |
-| Previous workflow is `done` | Starts the next round from recent main-chat discussion, then asks for approval with **Start** or **Cancel**. Weak, ambiguous, assistant-produced, or planning-artifact-only discussion fails closed without rewriting canonical state and tells you to clarify the mission in the main chat before rerunning bare `/cook`. `/cook <text>` is rejected before any next-round proposal is derived. |
+| No workflow yet | Summarizes recent main-chat discussion into a startup proposal, weighting the latest clear implementation intent ahead of older background discussion, then asks for approval with **Start** or **Cancel**. If the discussion is weak, ambiguous, assistant-produced, or only a plan/spec/design-doc/proposal artifact instead of concrete repo changes, `/cook` fails closed without writing `.agent/**` state and tells you to clarify the mission in the main chat before rerunning bare `/cook`. |
+| Active workflow exists | Reads the current mission plus recent non-command main-chat discussion. Matching or unclear discussion resumes from canonical `.agent/**` state. Clear replacement discussion about different concrete repo changes opens a chooser first, then only rewrites canonical state after the follow-on **Start** confirmation. If recent discussion implies more than one plausible replacement mission, `/cook` keeps the current workflow parked behind a multi-candidate chooser instead of silently resuming or guessing. Assistant/summary artifacts or plan/spec/design-doc/proposal-only context do not refocus the workflow. `/cook <text>` is rejected without running proposal routing or rewriting workflow state. |
+| Previous workflow is `done` | Starts the next round from recent main-chat discussion, then asks for approval with **Start** or **Cancel**. Weak, ambiguous, assistant-produced, or planning-artifact-only discussion fails closed without rewriting canonical state and tells you to clarify the mission in the main chat before rerunning bare `/cook`. Recent discussion that only restates already-completed or already-verified work also fails closed instead of reopening the finished mission. `/cook <text>` is rejected before any next-round proposal is derived. |
 
 ## Approval-only confirmation and fail-closed behavior
 
@@ -69,15 +69,16 @@ All startup, next-round, and replacement proposals are **approval-only**:
 
 When `/cook` cannot derive a clear startup, next-round, or replacement proposal for concrete repo changes from recent main-chat discussion, it fails closed instead of guessing. That means no canonical `.agent/**` state is created or rewritten until the discussion is clarified in the main chat and you rerun `/cook`. Tracked docs-only work such as README/CHANGELOG updates is still execution-ready, but assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts are not enough to start or refocus a workflow on their own. `/cook <text>` also fails closed immediately and tells you to move that text into the main chat before rerunning bare `/cook`.
 
-When an active workflow already exists and recent discussion clearly suggests a different workflow, `/cook` shows a separate chooser first:
+When an active workflow already exists and recent discussion suggests a different workflow, `/cook` shows a separate chooser first. The chooser can stay conservative or list multiple candidate replacements when the latest discussion contains more than one plausible implementation goal:
 
 - **Continue current workflow**
 - **Start new workflow from recent discussion**
+- **Start alternate workflow from recent discussion** (when a second plausible mission exists)
 - **Cancel**
 
-Only the follow-on startup/replacement proposal uses the approval-only Start/Cancel gate, and canonical `.agent/**` state changes happen only after **Start** is accepted.
+Chooser options summarize each candidate mission with its latest scope/constraint/acceptance highlights before the follow-on approval-only Start/Cancel gate. Canonical `.agent/**` state changes still happen only after **Start** is accepted.
 
-When you accept startup or refocus from that flow, `/cook` persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome in canonical continuation state before the re-ground round begins.
+When you accept startup or refocus from that flow, `/cook` persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome plus any alternate-mission / suppression notes in canonical continuation state before the re-ground round begins.
 
 ## Observability
 

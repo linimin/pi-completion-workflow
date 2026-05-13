@@ -145,6 +145,10 @@ function completionTestWorkflowActionOverride(): "continue" | "refocus" | "cance
 	return raw === "continue" || raw === "refocus" || raw === "cancel" ? raw : undefined;
 }
 
+function completionTestWorkflowMissionOverride(): string | undefined {
+	return asString(process.env.PI_COMPLETION_EXISTING_WORKFLOW_MISSION);
+}
+
 function shouldSkipDriverKickoffForTests(): boolean {
 	return process.env.PI_COMPLETION_SKIP_DRIVER_KICKOFF === "1";
 }
@@ -271,6 +275,9 @@ function maybeWriteActiveWorkflowRoutingSnapshot(assessment: ActiveWorkflowPropo
 				proposedMissionAnchor: assessment.proposal?.mission ?? null,
 				proposalSource: assessment.proposal?.source ?? null,
 				possibleNoise: assessment.proposal?.analysis.possibleNoise ?? [],
+				alternateMissions: assessment.proposal?.analysis.alternateMissions ?? [],
+				suppressedCompletedTopics: assessment.proposal?.analysis.suppressedCompletedTopics ?? [],
+				suppressedNegatedTopics: assessment.proposal?.analysis.suppressedNegatedTopics ?? [],
 				scope: assessment.proposal?.scope ?? [],
 				constraints: assessment.proposal?.constraints ?? [],
 				acceptance: assessment.proposal?.acceptance ?? [],
@@ -361,14 +368,41 @@ async function deriveCookContextProposal(
 	projectName: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx, { isRecord, asString, isStaleContextError });
+	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
+	const workflowContextLines = snapshot
+		? [
+			`current mission anchor: ${asString(snapshot.state?.mission_anchor) ?? asString(snapshot.plan?.mission_anchor) ?? asString(snapshot.active?.mission_anchor) ?? "(none)"}`,
+			`continuation policy: ${asString(snapshot.state?.continuation_policy) ?? "(none)"}`,
+			`latest completed slice: ${asString(snapshot.state?.latest_completed_slice) ?? "(none)"}`,
+			`latest verified slice: ${asString(snapshot.state?.latest_verified_slice) ?? "(none)"}`,
+			`active slice goal: ${asString(snapshot.active?.goal) ?? "(none)"}`,
+			`active slice why_now: ${asString(snapshot.active?.why_now) ?? "(none)"}`,
+			`verification goal: ${asString(snapshot.verificationEvidence?.goal) ?? "(none)"}`,
+			`verification summary: ${asString(snapshot.verificationEvidence?.summary) ?? "(none)"}`,
+		]
+		: [];
 	return await deriveCookContextProposalFromRecentDiscussion(projectName, recentEntries, {
 		asString,
 		asStringArray,
+		workflowContext: snapshot
+			? {
+				currentMissionAnchor:
+					asString(snapshot.state?.mission_anchor) ?? asString(snapshot.plan?.mission_anchor) ?? asString(snapshot.active?.mission_anchor),
+				latestCompletedSlice: asString(snapshot.state?.latest_completed_slice),
+				latestVerifiedSlice: asString(snapshot.state?.latest_verified_slice),
+				activeSliceGoal: asString(snapshot.active?.goal),
+				activeSliceWhyNow: asString(snapshot.active?.why_now),
+				verificationGoal: asString(snapshot.verificationEvidence?.goal),
+				verificationSummary: asString(snapshot.verificationEvidence?.summary),
+				continuationPolicy: asString(snapshot.state?.continuation_policy),
+			}
+			: undefined,
 		analyzeContextProposal: async (entries) =>
 			await analyzeContextProposalWithAgent({
 				ctx,
 				projectName,
 				recentEntries: entries,
+				workflowContextLines,
 				liveRoleActivityByRoot,
 				completionStatusKey: COMPLETION_STATUS_KEY,
 				safeUiCall,
@@ -881,6 +915,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		completionTestDriverPromptPath,
 		completionTestExistingWorkflowChooserSnapshotPath,
 		completionTestWorkflowActionOverride,
+		completionTestWorkflowMissionOverride,
 		confirmContextProposal,
 		deriveCookContextProposal,
 		emitCommandText,
@@ -890,6 +925,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		getCtxUi,
 		hasRunningCompletionRole,
 		maybeWriteActiveWorkflowRoutingSnapshot,
+		activateCompletionRoutingForRoot,
 		maybeWriteTestSnapshot,
 		missionAnchorsLikelyEquivalent,
 		missionAnchorsStrictlyEquivalent,
@@ -902,7 +938,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
 		if (shouldTestAutoContinueOnSessionStart()) {
-			await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
+			const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
+			if (hasCompletionRoutingActivation(snapshot)) {
+				await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
+			}
 		}
 	});
 
@@ -916,7 +955,9 @@ export default function completionExtension(pi: ExtensionAPI) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
-		await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
+		if (hasCompletionRoutingActivation(snapshot)) {
+			await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
+		}
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {

@@ -20,9 +20,12 @@ type ContextProposalAnalysis = {
 	critique: string[];
 	risks: string[];
 	possibleNoise: string[];
+	alternateMissions: string[];
+	suppressedCompletedTopics: string[];
+	suppressedNegatedTopics: string[];
 };
 
-type ContextProposal = {
+type ContextProposalAlternate = {
 	mission: string;
 	scope: string[];
 	constraints: string[];
@@ -33,6 +36,10 @@ type ContextProposal = {
 	source: "session" | "analyst";
 };
 
+type ContextProposal = ContextProposalAlternate & {
+	alternateProposals: ContextProposalAlternate[];
+};
+
 type ContextProposalDecision = {
 	missionAnchor: string;
 	goalText: string;
@@ -41,7 +48,7 @@ type ContextProposalDecision = {
 
 type ExistingWorkflowDecision =
 	| { action: "continue"; currentMissionAnchor: string }
-	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string };
+	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string; proposal: ContextProposal };
 
 type ActiveWorkflowProposalAssessment = {
 	action: "continue" | "refocus" | "unclear";
@@ -55,6 +62,7 @@ type ExistingWorkflowChooserOptions = {
 	comparison?: "strict" | "semantic";
 	proposedMissionLabel?: string;
 	refocusChoiceLabel?: string;
+	alternateChoiceLabel?: string;
 };
 
 type DriverContext = {
@@ -115,11 +123,13 @@ export type CompletionDriverDeps = {
 	missionAnchorsLikelyEquivalent: (left: string, right: string) => boolean;
 	missionAnchorsStrictlyEquivalent: (left: string, right: string) => boolean;
 	shouldTreatBareActiveWorkflowProposalAsClearRefocus: (proposal: ContextProposal) => boolean;
+	activateCompletionRoutingForRoot: (root: string | undefined) => void;
 	maybeWriteTestSnapshot: (targetPath: string | undefined, content: string) => void;
 	completionTestDriverPromptPath: () => string | undefined;
 	completionTestAutoContinuePromptPath: () => string | undefined;
 	completionTestExistingWorkflowChooserSnapshotPath: () => string | undefined;
 	completionTestWorkflowActionOverride: () => "continue" | "refocus" | "cancel" | undefined;
+	completionTestWorkflowMissionOverride: () => string | undefined;
 	shouldSkipDriverKickoffForTests: () => boolean;
 	shouldTestAutoContinueOnSessionStart: () => boolean;
 };
@@ -239,6 +249,14 @@ function rememberParkedDriverContinuation(rootKey: string, fingerprint: string):
 	if (!tracker || tracker.fingerprint !== fingerprint) return;
 	tracker.warned = true;
 	tracker.inFlight = false;
+}
+
+function summarizeProposalForChoice(proposal: ContextProposalAlternate): string {
+	const parts: string[] = [`Mission\n${proposal.mission}`];
+	if (proposal.scope.length > 0) parts.push(`Scope\n- ${proposal.scope.slice(0, 2).join("\n- ")}`);
+	if (proposal.constraints.length > 0) parts.push(`Constraints\n- ${proposal.constraints.slice(0, 1).join("\n- ")}`);
+	if (proposal.acceptance.length > 0) parts.push(`Acceptance\n- ${proposal.acceptance.slice(0, 1).join("\n- ")}`);
+	return parts.join("\n\n");
 }
 
 async function queueCompletionDriverPrompt(
@@ -379,14 +397,17 @@ async function confirmExistingWorkflowProposal(
 ): Promise<ExistingWorkflowDecision | undefined> {
 	const currentMission = currentMissionAnchor(snapshot);
 	const comparison = options.comparison ?? "semantic";
-	const missionsMatch =
+	const candidateProposals = [proposal, ...(proposal.alternateProposals ?? [])].filter((candidate, index, list) =>
+		list.findIndex((other) => deps.missionAnchorsStrictlyEquivalent(other.mission, candidate.mission)) === index,
+	);
+	const missionMatches = (candidate: ContextProposalAlternate): boolean =>
 		comparison === "strict"
-			? deps.missionAnchorsStrictlyEquivalent(currentMission, proposal.mission)
-			: deps.missionAnchorsLikelyEquivalent(currentMission, proposal.mission);
-	if (missionsMatch) {
+			? deps.missionAnchorsStrictlyEquivalent(currentMission, candidate.mission)
+			: deps.missionAnchorsLikelyEquivalent(currentMission, candidate.mission);
+	if (candidateProposals.some((candidate) => missionMatches(candidate))) {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
-	const title = [
+	const titleLines = [
 		"Existing completion workflow found",
 		"",
 		options.intro ?? "A workflow is already in progress. Choose how /cook should proceed:",
@@ -394,24 +415,42 @@ async function confirmExistingWorkflowProposal(
 		"Current mission",
 		currentMission,
 		"",
-		options.proposedMissionLabel ?? "New proposed mission",
+		options.proposedMissionLabel ?? "Primary proposed mission",
 		proposal.mission,
-	].join("\n");
+	];
+	if (candidateProposals.length > 1) {
+		titleLines.push("", "Alternate recent missions", ...candidateProposals.slice(1).map((candidate) => candidate.mission));
+	}
+	const title = titleLines.join("\n");
 	const continueChoice = "Continue current workflow\n\nKeep the current mission and treat the new goal as extra direction only.";
-	const refocusChoice =
-		options.refocusChoiceLabel ??
-		"Abandon current workflow and start this new one\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.";
+	const buildRefocusChoice = (candidate: ContextProposalAlternate, variant: "primary" | "alternate") =>
+		variant === "primary"
+			? `${options.refocusChoiceLabel ?? "Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state."}\n\n${summarizeProposalForChoice(candidate)}`
+			: `${options.alternateChoiceLabel ?? "Start alternate workflow from recent discussion\n\nReview this alternate replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state."}\n\n${summarizeProposalForChoice(candidate)}`;
+	const refocusChoices = candidateProposals.map((candidate, index) => buildRefocusChoice(candidate, index === 0 ? "primary" : "alternate"));
 	const cancelChoice = `Cancel\n\nKeep the current workflow unchanged. ${deps.mainChatRerunGuidance}`;
 	deps.maybeWriteTestSnapshot(
 		deps.completionTestExistingWorkflowChooserSnapshotPath(),
-		`${JSON.stringify({ title, choices: [continueChoice, refocusChoice, cancelChoice] }, null, 2)}\n`,
+		`${JSON.stringify({ title, candidateMissions: candidateProposals.map((candidate) => candidate.mission), choices: [continueChoice, ...refocusChoices, cancelChoice] }, null, 2)}\n`,
 	);
+	const missionOverride = deps.completionTestWorkflowMissionOverride();
+	if (missionOverride) {
+		const matched = candidateProposals.find((candidate) => deps.missionAnchorsStrictlyEquivalent(candidate.mission, missionOverride));
+		if (matched) {
+			return {
+				action: "refocus",
+				currentMissionAnchor: currentMission,
+				missionAnchor: matched.mission,
+				proposal: { ...matched, alternateProposals: [] },
+			};
+		}
+	}
 	const actionOverride = deps.completionTestWorkflowActionOverride();
 	if (actionOverride === "continue") {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
 	if (actionOverride === "refocus") {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
+		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission, proposal };
 	}
 	if (actionOverride === "cancel") return undefined;
 	if (!deps.getCtxHasUI(ctx)) {
@@ -421,10 +460,20 @@ async function confirmExistingWorkflowProposal(
 	if (!ui) {
 		return { action: "continue", currentMissionAnchor: currentMission };
 	}
-	const choice = await ui.select(title, [continueChoice, refocusChoice, cancelChoice]);
+	const choice = await ui.select(title, [continueChoice, ...refocusChoices, cancelChoice]);
 	if (!choice || choice === cancelChoice) return undefined;
-	if (choice === refocusChoice) {
-		return { action: "refocus", currentMissionAnchor: currentMission, missionAnchor: proposal.mission };
+	if (choice === continueChoice) {
+		return { action: "continue", currentMissionAnchor: currentMission };
+	}
+	const matchedIndex = refocusChoices.indexOf(choice);
+	if (matchedIndex >= 0) {
+		const selected = candidateProposals[matchedIndex];
+		return {
+			action: "refocus",
+			currentMissionAnchor: currentMission,
+			missionAnchor: selected.mission,
+			proposal: matchedIndex === 0 ? proposal : { ...selected, alternateProposals: [] },
+		};
 	}
 	return { action: "continue", currentMissionAnchor: currentMission };
 }
@@ -534,6 +583,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 				deps.emitCommandText(ctx, "Failed to load completion workflow state", "error");
 				return;
 			}
+			deps.activateCompletionRoutingForRoot(snapshot.files.root);
 			if (!goal) {
 				if (workflowDone) {
 					const projectName = path.basename(snapshot.files.root);
@@ -557,15 +607,19 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 					deps.emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 				} else {
 					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps);
-					if (assessment.action !== "refocus" || !assessment.proposal) {
+					if (!assessment.proposal || assessment.action === "continue") {
 						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 						return;
 					}
 					const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, deps, {
-						intro: "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:",
+						intro:
+							assessment.action === "refocus"
+								? "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:"
+								: "Recent discussion may point to a different implementation goal. Review the current mission and the latest inferred mission before deciding how /cook should proceed:",
 						proposedMissionLabel: "Proposed mission from recent discussion",
 						refocusChoiceLabel:
 							"Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.",
+						comparison: assessment.action === "refocus" ? "semantic" : "strict",
 					});
 					if (!decision) {
 						deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation", deps), "info");
@@ -575,8 +629,12 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 						return;
 					}
-					const proposalDecision = await deps.confirmContextProposal(ctx, assessment.proposal, {
-						title: "Start the replacement workflow from recent discussion?",
+					const selectedProposal = decision.proposal;
+					const proposalDecision = await deps.confirmContextProposal(ctx, selectedProposal, {
+						title:
+							assessment.action === "refocus"
+								? "Start the replacement workflow from recent discussion?"
+								: "Start the latest inferred workflow from recent discussion?",
 					});
 					if (!proposalDecision) {
 						deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal", deps), "info");

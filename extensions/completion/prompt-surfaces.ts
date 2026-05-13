@@ -63,8 +63,23 @@ export function buildContextProposalCritiqueText(analysis: ContextProposalAnalys
 		lines.push("Possible noise");
 		for (const item of analysis.possibleNoise) lines.push(`- ${item}`);
 	}
+	if (analysis.alternateMissions.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push("Alternate recent missions");
+		for (const item of analysis.alternateMissions) lines.push(`- ${item}`);
+	}
+	if (analysis.suppressedCompletedTopics.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push("Suppressed completed topics");
+		for (const item of analysis.suppressedCompletedTopics) lines.push(`- ${item}`);
+	}
+	if (analysis.suppressedNegatedTopics.length > 0) {
+		if (lines.length > 0) lines.push("");
+		lines.push("Suppressed negated topics");
+		for (const item of analysis.suppressedNegatedTopics) lines.push(`- ${item}`);
+	}
 	if (lines.length === 0) {
-		return "No critique, risk, or possible-noise notes were derived for this startup proposal.";
+		return "No critique, risk, noise, alternate-mission, or suppression notes were derived for this startup proposal.";
 	}
 	return lines.join("\n");
 }
@@ -101,6 +116,9 @@ export function buildContextProposalContinuationReason(
 		analysis.critique.length > 0 ? `accepted critique=${deps.truncateInline(analysis.critique.join(" | "), 160)}` : "accepted critique=none",
 		summarizeContextProposalAnalysisItems("risks", analysis.risks, deps.truncateInline),
 		summarizeContextProposalAnalysisItems("possible_noise", analysis.possibleNoise, deps.truncateInline),
+		summarizeContextProposalAnalysisItems("alternate_missions", analysis.alternateMissions, deps.truncateInline),
+		summarizeContextProposalAnalysisItems("suppressed_completed", analysis.suppressedCompletedTopics, deps.truncateInline),
+		summarizeContextProposalAnalysisItems("suppressed_negated", analysis.suppressedNegatedTopics, deps.truncateInline),
 	].filter((part): part is string => Boolean(part));
 	return `${prefix} ${deps.truncateInline(goalText, 220)} | startup routing: task_type=${analysis.taskType ?? deps.defaultTaskType}; evaluation_profile=${analysis.evaluationProfile ?? deps.defaultEvaluationProfile}; critique outcome=${critiqueParts.join("; ")}`;
 }
@@ -177,8 +195,14 @@ export function buildContextProposalConfirmationSelectItems(layout: ContextPropo
 	}));
 }
 
-export function buildContextProposalAnalystPrompt(projectName: string, discussion: string): string {
-	const lines = [`Project: ${projectName}`, "Infer the current mission from the discussion."];
+export function buildContextProposalAnalystPrompt(projectName: string, discussion: string, contextLines: string[] = []): string {
+	const lines = [
+		`Project: ${projectName}`,
+		"Infer the current implementation mission from the discussion.",
+		"Prefer the latest clear user implementation intent over older background context.",
+		"Treat stale, completed, or explicitly negated topics as context to ignore unless the latest discussion clearly reopens them.",
+	];
+	if (contextLines.length > 0) lines.push("", "Canonical workflow context:", ...contextLines);
 	lines.push("", "Recent discussion:", discussion || "(none)");
 	return lines.join("\n");
 }

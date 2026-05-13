@@ -14,9 +14,12 @@ export type ContextProposalAnalysis = {
 	critique: string[];
 	risks: string[];
 	possibleNoise: string[];
+	alternateMissions: string[];
+	suppressedCompletedTopics: string[];
+	suppressedNegatedTopics: string[];
 };
 
-export type ContextProposal = {
+export type ContextProposalAlternate = {
 	mission: string;
 	scope: string[];
 	constraints: string[];
@@ -25,6 +28,10 @@ export type ContextProposal = {
 	goalText: string;
 	basisPreview: string;
 	source: "session" | "analyst";
+};
+
+export type ContextProposal = ContextProposalAlternate & {
+	alternateProposals: ContextProposalAlternate[];
 };
 
 export type ContextProposalSection = "mission" | "scope" | "constraints" | "acceptance" | "critique" | "risks";
@@ -65,6 +72,17 @@ export type ContextProposalConfirmationLayout = {
 export type ContextProposalConfirmOptions = {
 	title: string;
 	nonInteractiveBehavior?: "accept" | "cancel";
+};
+
+export type ContextProposalWorkflowContext = {
+	currentMissionAnchor?: string;
+	latestCompletedSlice?: string;
+	latestVerifiedSlice?: string;
+	activeSliceGoal?: string;
+	activeSliceWhyNow?: string;
+	verificationGoal?: string;
+	verificationSummary?: string;
+	continuationPolicy?: string;
 };
 
 type ProposalCommonDeps = {
@@ -324,6 +342,41 @@ export function serializeRecentDiscussionEntries(entries: RecentDiscussionEntry[
 		.join("\n\n");
 }
 
+const RECENT_DISCUSSION_IMPLEMENTATION_INTENT_REGEX =
+	/(?:\b(?:fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep|edit|document|write)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|過濾|过滤|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
+
+function hasRecentDiscussionImplementationIntent(text: string, stripCodeBlocksFn: (text: string) => string): boolean {
+	const cleaned = stripCodeBlocksFn(text).replace(/\r/g, " ").trim();
+	if (!cleaned) return false;
+	return hasStructuredContextProposalSignal(cleaned, stripCodeBlocksFn) || RECENT_DISCUSSION_IMPLEMENTATION_INTENT_REGEX.test(cleaned);
+}
+
+function recentDiscussionWindows(
+	recentEntries: RecentDiscussionEntry[],
+	stripCodeBlocksFn: (text: string) => string,
+): RecentDiscussionEntry[][] {
+	if (recentEntries.length === 0) return [];
+	const windows: RecentDiscussionEntry[][] = [];
+	const seen = new Set<string>();
+	const pushWindow = (entries: RecentDiscussionEntry[]) => {
+		if (entries.length === 0) return;
+		const key = entries.map((entry) => `${entry.role}:${entry.text}`).join("\n---\n");
+		if (seen.has(key)) return;
+		seen.add(key);
+		windows.push(entries);
+	};
+	const latestEntry = recentEntries[0];
+	if (hasRecentDiscussionImplementationIntent(latestEntry.text, stripCodeBlocksFn)) {
+		pushWindow([latestEntry]);
+	}
+	const recentIntentWindow = recentEntries.filter((entry, index) => index < 3);
+	if (recentIntentWindow.some((entry) => hasRecentDiscussionImplementationIntent(entry.text, stripCodeBlocksFn))) {
+		pushWindow(recentIntentWindow);
+	}
+	pushWindow(recentEntries);
+	return windows;
+}
+
 export function extractJsonObjectFromText(text: string): string | undefined {
 	const trimmed = text.trim();
 	if (!trimmed) return undefined;
@@ -455,12 +508,26 @@ export function buildContextProposalAnalysis(args: {
 	critique?: string[];
 	risks?: string[];
 	possibleNoise?: string[];
+	alternateMissions?: string[];
+	suppressedCompletedTopics?: string[];
+	suppressedNegatedTopics?: string[];
 	hintTexts?: string[];
 }, deps: Pick<ProposalCommonDeps, "asString">): ContextProposalAnalysis {
 	const critique = uniqueProposalItems(args.critique ?? []);
 	const risks = uniqueProposalItems(args.risks ?? []);
 	const possibleNoise = uniqueProposalItems(args.possibleNoise ?? []);
-	const hintTexts = [...(args.hintTexts ?? []), ...critique, ...risks, ...possibleNoise];
+	const alternateMissions = uniqueProposalItems(args.alternateMissions ?? []);
+	const suppressedCompletedTopics = uniqueProposalItems(args.suppressedCompletedTopics ?? []);
+	const suppressedNegatedTopics = uniqueProposalItems(args.suppressedNegatedTopics ?? []);
+	const hintTexts = [
+		...(args.hintTexts ?? []),
+		...critique,
+		...risks,
+		...possibleNoise,
+		...alternateMissions,
+		...suppressedCompletedTopics,
+		...suppressedNegatedTopics,
+	];
 	const taskType = normalizeContextProposalTaskTypeHint(args.taskType, deps.asString) ?? inferContextProposalTaskType(hintTexts);
 	const evaluationProfile =
 		normalizeContextProposalEvaluationProfileHint(args.evaluationProfile, deps.asString) ??
@@ -471,6 +538,9 @@ export function buildContextProposalAnalysis(args: {
 		critique,
 		risks,
 		possibleNoise,
+		alternateMissions,
+		suppressedCompletedTopics,
+		suppressedNegatedTopics,
 	};
 }
 
@@ -481,18 +551,33 @@ function mergeContextProposalAnalysis(
 	const critique = uniqueProposalItems(sources.flatMap((source) => source?.critique ?? []));
 	const risks = uniqueProposalItems(sources.flatMap((source) => source?.risks ?? []));
 	const possibleNoise = uniqueProposalItems(sources.flatMap((source) => source?.possibleNoise ?? []));
+	const alternateMissions = uniqueProposalItems(sources.flatMap((source) => source?.alternateMissions ?? []));
+	const suppressedCompletedTopics = uniqueProposalItems(sources.flatMap((source) => source?.suppressedCompletedTopics ?? []));
+	const suppressedNegatedTopics = uniqueProposalItems(sources.flatMap((source) => source?.suppressedNegatedTopics ?? []));
+	const mergedHints = [
+		...hintTexts,
+		...critique,
+		...risks,
+		...possibleNoise,
+		...alternateMissions,
+		...suppressedCompletedTopics,
+		...suppressedNegatedTopics,
+	];
 	const taskType =
 		sources.map((source) => source?.taskType).find((value): value is string => Boolean(value)) ??
-		inferContextProposalTaskType([...hintTexts, ...critique, ...risks, ...possibleNoise]);
+		inferContextProposalTaskType(mergedHints);
 	const evaluationProfile =
 		sources.map((source) => source?.evaluationProfile).find((value): value is string => Boolean(value)) ??
-		inferContextProposalEvaluationProfile([...hintTexts, ...critique, ...risks, ...possibleNoise], taskType);
+		inferContextProposalEvaluationProfile(mergedHints, taskType);
 	return {
 		taskType,
 		evaluationProfile,
 		critique,
 		risks,
 		possibleNoise,
+		alternateMissions,
+		suppressedCompletedTopics,
+		suppressedNegatedTopics,
 	};
 }
 
@@ -507,6 +592,9 @@ export function finalizeContextProposalAnalysis(
 		critique: merged.critique,
 		risks: merged.risks,
 		possibleNoise: merged.possibleNoise,
+		alternateMissions: merged.alternateMissions,
+		suppressedCompletedTopics: merged.suppressedCompletedTopics,
+		suppressedNegatedTopics: merged.suppressedNegatedTopics,
 	};
 }
 
@@ -610,7 +698,109 @@ function finalizeContextProposal(proposal: ContextProposal, projectName: string,
 	};
 }
 
+function proposalLikelyReopensCompletedWork(proposal: ContextProposal): boolean {
+	const corpus = [proposal.mission, proposal.basisPreview, ...proposal.scope, ...proposal.constraints, ...proposal.acceptance]
+		.map((text) => normalizeProposalLine(text).toLowerCase())
+		.filter(Boolean)
+		.join("\n");
+	return /(again|reopen|follow[- ]?up|next round|another round|rerun|revisit|再次|重新|下一輪|下一轮|延續|延续|回歸|回归)/iu.test(corpus);
+}
+
+function missionTextOverlapsTopic(mission: string, topic: string): boolean {
+	if (!mission || !topic) return false;
+	const missionTokens = missionAnchorSemanticTokens(mission);
+	const topicTokens = missionAnchorSemanticTokens(topic);
+	if (missionTokens.length === 0 || topicTokens.length === 0) return false;
+	const topicSet = new Set(topicTokens);
+	const overlap = missionTokens.filter((token) => topicSet.has(token));
+	return overlap.length >= Math.min(2, Math.min(missionTokens.length, topicTokens.length));
+}
+
+function proposalOverlapsTopic(proposal: ContextProposal, topic: string): boolean {
+	if (!topic.trim()) return false;
+	if (missionTextOverlapsTopic(proposal.mission, topic)) return true;
+	const bodyTexts = [proposal.basisPreview, ...proposal.scope, ...proposal.constraints, ...proposal.acceptance].filter(Boolean);
+	return bodyTexts.some((text) => missionTextOverlapsTopic(text, topic) || missionTextOverlapsTopic(topic, text));
+}
+
+function extractSuppressedNegatedTopics(proposal: ContextProposal): string[] {
+	return uniqueProposalItems(
+		proposal.constraints.filter((item) => looksLikeConstraint(item) && CONTEXT_PROPOSAL_IMPLEMENTATION_SOURCE_REGEX.test(normalizeProposalLine(item))),
+	);
+}
+
+function applyWorkflowContextToProposal(
+	proposal: ContextProposal | undefined,
+	context: ContextProposalWorkflowContext | undefined,
+	deps: ProposalCommonDeps,
+): ContextProposal | undefined {
+	if (!proposal) return proposal;
+	const possibleNoise = [...proposal.analysis.possibleNoise];
+	const alternateMissions = [...proposal.analysis.alternateMissions];
+	const suppressedCompletedTopics = [...proposal.analysis.suppressedCompletedTopics];
+	const suppressedNegatedTopics = [...proposal.analysis.suppressedNegatedTopics, ...extractSuppressedNegatedTopics(proposal)];
+	if (!context) {
+		return {
+			...proposal,
+			analysis: finalizeContextProposalAnalysis(
+				{
+					...proposal.analysis,
+					possibleNoise,
+					alternateMissions,
+					suppressedCompletedTopics,
+					suppressedNegatedTopics,
+				},
+				[proposal.goalText, proposal.mission],
+			),
+		};
+	}
+	const completedTopics = [
+		context.latestCompletedSlice?.trim(),
+		context.latestVerifiedSlice?.trim(),
+		context.verificationGoal?.trim(),
+		context.verificationSummary?.trim(),
+	].filter((value): value is string => Boolean(value));
+	for (const topic of completedTopics) {
+		if (proposalOverlapsTopic(proposal, topic) && !proposalLikelyReopensCompletedWork(proposal)) {
+			suppressedCompletedTopics.push(topic);
+			possibleNoise.push(`already completed: ${topic}`);
+			return undefined;
+		}
+	}
+	const activeTopics = [context.activeSliceGoal?.trim(), context.activeSliceWhyNow?.trim()].filter((value): value is string => Boolean(value));
+	for (const topic of activeTopics) {
+		if (proposalOverlapsTopic(proposal, topic) && proposal.analysis.alternateMissions.length === 0) {
+			possibleNoise.push(`overlaps canonical active slice: ${topic}`);
+		}
+	}
+	const currentMissionAnchor = context.currentMissionAnchor?.trim();
+	if (
+		context.continuationPolicy === "done" &&
+		currentMissionAnchor &&
+		deps.missionAnchorsStrictlyEquivalent(proposal.mission, currentMissionAnchor) &&
+		!proposalLikelyReopensCompletedWork(proposal)
+	) {
+		suppressedCompletedTopics.push(currentMissionAnchor);
+		possibleNoise.push(`historical completed mission: ${currentMissionAnchor}`);
+		return undefined;
+	}
+	return {
+		...proposal,
+		analysis: finalizeContextProposalAnalysis(
+			{
+				...proposal.analysis,
+				possibleNoise,
+				alternateMissions,
+				suppressedCompletedTopics,
+				suppressedNegatedTopics,
+			},
+			[proposal.goalText, proposal.mission, ...completedTopics, ...activeTopics, currentMissionAnchor ?? ""],
+		),
+	};
+}
+
 export function shouldTreatBareActiveWorkflowProposalAsClearRefocus(proposal: ContextProposal): boolean {
+	if (proposal.analysis.alternateMissions.length > 0) return false;
 	if (proposal.source === "session") {
 		return proposal.scope.length > 0 && proposal.constraints.length > 0 && proposal.acceptance.length > 0;
 	}
@@ -654,6 +844,7 @@ export function parseContextProposalAnalystOutput(
 	const scope = uniqueProposalItems(deps.asStringArray(parsed.scope));
 	const constraints = uniqueProposalItems(deps.asStringArray(parsed.constraints));
 	const acceptance = uniqueProposalItems(deps.asStringArray(parsed.acceptance));
+	const alternateMissions = deps.asStringArray(parsed.alternate_missions ?? parsed.alternateMissions);
 	const analysis = buildContextProposalAnalysis(
 		{
 			taskType: parsed.task_type ?? parsed.taskType,
@@ -661,6 +852,9 @@ export function parseContextProposalAnalystOutput(
 			critique: deps.asStringArray(parsed.critique),
 			risks: deps.asStringArray(parsed.risks ?? parsed.risk),
 			possibleNoise: deps.asStringArray(parsed.possible_noise ?? parsed.possibleNoise),
+			alternateMissions,
+			suppressedCompletedTopics: deps.asStringArray(parsed.completed_topics ?? parsed.completedTopics),
+			suppressedNegatedTopics: deps.asStringArray(parsed.negated_topics ?? parsed.negatedTopics),
 			hintTexts: [raw, mission, ...scope, ...constraints, ...acceptance],
 		},
 		deps,
@@ -676,6 +870,16 @@ export function parseContextProposalAnalystOutput(
 			goalText,
 			basisPreview: raw.replace(/\s+/g, " ").trim(),
 			source: "analyst",
+			alternateProposals: alternateMissions.map((alternateMission) => ({
+				mission: alternateMission,
+				scope: [],
+				constraints: [],
+				acceptance: [],
+				analysis: finalizeContextProposalAnalysis(undefined, [alternateMission]),
+				goalText: buildContextProposalGoalText({ mission: alternateMission, scope: [], constraints: [], acceptance: [] }),
+				basisPreview: raw.replace(/\s+/g, " ").trim(),
+				source: "analyst",
+			})),
 		},
 		projectName,
 		deps,
@@ -685,9 +889,10 @@ export function parseContextProposalAnalystOutput(
 export function buildContextProposalAnalystPromptFromEntries(
 	projectName: string,
 	recentEntries: RecentDiscussionEntry[],
+	contextLines: string[] = [],
 	serializeEntries: (entries: RecentDiscussionEntry[]) => string = serializeRecentDiscussionEntries,
 ): string {
-	return buildContextProposalAnalystPrompt(projectName, serializeEntries(recentEntries));
+	return buildContextProposalAnalystPrompt(projectName, serializeEntries(recentEntries), contextLines);
 }
 
 export function parseContextProposal(text: string, projectName: string, deps: ProposalParseDeps): ContextProposal | undefined {
@@ -836,6 +1041,7 @@ export function parseContextProposal(text: string, projectName: string, deps: Pr
 			goalText,
 			basisPreview,
 			source: "session",
+			alternateProposals: [],
 		},
 		projectName,
 		deps,
@@ -850,7 +1056,26 @@ export function hasStructuredContextProposalSignal(text: string, stripCodeBlocks
 	);
 }
 
-export function parseStrictStructuredSessionProposal(text: string, projectName: string, deps: ProposalParseDeps): ContextProposal | undefined {
+function splitStructuredProposalBlocks(text: string): string[] {
+	const lines = text.split("\n");
+	const blocks: string[] = [];
+	let startIndex = 0;
+	for (let index = 0; index < lines.length; index += 1) {
+		const rawLine = lines[index].trim();
+		const inlineSection = matchInlineProposalSection(rawLine);
+		const headerSection = inlineSection?.section ?? detectProposalSection(rawLine);
+		if (index > 0 && headerSection === "mission") {
+			const block = lines.slice(startIndex, index).join("\n").trim();
+			if (block) blocks.push(block);
+			startIndex = index;
+		}
+	}
+	const tail = lines.slice(startIndex).join("\n").trim();
+	if (tail) blocks.push(tail);
+	return blocks;
+}
+
+function parseStrictSingleStructuredSessionProposal(text: string, projectName: string, deps: ProposalParseDeps): ContextProposal | undefined {
 	const cleaned = deps.stripCodeBlocks(text).replace(/\r/g, "").trim();
 	if (!cleaned) return undefined;
 	const lines = cleaned
@@ -902,7 +1127,45 @@ export function parseStrictStructuredSessionProposal(text: string, projectName: 
 		return undefined;
 	}
 	if (proposal.scope.length === 0 || proposal.constraints.length === 0 || proposal.acceptance.length === 0) return undefined;
-	return { ...proposal, source: "session" };
+	return { ...proposal, source: "session", alternateProposals: proposal.alternateProposals ?? [] };
+}
+
+export function parseStrictStructuredSessionProposal(text: string, projectName: string, deps: ProposalParseDeps): ContextProposal | undefined {
+	const cleaned = deps.stripCodeBlocks(text).replace(/\r/g, "").trim();
+	if (!cleaned) return undefined;
+	const blocks = splitStructuredProposalBlocks(cleaned);
+	const proposals = blocks
+		.map((block) => parseStrictSingleStructuredSessionProposal(block, projectName, deps))
+		.filter((proposal): proposal is ContextProposal => Boolean(proposal));
+	if (proposals.length === 0) return undefined;
+	const primary = proposals[proposals.length - 1];
+	const alternateProposals = proposals
+		.slice(0, -1)
+		.filter((proposal) => !deps.missionAnchorsStrictlyEquivalent(proposal.mission, primary.mission))
+		.map((proposal) => ({
+			mission: proposal.mission,
+			scope: proposal.scope,
+			constraints: proposal.constraints,
+			acceptance: proposal.acceptance,
+			analysis: proposal.analysis,
+			goalText: proposal.goalText,
+			basisPreview: proposal.basisPreview,
+			source: proposal.source,
+		}));
+	const alternateMissions = uniqueProposalItems(alternateProposals.map((proposal) => proposal.mission));
+	if (alternateMissions.length === 0) return { ...primary, alternateProposals: [] };
+	return {
+		...primary,
+		alternateProposals,
+		analysis: finalizeContextProposalAnalysis(
+			{
+				...primary.analysis,
+				alternateMissions,
+				possibleNoise: [...primary.analysis.possibleNoise, ...alternateMissions.map((mission) => `alternate recent mission: ${mission}`)],
+			},
+			[primary.goalText, primary.mission, ...alternateMissions],
+		),
+	};
 }
 
 export function extractContextProposalFromStructuredSession(
@@ -924,11 +1187,21 @@ export async function deriveCookContextProposalFromRecentDiscussion(
 	recentEntries: RecentDiscussionEntry[],
 	deps: ProposalParseDeps & {
 		analyzeContextProposal?: (recentEntries: RecentDiscussionEntry[]) => Promise<ContextProposal | undefined>;
+		workflowContext?: ContextProposalWorkflowContext;
 	},
 ): Promise<ContextProposal | undefined> {
 	if (recentEntries.length === 0) return undefined;
-	return (await deps.analyzeContextProposal?.(recentEntries)) ??
-		extractContextProposalFromStructuredSession(recentEntries, projectName, deps);
+	for (const candidateEntries of recentDiscussionWindows(recentEntries, deps.stripCodeBlocks)) {
+		const analyzed = applyWorkflowContextToProposal(await deps.analyzeContextProposal?.(candidateEntries), deps.workflowContext, deps);
+		if (analyzed) return analyzed;
+		const structured = applyWorkflowContextToProposal(
+			extractContextProposalFromStructuredSession(candidateEntries, projectName, deps),
+			deps.workflowContext,
+			deps,
+		);
+		if (structured) return structured;
+	}
+	return undefined;
 }
 
 export function resolveContextProposalConfirmationAction(

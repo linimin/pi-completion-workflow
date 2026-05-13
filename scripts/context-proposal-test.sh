@@ -158,6 +158,85 @@ PY
 
 rm -rf .agent
 
+# No workflow yet: when multiple structured discussions exist, bare /cook should prioritize the latest
+# concrete implementation mission instead of failing closed on older structured context.
+SESSION_ZERO_LATEST_WINDOW="$TMPDIR/session-zero-latest-window.jsonl"
+DISCUSSION_ZERO_LATEST_OLDER=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Keep observability regression coverage truthful.'
+DISCUSSION_ZERO_LATEST_NEWER=$'Mission: Fix login redirect callback behavior.\nScope:\n- Update the callback redirect decision logic.\nConstraints:\n- Do not refactor the broader auth flow.\nAcceptance:\n- Add a regression test for returning to the requested page.'
+DISCUSSION_SNAPSHOT_ZERO_LATEST_WINDOW="$TMPDIR/context-proposal-latest-window.json"
+python3 - "$SESSION_ZERO_LATEST_WINDOW" "$ROOT" "$DISCUSSION_ZERO_LATEST_OLDER" "$DISCUSSION_ZERO_LATEST_NEWER" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session_path = Path(sys.argv[1])
+cwd = sys.argv[2]
+older = sys.argv[3]
+newer = sys.argv[4]
+session_path.parent.mkdir(parents=True, exist_ok=True)
+entries = [
+    {
+        "type": "session",
+        "version": 3,
+        "id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": cwd,
+    },
+    {
+        "type": "message",
+        "id": "a1b2c3d4",
+        "parentId": None,
+        "timestamp": "2026-01-01T00:00:01.000Z",
+        "message": {
+            "role": "user",
+            "content": older,
+            "timestamp": 1767225601000,
+        },
+    },
+    {
+        "type": "message",
+        "id": "b2c3d4e5",
+        "parentId": "a1b2c3d4",
+        "timestamp": "2026-01-01T00:00:02.000Z",
+        "message": {
+            "role": "user",
+            "content": newer,
+            "timestamp": 1767225602000,
+        },
+    },
+]
+with session_path.open('w', encoding='utf-8') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_LATEST_WINDOW" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ZERO_LATEST_WINDOW" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-latest-window.out" 2>"$TMPDIR/pi-completion-context-proposal-latest-window.err"
+
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_LATEST_WINDOW" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Fix login redirect callback behavior.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert proposal['mission'] == mission, 'latest structured discussion should win over older structured context'
+assert proposal['scope'] == ['Update the callback redirect decision logic.'], 'latest structured discussion should preserve the latest scope only'
+assert proposal['analysis']['suppressedNegatedTopics'] == ['Do not refactor the broader auth flow.'], 'latest structured discussion should preserve negated implementation topics separately from the mission'
+assert state['mission_anchor'] == mission, 'latest structured discussion should initialize state.json with the latest mission'
+assert plan['mission_anchor'] == mission, 'latest structured discussion should initialize plan.json with the latest mission'
+assert active['mission_anchor'] == mission, 'latest structured discussion should initialize active-slice.json with the latest mission'
+PY
+
+rm -rf .agent
+
 # No workflow yet: bare /cook should fail closed when a required structured section is missing and analyst output is unavailable.
 SESSION_ZERO_MISSING="$TMPDIR/session-zero-missing-section.jsonl"
 DISCUSSION_ZERO_MISSING=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\n- Suppress the widget while a completion role is active.\nConstraints:\n- Do not reintroduce any other completion status surface.'
@@ -182,25 +261,34 @@ assert '/cook failed closed' in output, 'missing-section structured discussion s
 assert 'Mission/Scope/Constraints/Acceptance' in output, 'missing-section structured discussion should explain the strict fallback requirement'
 PY
 
-# No workflow yet: bare /cook should fail closed on ambiguous structured discussion when analyst output is unavailable.
+# No workflow yet: when one structured discussion message contains multiple complete mission blocks,
+# bare /cook should prioritize the latest block and preserve earlier blocks as alternate missions.
 SESSION_ZERO_AMBIG="$TMPDIR/session-zero-ambiguous.jsonl"
-DISCUSSION_ZERO_AMBIG=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\nMission: Ship an unrelated widget overhaul.\nScope:\n- Replace the widget entirely.'
+DISCUSSION_ZERO_AMBIG=$'Mission: Remove the completion status line while keeping the completion widget.\nScope:\n- Keep the non-running completion widget.\nConstraints:\n- Do not reintroduce any other completion status surface.\nAcceptance:\n- Update README to match the shipped behavior.\nMission: Ship an unrelated widget overhaul.\nScope:\n- Replace the widget entirely.\nConstraints:\n- Do not modify the completion widget.\nAcceptance:\n- Land the unrelated overhaul changes only.'
+DISCUSSION_SNAPSHOT_ZERO_AMBIG="$TMPDIR/context-proposal-ambiguous-latest-block.json"
 write_session "$SESSION_ZERO_AMBIG" "$ROOT" "$DISCUSSION_ZERO_AMBIG"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_ZERO_AMBIG" \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$SESSION_ZERO_AMBIG" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-ambiguous.out" 2>"$TMPDIR/pi-completion-context-proposal-ambiguous.err"
 
-python3 - "$TMPDIR/pi-completion-context-proposal-ambiguous.out" "$TMPDIR/pi-completion-context-proposal-ambiguous.err" <<'PY'
+python3 - "$DISCUSSION_SNAPSHOT_ZERO_AMBIG" <<'PY'
+import json
 import sys
 from pathlib import Path
 
-output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
-assert not Path('.agent').exists(), 'ambiguous structured discussion should fail closed without writing canonical state'
-assert '/cook failed closed' in output, 'ambiguous structured discussion should explain the fail-closed startup outcome'
-assert 'Mission/Scope/Constraints/Acceptance' in output, 'ambiguous structured discussion should explain the strict fallback requirement'
+mission = 'Ship an unrelated widget overhaul.'
+proposal = json.loads(Path(sys.argv[1]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert proposal['mission'] == mission, 'latest complete mission block should win inside a single structured discussion message'
+assert proposal['analysis']['alternateMissions'] == ['Remove the completion status line while keeping the completion widget.'], 'earlier complete mission blocks should be preserved as alternate missions'
+assert state['mission_anchor'] == mission, 'latest complete mission block should initialize canonical mission state'
 PY
+
+rm -rf .agent
 
 # No workflow yet: bare /cook structured fallback should normalize placeholder planning phrasing
 # into the concrete implementation mission when scope/acceptance clearly describe shipped work.
@@ -699,6 +787,100 @@ assert plan['mission_anchor'] == mission, 'summary-only active bare /cook should
 assert active['mission_anchor'] == mission, 'summary-only active bare /cook should keep active-slice.json unchanged'
 PY
 
+# Active workflow: when recent discussion suggests a different implementation goal but the proposal is
+# still incomplete, bare /cook should surface the chooser instead of silently resuming the current workflow.
+SESSION_ONE_AMBIGUOUS_CHOOSER="$TMPDIR/session-one-ambiguous-chooser.jsonl"
+DISCUSSION_ONE_AMBIGUOUS_CHOOSER=$'Mission: Fix login redirect callback behavior.\nScope:\n- Update the callback redirect decision logic for the current auth flow.'
+AMBIGUOUS_ROUTING_ONE="$TMPDIR/active-ambiguous-routing.json"
+AMBIGUOUS_CHOOSER_ONE="$TMPDIR/active-ambiguous-chooser.json"
+AMBIGUOUS_RESUME_PROMPT_ONE="$TMPDIR/unexpected-active-ambiguous-resume.txt"
+AMBIGUOUS_PROPOSAL_ONE="$TMPDIR/unexpected-active-ambiguous-proposal.json"
+write_session "$SESSION_ONE_AMBIGUOUS_CHOOSER" "$ROOT" "$DISCUSSION_ONE_AMBIGUOUS_CHOOSER"
+
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
+PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Fix login redirect callback behavior.","scope":["Update the callback redirect decision logic for the current auth flow."],"constraints":[],"acceptance":[],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.72,"possible_noise":["older completion widget cleanup"]}' \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$AMBIGUOUS_ROUTING_ONE" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$AMBIGUOUS_CHOOSER_ONE" \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$AMBIGUOUS_RESUME_PROMPT_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$AMBIGUOUS_PROPOSAL_ONE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ONE_AMBIGUOUS_CHOOSER" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-active-ambiguous-chooser.out" 2>"$TMPDIR/pi-completion-context-proposal-active-ambiguous-chooser.err"
+
+python3 - "$AMBIGUOUS_ROUTING_ONE" "$AMBIGUOUS_CHOOSER_ONE" "$AMBIGUOUS_RESUME_PROMPT_ONE" "$AMBIGUOUS_PROPOSAL_ONE" "$TMPDIR/pi-completion-context-proposal-active-ambiguous-chooser.out" "$TMPDIR/pi-completion-context-proposal-active-ambiguous-chooser.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mission = 'Remove the completion status line while keeping the completion widget.'
+routing = json.loads(Path(sys.argv[1]).read_text())
+chooser = json.loads(Path(sys.argv[2]).read_text())
+resume_path = Path(sys.argv[3])
+proposal_path = Path(sys.argv[4])
+output = Path(sys.argv[5]).read_text() + Path(sys.argv[6]).read_text()
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert routing['mode'] == 'bare', 'ambiguous active bare /cook should snapshot bare routing mode'
+assert routing['action'] == 'unclear', 'incomplete replacement discussion should stay ambiguous until the chooser resolves it'
+assert routing['reason'] == 'ambiguous_discussion', 'incomplete replacement discussion should record the ambiguous-discussion reason'
+assert routing['currentMissionAnchor'] == mission, 'ambiguous chooser routing should preserve the current mission anchor'
+assert routing['proposedMissionAnchor'] == 'Fix login redirect callback behavior.', 'ambiguous chooser routing should expose the latest inferred mission'
+assert chooser['title'].startswith('Existing completion workflow found'), 'ambiguous active bare /cook should still open the existing-workflow chooser'
+assert chooser['choices'][0].startswith('Continue current workflow'), 'ambiguous chooser should keep the continue option'
+assert chooser['choices'][1].startswith('Start new workflow from recent discussion'), 'ambiguous chooser should offer the recent-discussion replacement option'
+assert not resume_path.exists(), 'ambiguous active bare /cook should not silently queue a resume prompt before the chooser resolves it'
+assert not proposal_path.exists(), 'ambiguous chooser cancel should not open the final proposal confirmation'
+assert 'Discuss changes in the main chat and rerun /cook.' in output, 'ambiguous chooser cancel should redirect users back to the main chat and rerun /cook'
+assert state['mission_anchor'] == mission, 'ambiguous chooser cancel should keep state.json unchanged'
+assert plan['mission_anchor'] == mission, 'ambiguous chooser cancel should keep plan.json unchanged'
+assert active['mission_anchor'] == mission, 'ambiguous chooser cancel should keep active-slice.json unchanged'
+PY
+
+# Active workflow: when recent discussion contains multiple complete replacement missions, bare /cook should
+# surface all candidates and allow the chooser to select a non-primary alternate mission.
+SESSION_ONE_MULTI_CANDIDATE="$TMPDIR/session-one-multi-candidate.jsonl"
+DISCUSSION_ONE_MULTI_CANDIDATE=$'Mission: Fix login redirect callback behavior.\nScope:\n- Update the callback redirect decision logic for the current auth flow.\nConstraints:\n- Do not refactor the broader auth flow.\nAcceptance:\n- Add a regression test for returning to the requested page.\nMission: Add logout redirect regression coverage.\nScope:\n- Add coverage for logout redirect behavior.\nConstraints:\n- Do not change login redirect behavior in this pass.\nAcceptance:\n- Land a dedicated logout redirect regression test.'
+MULTI_ROUTING_ONE="$TMPDIR/active-multi-routing.json"
+MULTI_CHOOSER_ONE="$TMPDIR/active-multi-chooser.json"
+MULTI_PROPOSAL_ONE="$TMPDIR/active-multi-proposal.json"
+write_session "$SESSION_ONE_MULTI_CANDIDATE" "$ROOT" "$DISCUSSION_ONE_MULTI_CANDIDATE"
+
+PI_COMPLETION_EXISTING_WORKFLOW_MISSION='Fix login redirect callback behavior.' \
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$MULTI_ROUTING_ONE" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$MULTI_CHOOSER_ONE" \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$MULTI_PROPOSAL_ONE" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_ONE_MULTI_CANDIDATE" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-active-multi.out" 2>"$TMPDIR/pi-completion-context-proposal-active-multi.err"
+
+python3 - "$MULTI_ROUTING_ONE" "$MULTI_CHOOSER_ONE" "$MULTI_PROPOSAL_ONE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+selected = 'Fix login redirect callback behavior.'
+routing = json.loads(Path(sys.argv[1]).read_text())
+chooser = json.loads(Path(sys.argv[2]).read_text())
+proposal = json.loads(Path(sys.argv[3]).read_text())
+state = json.loads(Path('.agent/state.json').read_text())
+plan = json.loads(Path('.agent/plan.json').read_text())
+active = json.loads(Path('.agent/active-slice.json').read_text())
+
+assert routing['action'] == 'unclear', 'multi-candidate replacement discussion should stay ambiguous until the chooser selects one mission'
+assert routing['reason'] == 'ambiguous_discussion', 'multi-candidate replacement discussion should record ambiguous-discussion routing'
+assert routing['alternateMissions'] == ['Fix login redirect callback behavior.'], 'routing snapshot should preserve alternate candidate missions'
+assert chooser['candidateMissions'] == ['Add logout redirect regression coverage.', 'Fix login redirect callback behavior.'], 'chooser snapshot should list the primary and alternate candidate missions'
+assert len(chooser['choices']) == 4, 'chooser should expose continue, primary, alternate, and cancel choices'
+assert 'Scope\n- Add coverage for logout redirect behavior.' in chooser['choices'][1], 'primary chooser option should summarize the candidate scope'
+assert 'Acceptance\n- Add a regression test for returning to the requested page.' in chooser['choices'][2], 'alternate chooser option should summarize the candidate acceptance'
+assert proposal['mission'] == selected, 'selected alternate mission should flow into the final proposal confirmation'
+assert state['mission_anchor'] == selected, 'selected alternate mission should rewrite state.json after approval'
+assert plan['mission_anchor'] == selected, 'selected alternate mission should rewrite plan.json after approval'
+assert active['mission_anchor'] == selected, 'selected alternate mission should rewrite active-slice.json after approval'
+PY
+
 # Active workflow: bare /cook with a placeholder planning mission should still route through the existing
 # refocus chooser and final Start/Cancel gate before canonical state is rewritten.
 SESSION_ONE_REFOCUS_NORMALIZED="$TMPDIR/session-one-refocus-normalized.jsonl"
@@ -747,10 +929,93 @@ assert plan['mission_anchor'] == mission, 'active bare /cook refocus should rewr
 assert active['mission_anchor'] == mission, 'active bare /cook refocus should rewrite active-slice.json only after approval'
 PY
 
-# Completed workflow: bare /cook should normalize placeholder planning phrasing for the next workflow
-# round too, not only for fresh startup.
+# Completed workflow: bare /cook should suppress proposals that simply restate the completed mission
+# without a clear reopen or next-round signal.
 mark_done
 
+SESSION_TWO_COMPLETED_SUPPRESS="$TMPDIR/session-two-completed-suppress.jsonl"
+CURRENT_DONE_MISSION="$(python3 - <<'PY'
+import json
+from pathlib import Path
+print(json.loads(Path('.agent/state.json').read_text())['mission_anchor'])
+PY
+)"
+DISCUSSION_TWO_COMPLETED_SUPPRESS="Mission: ${CURRENT_DONE_MISSION}
+Scope:
+- Keep the current completed mission exactly as-is.
+Constraints:
+- Do not start a different workflow from this discussion.
+Acceptance:
+- Keep the finished mission closed and unchanged."
+DISCUSSION_SNAPSHOT_TWO_COMPLETED_SUPPRESS="$TMPDIR/context-proposal-next-round-completed-suppress.json"
+write_session "$SESSION_TWO_COMPLETED_SUPPRESS" "$ROOT" "$DISCUSSION_TWO_COMPLETED_SUPPRESS"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_TWO_COMPLETED_SUPPRESS" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_TWO_COMPLETED_SUPPRESS" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-next-round-completed-suppress.out" 2>"$TMPDIR/pi-completion-context-proposal-next-round-completed-suppress.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-next-round-completed-suppress.out" "$TMPDIR/pi-completion-context-proposal-next-round-completed-suppress.err" "$DISCUSSION_SNAPSHOT_TWO_COMPLETED_SUPPRESS" "$CURRENT_DONE_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+expected = sys.argv[4]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert state['mission_anchor'] == expected, 'completed-topic suppression should keep the done workflow mission anchor unchanged'
+assert state['continuation_policy'] == 'done', 'completed-topic suppression should keep the workflow closed'
+assert not snapshot.exists(), 'completed-topic suppression should not emit a proposal snapshot when the latest discussion only repeats finished work'
+assert '/cook failed closed' in output, 'completed-topic suppression should fail closed instead of reopening the finished mission'
+PY
+
+# Completed workflow: bare /cook should also suppress proposals that merely restate canonical
+# verification evidence for already verified work.
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+state = json.loads(Path('.agent/state.json').read_text())
+state['latest_verified_slice'] = 'verified-logout-redirect'
+Path('.agent/state.json').write_text(json.dumps(state, indent=2) + '\n')
+
+evidence = json.loads(Path('.agent/verification-evidence.json').read_text())
+evidence.update({
+    'subject_type': 'selected_slice',
+    'slice_id': 'verified-logout-redirect',
+    'goal': 'Add logout redirect regression coverage.',
+    'summary': 'Verified logout redirect regression coverage already matches the selected slice and current HEAD.',
+    'outcome': 'pass',
+})
+Path('.agent/verification-evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+PY
+
+SESSION_TWO_VERIFIED_SUPPRESS="$TMPDIR/session-two-verified-suppress.jsonl"
+DISCUSSION_TWO_VERIFIED_SUPPRESS=$'Mission: Add logout redirect regression coverage.\nScope:\n- Add coverage for logout redirect behavior.\nConstraints:\n- Do not change the verified logout redirect work.\nAcceptance:\n- Keep the verified logout redirect regression coverage unchanged.'
+DISCUSSION_SNAPSHOT_TWO_VERIFIED_SUPPRESS="$TMPDIR/context-proposal-next-round-verified-suppress.json"
+write_session "$SESSION_TWO_VERIFIED_SUPPRESS" "$ROOT" "$DISCUSSION_TWO_VERIFIED_SUPPRESS"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DISCUSSION_SNAPSHOT_TWO_VERIFIED_SUPPRESS" \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+pi --session "$SESSION_TWO_VERIFIED_SUPPRESS" -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-context-proposal-next-round-verified-suppress.out" 2>"$TMPDIR/pi-completion-context-proposal-next-round-verified-suppress.err"
+
+python3 - "$TMPDIR/pi-completion-context-proposal-next-round-verified-suppress.out" "$TMPDIR/pi-completion-context-proposal-next-round-verified-suppress.err" "$DISCUSSION_SNAPSHOT_TWO_VERIFIED_SUPPRESS" <<'PY'
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
+snapshot = Path(sys.argv[3])
+assert not snapshot.exists(), 'verification-evidence overlap suppression should not emit a proposal snapshot for already verified work'
+assert '/cook failed closed' in output, 'verification-evidence overlap suppression should fail closed when the latest discussion only repeats verified work'
+PY
+
+# Completed workflow: bare /cook should normalize placeholder planning phrasing for the next workflow
+# round too, not only for fresh startup.
 SESSION_TWO_NORMALIZED="$TMPDIR/session-two-normalized.jsonl"
 DISCUSSION_TWO_NORMALIZED=$'Mission: 開始實作這個方案\nScope:\n- Normalize bare /cook planning phrasing for the next workflow round.\n- Reset canonical state for the new implementation mission.\nConstraints:\n- Do not resume the completed workflow when the new round is clearly different.\nAcceptance:\n- Start a new round with the normalized mission anchor.'
 DISCUSSION_SNAPSHOT_TWO_NORMALIZED="$TMPDIR/context-proposal-next-round-normalized.json"
