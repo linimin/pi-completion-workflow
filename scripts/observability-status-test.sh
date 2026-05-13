@@ -237,4 +237,39 @@ PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON="$LIVE_ROLE_EVENT_STREAM_JSON" \
 pi -e "$PKG_ROOT" -p "/cook" >"$TMPDIR/pi-completion-status-stalled.out" 2>"$TMPDIR/pi-completion-status-stalled.err"
 assert_status_json "$STALLED_JSON" stalled
 
+cd "$PKG_ROOT"
+
+node <<'NODE'
+const fs = require('node:fs');
+
+const read = (file) => fs.readFileSync(file, 'utf8');
+const assertIncludes = (file, snippet) => {
+  const text = read(file);
+  if (!text.includes(snippet)) {
+    throw new Error(`${file} is missing required status/policy extraction text: ${snippet}`);
+  }
+};
+const assertNotIncludes = (file, snippet) => {
+  const text = read(file);
+  if (text.includes(snippet)) {
+    throw new Error(`${file} still contains stale inline status/policy text: ${snippet}`);
+  }
+};
+
+assertIncludes('extensions/completion/status-surface.ts', 'export async function refreshCompletionStatus(');
+assertIncludes('extensions/completion/status-surface.ts', 'export function buildCompletionStatusSurface(');
+assertIncludes('extensions/completion/status-surface.ts', 'export function buildInlineRunningLines(');
+assertIncludes('extensions/completion/policy-guards.ts', 'export function toolCallBlockReason(');
+assertIncludes('extensions/completion/state-store.ts', 'export function completionRootKey(');
+assertIncludes('extensions/completion/index.ts', 'import { toolCallBlockReason } from "./policy-guards";');
+assertIncludes('extensions/completion/index.ts', 'import { refreshCompletionStatus } from "./status-surface";');
+assertIncludes('extensions/completion/index.ts', 'const reason = toolCallBlockReason({');
+assertIncludes('extensions/completion/index.ts', 'await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });');
+assertNotIncludes('extensions/completion/index.ts', 'function buildCompletionStatusSurface(');
+assertNotIncludes('extensions/completion/index.ts', 'async function writeCompletionStatusProbe(');
+assertNotIncludes('extensions/completion/index.ts', 'function isAllowedControlPlanePath(');
+assertNotIncludes('extensions/completion/index.ts', 'function isMutatingBash(');
+assertNotIncludes('extensions/completion/index.ts', 'async function refreshStatus(');
+NODE
+
 echo "observability status test passed: $TMPDIR"

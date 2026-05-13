@@ -42,9 +42,12 @@ import {
 	maybeWriteContextProposalConfirmationSnapshot,
 	maybeWriteContextProposalSnapshot,
 } from "./prompt-surfaces";
+import { toolCallBlockReason } from "./policy-guards";
 import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
+import { refreshCompletionStatus } from "./status-surface";
 import {
 	buildProfileRecord,
+	completionRootKey,
 	defaultActiveSlice,
 	defaultPlan,
 	defaultState,
@@ -62,7 +65,7 @@ import {
 } from "./state-store";
 import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
-import type { CompletionStateSnapshot, CompletionStatusSurface, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
+import type { CompletionStateSnapshot, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
 
 const PROTOCOL_ID = "completion";
 const ROLE_NAMES = [
@@ -139,8 +142,6 @@ class StartupAnalystOverlay extends Container {
 
 const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const activatedCompletionRoutingRoots = new Set<string>();
-const LIVE_ROLE_WAITING_MS = 15_000;
-const LIVE_ROLE_STALLED_MS = 45_000;
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -644,7 +645,15 @@ async function runContextProposalAnalystSubprocess(
 	const updateActivity = (fresh = false) => {
 		if (fresh) liveActivity.updatedAt = nowMs();
 		liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: "running" }));
-		void refreshStatus(ctx);
+		void refreshCompletionStatus({
+			ctx,
+			liveRoleActivityByRoot,
+			completionStatusKey: COMPLETION_STATUS_KEY,
+			safeUiCall,
+			getCtxCwd,
+			getCtxHasUI,
+			getCtxUi,
+		});
 		overlay?.setLines(contextProposalAnalystProgressLines(liveActivity));
 	};
 	const heartbeat = setInterval(() => updateActivity(false), LIVE_ROLE_HEARTBEAT_MS);
@@ -706,7 +715,15 @@ async function runContextProposalAnalystSubprocess(
 				}
 			});
 			liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(liveActivity, { status: output ? "ok" : "error" }));
-			await refreshStatus(ctx);
+			await refreshCompletionStatus({
+				ctx,
+				liveRoleActivityByRoot,
+				completionStatusKey: COMPLETION_STATUS_KEY,
+				safeUiCall,
+				getCtxCwd,
+				getCtxHasUI,
+				getCtxUi,
+			});
 			return output;
 		} finally {
 			clearInterval(heartbeat);
@@ -714,7 +731,15 @@ async function runContextProposalAnalystSubprocess(
 				const current = liveRoleActivityByRoot.get(rootKey);
 				if (current && current.role === analystRole && current.status !== "running") {
 					liveRoleActivityByRoot.delete(rootKey);
-					void refreshStatus(ctx);
+					void refreshCompletionStatus({
+						ctx,
+						liveRoleActivityByRoot,
+						completionStatusKey: COMPLETION_STATUS_KEY,
+						safeUiCall,
+						getCtxCwd,
+						getCtxHasUI,
+						getCtxUi,
+					});
 				}
 			}, 10_000);
 			await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
@@ -1753,10 +1778,6 @@ function livePreviewForStatus(activity: LiveRoleActivity | undefined): string | 
 	) || undefined;
 }
 
-function completionRootKey(snapshot: CompletionStateSnapshot | undefined, cwd: string): string {
-	return snapshot?.files.root ?? findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? path.resolve(cwd);
-}
-
 function cloneLiveRoleActivity(activity: LiveRoleActivity, overrides: Partial<LiveRoleActivity> = {}): LiveRoleActivity {
 	return {
 		...activity,
@@ -1914,102 +1935,6 @@ function maybeReplayTestLiveRoleEvents(rootKey: string): void {
 	} catch {
 		// ignore malformed event stream override
 	}
-}
-
-function buildCompletionStatusSurface(
-	snapshot: CompletionStateSnapshot | undefined,
-	liveActivity: LiveRoleActivity | undefined,
-): CompletionStatusSurface {
-	if (!snapshot) return { snapshotPresent: false, widgetLines: [] };
-	const currentPhase = asString(snapshot.state?.current_phase) ?? "unknown";
-	const sliceId = asString(snapshot.active?.slice_id) ?? asString(snapshot.activeSlice?.slice_id) ?? "(none)";
-	const sliceGoal = truncateInline(asString(snapshot.active?.goal) ?? asString(snapshot.activeSlice?.goal) ?? "(unknown)", 140);
-	const nextMandatoryRole = asString(snapshot.state?.next_mandatory_role) ?? "unknown";
-	const remainingContractCount = asStringArray(snapshot.state?.unsatisfied_contract_ids).length;
-	const releaseBlockerCount = asNumber(snapshot.state?.remaining_release_blockers) ?? 0;
-	const highValueGapCount = asNumber(snapshot.state?.remaining_high_value_gaps) ?? 0;
-	const remainingStopJudgeCount = asNumber(snapshot.state?.remaining_stop_judges) ?? 0;
-	const activeRole = liveActivity?.status === "running" ? liveActivity.role : undefined;
-	const liveSignal = liveActivitySignal(liveActivity);
-	const livePreview = livePreviewForStatus(liveActivity);
-	const liveDetailsLines = activeRole
-		? buildInlineRunningLines({
-				role: activeRole,
-				currentAction: liveActivity?.currentAction,
-				toolActivity: liveActivity?.toolActivity,
-				toolRecentActivity: liveActivity?.toolRecentActivity,
-				recentActivity: liveActivity?.recentActivity,
-				assistantSummary: liveActivity?.assistantSummary,
-				progress: liveActivity?.progress,
-				rationale: liveActivity?.rationale,
-				nextStep: liveActivity?.nextStep,
-				verifying: liveActivity?.verifying,
-				stateDeltas: liveActivity?.stateDeltas,
-				startedAt: liveActivity?.startedAt,
-				updatedAt: liveActivity?.updatedAt,
-		  })
-		: [];
-	const remainingSummary = completionRemainingSummary({
-		remainingContractCount,
-		releaseBlockerCount,
-		highValueGapCount,
-		remainingStopJudgeCount,
-	});
-	const widgetLines = activeRole
-		? []
-		: [
-				"completion workflow",
-				`phase: ${currentPhase}`,
-				`slice: ${sliceId}`,
-				`goal: ${sliceGoal}`,
-				`next: ${nextMandatoryRole}`,
-				`remaining: ${remainingSummary}`,
-			];
-	return {
-		snapshotPresent: true,
-		widgetLines,
-		currentPhase,
-		sliceId,
-		nextMandatoryRole,
-		remainingContractCount,
-		releaseBlockerCount,
-		highValueGapCount,
-		remainingStopJudgeCount,
-		activeRole,
-		livePreview,
-		liveState: liveSignal?.state,
-		liveIdleMs: liveSignal?.idleMs,
-		liveToolActivity: liveActivity?.toolActivity,
-		liveAssistantSummary: liveActivity?.assistantSummary,
-		liveProgress: liveActivity?.progress,
-		liveRationale: liveActivity?.rationale,
-		liveNextStep: liveActivity?.nextStep,
-		liveVerifying: liveActivity?.verifying,
-		liveStateDeltas: liveActivity?.stateDeltas ?? [],
-		liveDetailsLines,
-	};
-}
-
-async function writeCompletionStatusProbe(surface: CompletionStatusSurface): Promise<void> {
-	const outputPath = asString(process.env.PI_COMPLETION_STATUS_SNAPSHOT_FILE);
-	if (!outputPath) return;
-	await fsp.mkdir(path.dirname(outputPath), { recursive: true });
-	await fsp.writeFile(outputPath, `${JSON.stringify(surface, null, 2)}\n`, "utf8");
-}
-
-async function refreshStatus(ctx: { cwd: string; hasUI: boolean; ui: any }) {
-	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
-	const rootKey = completionRootKey(snapshot, getCtxCwd(ctx));
-	maybeInjectTestLiveRoleActivity(rootKey);
-	maybeReplayTestLiveRoleEvents(rootKey);
-	const surface = buildCompletionStatusSurface(snapshot, liveRoleActivityByRoot.get(rootKey));
-	await writeCompletionStatusProbe(surface);
-	if (!getCtxHasUI(ctx)) return;
-	const ui = getCtxUi(ctx);
-	if (!ui) return;
-	safeUiCall(() => {
-		ui.setWidget(COMPLETION_STATUS_KEY, surface.widgetLines.length > 0 ? surface.widgetLines : undefined);
-	});
 }
 
 async function gitHeadSha(cwd: string): Promise<string | undefined> {
@@ -2193,53 +2118,6 @@ function parseStructuredProgress(text: string): {
 	return result;
 }
 
-function isPathInside(root: string, candidatePath: string): boolean {
-	const resolvedRoot = path.resolve(root);
-	const resolvedCandidate = path.resolve(candidatePath);
-	return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
-}
-
-function resolveToolPath(cwd: string, rawPath: string): string {
-	return path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
-}
-
-function isAllowedControlPlanePath(root: string, rawPath: string): boolean {
-	const resolved = resolveToolPath(root, rawPath);
-	if (path.basename(resolved) === ".gitignore") return true;
-	return isPathInside(path.join(root, ".agent"), resolved);
-}
-
-function startsWithAny(value: string, prefixes: string[]): boolean {
-	return prefixes.some((prefix) => value.startsWith(prefix));
-}
-
-function normalizeCommand(command: string): string {
-	return command.trim().replace(/\s+/g, " ");
-}
-
-function isMutatingBash(command: string): boolean {
-	const normalized = normalizeCommand(command);
-	return startsWithAny(normalized, [
-		"git add",
-		"git commit",
-		"git push",
-		"rm ",
-		"mv ",
-		"cp ",
-		"mkdir ",
-		"touch ",
-		"chmod ",
-		"chown ",
-		"sed -i",
-		"perl -pi",
-		"python -c",
-		"python3 -c",
-		"node -e",
-		"bun -e",
-		"tee ",
-	]) || normalized.includes(">") || normalized.includes("| tee") || normalized.includes("apply_patch");
-}
-
 function lastAssistantText(messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -2274,6 +2152,14 @@ function completionResumePrompt(taskType: string, evaluationProfile: string): st
 }
 
 export default function completionExtension(pi: ExtensionAPI) {
+	const statusSurfaceArgs = {
+		liveRoleActivityByRoot,
+		completionStatusKey: COMPLETION_STATUS_KEY,
+		safeUiCall,
+		getCtxCwd,
+		getCtxHasUI,
+		getCtxUi,
+	};
 	const driverDeps = {
 		bareOnlyGuidance: COOK_BARE_ONLY_GUIDANCE,
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
@@ -2308,14 +2194,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		await refreshStatus(ctx);
+		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
 		if (shouldTestAutoContinueOnSessionStart()) {
 			await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		await refreshStatus(ctx);
+		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -2323,7 +2209,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		if (snapshot && (await pathExists(snapshot.files.compactionMarkerPath))) {
 			await fsp.rm(snapshot.files.compactionMarkerPath, { force: true });
 		}
-		await refreshStatus(ctx);
+		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
 		await autoContinueWorkflowIfNeeded(pi, ctx, driverDeps);
 	});
 
@@ -2394,44 +2280,14 @@ export default function completionExtension(pi: ExtensionAPI) {
 		const snapshot = await loadCompletionSnapshot(cwd);
 		const completionActive = Boolean(snapshot) && asString(snapshot?.state?.continuation_policy) !== "done";
 		const root = snapshot?.files.root ?? findRepoRoot(cwd) ?? cwd;
-
-		if (event.toolName === "completion_role" && role) {
-			return { block: true, reason: `Nested completion role dispatch is forbidden for ${role}.` };
-		}
-
-		if (event.toolName === "edit" || event.toolName === "write") {
-			const rawPath = asString((event.input as JsonRecord).path);
-			if (!rawPath) return;
-
-			if (role === "completion-reviewer" || role === "completion-auditor" || role === "completion-stop-judge") {
-				return { block: true, reason: `${role} is read-only.` };
-			}
-
-			if ((role === "completion-bootstrapper" || role === "completion-regrounder") && !isAllowedControlPlanePath(root, rawPath)) {
-				return { block: true, reason: `${role} may only edit .agent/** or .gitignore.` };
-			}
-
-			if (!role && completionActive && !isAllowedControlPlanePath(root, rawPath)) {
-				return { block: true, reason: "The workflow driver may not edit tracked product files directly during completion." };
-			}
-		}
-
-		if (event.toolName !== "bash") return;
-		const command = asString((event.input as JsonRecord).command);
-		if (!command) return;
-		const normalized = normalizeCommand(command);
-
-		if (["completion-reviewer", "completion-auditor", "completion-stop-judge"].includes(role ?? "") && isMutatingBash(normalized)) {
-			return { block: true, reason: `${role} is read-only and cannot run mutating bash.` };
-		}
-
-		if ((role === "completion-bootstrapper" || role === "completion-regrounder") && startsWithAny(normalized, ["git add", "git commit"])) {
-			return { block: true, reason: `${role} may not create commits.` };
-		}
-
-		if (!role && completionActive && startsWithAny(normalized, ["git add", "git commit"])) {
-			return { block: true, reason: "The workflow driver may not create commits directly during completion." };
-		}
+		const reason = toolCallBlockReason({
+			toolName: event.toolName,
+			input: isRecord(event.input) ? event.input : undefined,
+			role,
+			completionActive,
+			root,
+		});
+		if (reason) return { block: true, reason };
 	});
 
 	pi.registerTool({
@@ -2493,7 +2349,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 					updatedAt: activity.updatedAt,
 				};
 				liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(activity, { status: activity.status }));
-				void refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
+				void refreshCompletionStatus({ ctx: ctx as { cwd: string; hasUI: boolean; ui: any }, ...statusSurfaceArgs });
 				onUpdate?.({
 					content: [{ type: "text", text: activity.lastAssistantText || activity.currentAction || `Running ${role}...` }],
 					details,
@@ -2523,7 +2379,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 			});
 
 			liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(result.activity, { status: result.ok ? "ok" : "error" }));
-			await refreshStatus(ctx as { cwd: string; hasUI: boolean; ui: any });
+			await refreshCompletionStatus({ ctx: ctx as { cwd: string; hasUI: boolean; ui: any }, ...statusSurfaceArgs });
 			setTimeout(() => {
 				const current = liveRoleActivityByRoot.get(rootKey);
 				if (current && current.role === role && current.status !== "running") {

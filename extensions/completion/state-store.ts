@@ -75,6 +75,10 @@ export function findRepoRoot(startCwd: string): string | undefined {
 	return undefined;
 }
 
+export function completionRootKey(snapshot: CompletionStateSnapshot | undefined, cwd: string): string {
+	return snapshot?.files.root ?? findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? path.resolve(cwd);
+}
+
 export async function readJson(filePath: string): Promise<JsonRecord | undefined> {
 	try {
 		const raw = await fsp.readFile(filePath, "utf8");
