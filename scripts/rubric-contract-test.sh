@@ -79,9 +79,9 @@ assertIncludes('CHANGELOG.md', 'made reviewer/auditor/stop-judge transcription f
 assertIncludes('extensions/completion/index.ts', 'Canonical routing profile:\\n- task_type: ${taskType}\\n- evaluation_profile: ${evaluationProfile}');
 assertIncludes('extensions/completion/index.ts', '`Task type: ${currentTaskType(snapshot) ?? "(missing)"}`');
 assertIncludes('extensions/completion/index.ts', '`Evaluation profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
-assertIncludes('extensions/completion/index.ts', '`task_type: ${currentTaskType(snapshot) ?? "(missing)"}`');
-assertIncludes('extensions/completion/index.ts', '`evaluation_profile: ${currentEvaluationProfile(snapshot) ?? "(missing)"}`');
-assertIncludes('extensions/completion/index.ts', 'Canonical evaluation handoff for ${role}:');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`- task_type: ${deps.currentTaskType(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`- evaluation_profile: ${deps.currentEvaluationProfile(snapshot) ?? "(missing)"}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', 'Canonical evaluation handoff for ${role}:');
 assertIncludes('extensions/completion/index.ts', 'buildEvaluationRoleReminderText(snapshot, nextRole)');
 assertIncludes('extensions/completion/index.ts', 'import { parseFirstNumber, parseYesNo } from "./transcription";');
 assertIncludes('extensions/completion/role-runner.ts', 'import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";');

@@ -99,8 +99,8 @@ assertSectionIncludes('skills/completion-protocol/references/completion.md', '##
 assertIncludes('extensions/completion/index.ts', 'Verification evidence artifact: ${evidence.path}');
 assertIncludes('extensions/completion/index.ts', 'Verification evidence summary: ${evidence.summary}');
 assertIncludes('extensions/completion/index.ts', 'Canonical verification evidence artifact is currently: ${evidence.path} (${evidence.status})');
-assertIncludes('extensions/completion/index.ts', '`- verification_evidence_path: ${evidence.path}`');
-assertIncludes('extensions/completion/index.ts', '`- verification_evidence_summary: ${evidence.summary}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`- verification_evidence_path: ${evidence.path}`');
+assertIncludes('extensions/completion/prompt-surfaces.ts', '`- verification_evidence_summary: ${evidence.summary}`');
 assertIncludes('extensions/completion/index.ts', 'Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.');
 assertIncludes('scripts/release-check.sh', 'bash .agent/verify_completion_control_plane.sh');
 assertIncludes('scripts/release-check.sh', 'bash ./scripts/canonical-evidence-artifact-test.sh');

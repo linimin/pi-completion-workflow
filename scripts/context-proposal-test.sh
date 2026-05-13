@@ -1088,4 +1088,9 @@ assert 'Discuss changes in the main chat and rerun /cook.' in output, 'cancel co
 assert not Path('.agent').exists(), 'cancel action should not write canonical workflow state'
 PY
 
+grep -q 'export async function deriveCookContextProposalFromRecentDiscussion' "$PKG_ROOT/extensions/completion/proposal.ts"
+grep -q 'export function parseContextProposalAnalystOutput' "$PKG_ROOT/extensions/completion/proposal.ts"
+grep -q 'export function buildContextProposalConfirmationLayout' "$PKG_ROOT/extensions/completion/prompt-surfaces.ts"
+grep -q 'export function buildEvaluationRoleContextLines' "$PKG_ROOT/extensions/completion/prompt-surfaces.ts"
+
 echo "context proposal test passed: $ROOT"
