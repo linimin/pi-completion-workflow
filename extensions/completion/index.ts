@@ -44,24 +44,33 @@ import {
 } from "./prompt-surfaces";
 import { toolCallBlockReason } from "./policy-guards";
 import { getPiInvocation, runCompletionRole, writeTempFile } from "./role-runner";
-import { buildInlineRunningLines, formatInlineRunningText, refreshCompletionStatus } from "./status-surface";
 import {
-	buildProfileRecord,
+	applyLiveRoleEvent,
+	buildInlineRunningLines,
+	cloneLiveRoleActivity,
+	createLiveRoleActivity,
+	formatElapsed,
+	formatInlineRunningText,
+	nowMs,
+	pushRecentActivity,
+	refreshCompletionStatus,
+	truncateInline,
+} from "./status-surface";
+import {
+	asNumber,
+	asString,
+	asStringArray,
 	completionRootKey,
-	defaultActiveSlice,
-	defaultPlan,
-	defaultState,
-	defaultVerificationEvidence,
-	detectDocsSurfaces,
+	currentEvaluationProfile,
+	currentTaskType,
 	findCompletionRoot,
 	findRepoRoot,
+	isRecord,
 	loadCompletionDataForReminder,
 	loadCompletionSnapshot,
 	pathExists,
-	readJson,
 	readText,
-	resolveFiles,
-	writeJsonFile,
+	scaffoldCompletionFiles as scaffoldCompletionFilesOnDisk,
 } from "./state-store";
 import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
@@ -144,26 +153,8 @@ const liveRoleActivityByRoot = new Map<string, LiveRoleActivity>();
 const activatedCompletionRoutingRoots = new Set<string>();
 const LIVE_ROLE_HEARTBEAT_MS = 5_000;
 
-function isRecord(value: unknown): value is JsonRecord {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asStringArray(value: unknown): string[] {
-	return Array.isArray(value)
-		? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-		: [];
 }
 
 function roleFromEnv(): string | undefined {
@@ -173,27 +164,6 @@ function roleFromEnv(): string | undefined {
 function candidateSlices(plan: JsonRecord | undefined): JsonRecord[] {
 	const slices = plan?.candidate_slices;
 	return Array.isArray(slices) ? slices.filter(isRecord) : [];
-}
-
-async function detectVerifierCommand(root: string): Promise<string | undefined> {
-	const packageJsonPath = path.join(root, "package.json");
-	const packageJson = await readJson(packageJsonPath);
-	if (packageJson) {
-		const scripts = isRecord(packageJson.scripts) ? packageJson.scripts : undefined;
-		const packageManager = asString((packageJson as JsonRecord).packageManager) ?? "";
-		const runner = packageManager.startsWith("pnpm") ? "pnpm" : packageManager.startsWith("yarn") ? "yarn" : packageManager.startsWith("bun") ? "bun" : "npm";
-		if (scripts && asString(scripts.test)) return runner === "npm" ? "npm test" : `${runner} test`;
-		if (scripts && asString(scripts.check)) return runner === "npm" ? "npm run check" : `${runner} check`;
-		if (scripts && asString(scripts.lint)) return runner === "npm" ? "npm run lint" : `${runner} lint`;
-	}
-	if (await pathExists(path.join(root, "pnpm-lock.yaml"))) return "pnpm test";
-	if (await pathExists(path.join(root, "bun.lockb")) || await pathExists(path.join(root, "bun.lock"))) return "bun test";
-	if (await pathExists(path.join(root, "yarn.lock"))) return "yarn test";
-	if (await pathExists(path.join(root, "Cargo.toml"))) return "cargo test";
-	if (await pathExists(path.join(root, "pyproject.toml")) || await pathExists(path.join(root, "pytest.ini"))) return "pytest";
-	if (await pathExists(path.join(root, "go.mod"))) return "go test ./...";
-	if (await pathExists(path.join(root, "Makefile"))) return "make test";
-	return undefined;
 }
 
 function normalizeMissionAnchorText(value: string): string {
@@ -924,350 +894,16 @@ function deriveMissionAnchor(rawGoal: string, projectName: string): string {
 }
 
 
-function buildAgentReadme(projectName: string): string {
-	return `# Completion Control Plane\n\nThis repository uses the \`completion\` workflow for long-running coding tasks.\n\n## Canonical tracked contract files\n\n- \`.agent/README.md\`\n- \`.agent/mission.md\`\n- \`.agent/profile.json\`\n- \`.agent/verify_completion_stop.sh\`\n- \`.agent/verify_completion_control_plane.sh\`\n\n## Ignored canonical execution state\n\n- \`.agent/state.json\`\n- \`.agent/plan.json\`\n- \`.agent/active-slice.json\`\n- \`.agent/slice-history.jsonl\`\n- \`.agent/stop-check-history.jsonl\`\n- \`.agent/verification-evidence.json\`\n- \`.agent/*.log\`\n- \`.agent/tmp/\`\n\n\`.agent/verification-evidence.json\` is the durable canonical record of deterministic verification for the selected slice or current HEAD. Recovery, review, audit, and stop-check reminder surfaces consume it instead of temp-only artifacts or conversational summaries when it is populated.\n\nThe source of truth for long-running completion work is canonical \`.agent/**\` state plus current repo truth.\n\nProject: ${projectName}\n`;
-}
-
-function buildMission(projectName: string, missionAnchor: string): string {
-	return `# Mission\n\nProject: ${projectName}\n\nMission anchor:\n${missionAnchor}\n\nThis file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n`;
-}
-
-function buildVerifyStopScript(verifierCommand?: string): string {
-	const repoCheck = verifierCommand
-		? `echo "[completion] running repo-level verification: ${verifierCommand}"\n${verifierCommand}`
-		: `echo "[completion] no repo-specific verifier auto-detected; control-plane verification only"`;
-	return `#!/usr/bin/env bash\nset -euo pipefail\n\nbash .agent/verify_completion_control_plane.sh\n${repoCheck}\n`;
-}
-
-function buildVerifyControlPlaneScript(): string {
-	return `#!/usr/bin/env bash
-set -euo pipefail
-
-for file in \
-  .agent/README.md \
-  .agent/mission.md \
-  .agent/profile.json \
-  .agent/verify_completion_stop.sh \
-  .agent/verify_completion_control_plane.sh \
-  .agent/state.json \
-  .agent/plan.json \
-  .agent/active-slice.json \
-  .agent/verification-evidence.json; do
-  [[ -e "$file" ]] || { echo "missing required file: $file"; exit 1; }
-done
-
-node <<'NODE'
-const childProcess = require('node:child_process');
-const fs = require('node:fs');
-
-const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
-const assert = (condition, message) => {
-  if (!condition) {
-    console.error(message);
-    process.exit(1);
-  }
-};
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-const isString = (value) => typeof value === 'string';
-const isNonEmptyString = (value) => isString(value) && value.length > 0;
-const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');
-const hasOnlyKeys = (object, allowed, label) => {
-  const unknown = Object.keys(object).filter((key) => !allowed.includes(key));
-  assert(unknown.length === 0, label + ': unknown keys: ' + unknown.join(', '));
-};
-const requireKeys = (object, required, label) => {
-  for (const key of required) {
-    assert(Object.prototype.hasOwnProperty.call(object, key), label + ': missing required field: ' + key);
-  }
-};
-const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
-const sameStringArrays = (left, right) => left.length === right.length && left.every((item, index) => item === right[index]);
-
-for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.json', '.agent/active-slice.json', '.agent/verification-evidence.json']) {
-  readJson(file);
-}
-
-const profile = readJson('.agent/profile.json');
-const state = readJson('.agent/state.json');
-const plan = readJson('.agent/plan.json');
-const active = readJson('.agent/active-slice.json');
-const evidence = readJson('.agent/verification-evidence.json');
-
-assert(isObject(profile), '.agent/profile.json must be an object');
-assert(isObject(state), '.agent/state.json must be an object');
-assert(isObject(plan), '.agent/plan.json must be an object');
-assert(isObject(active), '.agent/active-slice.json must be an object');
-assert(isObject(evidence), '.agent/verification-evidence.json must be an object');
-
-const requiredProfile = ['schema_version', 'protocol_id', 'project_name', 'required_stop_judges', 'priority_policy_id', 'task_type', 'evaluation_profile', 'docs_surfaces'];
-requireKeys(profile, requiredProfile, '.agent/profile.json');
-hasOnlyKeys(profile, requiredProfile, '.agent/profile.json');
-assert(profile.protocol_id === 'completion', '.agent/profile.json: protocol_id must be completion');
-assert(Array.isArray(profile.docs_surfaces), '.agent/profile.json: docs_surfaces must be an array');
-assert(isNonEmptyString(profile.task_type), '.agent/profile.json: task_type must be a non-empty string');
-assert(isNonEmptyString(profile.evaluation_profile), '.agent/profile.json: evaluation_profile must be a non-empty string');
-
-const requiredState = [
-  'schema_version','mission_anchor','task_type','evaluation_profile','current_phase','continuation_policy','continuation_reason','project_done',
-  'requires_reground','slices_since_last_reground','remaining_release_blockers','remaining_high_value_gaps',
-  'unsatisfied_contract_ids','release_blocker_ids','next_mandatory_action','next_mandatory_role',
-  'remaining_stop_judges','last_reground_at','last_auditor_verdict','contract_status','latest_completed_slice','latest_verified_slice'
-];
-const continuationPolicies = ['continue', 'await_user_input', 'blocked', 'paused', 'done'];
-const workflowRoles = ['completion-bootstrapper', 'completion-regrounder', 'completion-implementer', 'completion-reviewer', 'completion-auditor', 'completion-stop-judge', null];
-const workflowPhases = ['reground', 'implement', 'post_commit_review', 'post_commit_audit', 'post_commit_reconcile', 'stop_wave', 'awaiting_user', 'blocked', 'done'];
-requireKeys(state, requiredState, '.agent/state.json');
-hasOnlyKeys(state, requiredState, '.agent/state.json');
-assert(continuationPolicies.includes(state.continuation_policy), '.agent/state.json: invalid continuation_policy');
-assert(workflowRoles.includes(state.next_mandatory_role), '.agent/state.json: invalid next_mandatory_role');
-assert(workflowPhases.includes(state.current_phase), '.agent/state.json: invalid current_phase');
-assert(isNonEmptyString(state.task_type), '.agent/state.json: task_type must be a non-empty string');
-assert(isNonEmptyString(state.evaluation_profile), '.agent/state.json: evaluation_profile must be a non-empty string');
-assert(isStringArray(state.unsatisfied_contract_ids), '.agent/state.json: unsatisfied_contract_ids must be an array of strings');
-assert(isStringArray(state.release_blocker_ids), '.agent/state.json: release_blocker_ids must be an array of strings');
-
-const requiredPlan = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'last_reground_at', 'plan_basis', 'candidate_slices'];
-const requiredSlice = ['slice_id', 'goal', 'acceptance_criteria', 'contract_ids', 'priority', 'status', 'why_now', 'blocked_on', 'evidence'];
-const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
-const allowedSlice = [...requiredSlice, ...planMirrorFields];
-const sliceStatuses = ['planned', 'selected', 'in_progress', 'blocked', 'done', 'cancelled'];
-requireKeys(plan, requiredPlan, '.agent/plan.json');
-hasOnlyKeys(plan, requiredPlan, '.agent/plan.json');
-assert(isNonEmptyString(plan.task_type), '.agent/plan.json: task_type must be a non-empty string');
-assert(isNonEmptyString(plan.evaluation_profile), '.agent/plan.json: evaluation_profile must be a non-empty string');
-assert(Array.isArray(plan.candidate_slices), '.agent/plan.json: candidate_slices must be an array');
-for (const [index, slice] of plan.candidate_slices.entries()) {
-  const label = '.agent/plan.json candidate_slices[' + index + ']';
-  assert(isObject(slice), label + ' must be an object');
-  requireKeys(slice, requiredSlice, label);
-  hasOnlyKeys(slice, allowedSlice, label);
-  assert(isString(slice.slice_id) && slice.slice_id.length > 0, label + ': slice_id must be a non-empty string');
-  assert(isString(slice.goal) && slice.goal.length > 0, label + ': goal must be a non-empty string');
-  assert(Array.isArray(slice.acceptance_criteria) && slice.acceptance_criteria.length > 0 && slice.acceptance_criteria.every((item) => typeof item === 'string' && item.length > 0), label + ': acceptance_criteria must be a non-empty array of strings');
-  assert(isStringArray(slice.contract_ids), label + ': contract_ids must be an array of strings');
-  assert(typeof slice.priority === 'number' && Number.isFinite(slice.priority), label + ': priority must be a finite number');
-  assert(sliceStatuses.includes(slice.status), label + ': invalid status');
-  assert(isString(slice.why_now) && slice.why_now.length > 0, label + ': why_now must be a non-empty string');
-  assert(isStringArray(slice.blocked_on), label + ': blocked_on must be an array of strings');
-  assert(isStringArray(slice.evidence), label + ': evidence must be an array of strings');
-  if (hasOwn(slice, 'locked_notes')) assert(isStringArray(slice.locked_notes), label + ': locked_notes must be an array of strings when present');
-  if (hasOwn(slice, 'must_fix_findings')) assert(isStringArray(slice.must_fix_findings), label + ': must_fix_findings must be an array of strings when present');
-  if (hasOwn(slice, 'implementation_surfaces')) assert(isStringArray(slice.implementation_surfaces), label + ': implementation_surfaces must be an array of strings when present');
-  if (hasOwn(slice, 'verification_commands')) assert(isStringArray(slice.verification_commands), label + ': verification_commands must be an array of strings when present');
-  if (hasOwn(slice, 'basis_commit')) assert(isNonEmptyString(slice.basis_commit), label + ': basis_commit must be a non-empty string when present');
-  if (hasOwn(slice, 'remaining_contract_ids_before')) assert(isStringArray(slice.remaining_contract_ids_before), label + ': remaining_contract_ids_before must be an array of strings when present');
-  if (hasOwn(slice, 'release_blocker_count_before')) assert(typeof slice.release_blocker_count_before === 'number' && Number.isFinite(slice.release_blocker_count_before), label + ': release_blocker_count_before must be a finite number when present');
-  if (hasOwn(slice, 'high_value_gap_count_before')) assert(typeof slice.high_value_gap_count_before === 'number' && Number.isFinite(slice.high_value_gap_count_before), label + ': high_value_gap_count_before must be a finite number when present');
-}
-
-const isNonEmptyStringArray = (value) => Array.isArray(value) && value.length > 0 && value.every((item) => isNonEmptyString(item));
-const requiredActiveBase = ['schema_version', 'mission_anchor', 'task_type', 'evaluation_profile', 'status', 'slice_id', 'goal', 'contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
-const allowedActive = [...requiredActiveBase, 'priority', 'why_now'];
-const activeStatuses = ['idle', 'selected', 'in_progress', 'committed', 'done'];
-requireKeys(active, requiredActiveBase, '.agent/active-slice.json');
-hasOnlyKeys(active, allowedActive, '.agent/active-slice.json');
-assert(activeStatuses.includes(active.status), '.agent/active-slice.json: invalid status');
-assert(isNonEmptyString(active.task_type), '.agent/active-slice.json: task_type must be a non-empty string');
-assert(isNonEmptyString(active.evaluation_profile), '.agent/active-slice.json: evaluation_profile must be a non-empty string');
-assert(isStringArray(active.contract_ids), '.agent/active-slice.json: contract_ids must be an array of strings');
-assert(Array.isArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be an array');
-assert(isStringArray(active.blocked_on), '.agent/active-slice.json: blocked_on must be an array of strings');
-assert(isStringArray(active.locked_notes), '.agent/active-slice.json: locked_notes must be an array of strings');
-assert(isStringArray(active.must_fix_findings), '.agent/active-slice.json: must_fix_findings must be an array of strings');
-assert(isStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be an array of strings');
-assert(isStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be an array of strings');
-assert(isStringArray(active.remaining_contract_ids_before), '.agent/active-slice.json: remaining_contract_ids_before must be an array of strings');
-
-const requiredEvidence = ['schema_version', 'artifact_type', 'subject_type', 'slice_id', 'goal', 'contract_ids', 'basis_commit', 'head_sha', 'verification_commands', 'outcome', 'recorded_at', 'summary'];
-const evidenceSubjectTypes = ['none', 'selected_slice', 'current_head'];
-const evidenceOutcomes = ['not_recorded', 'passed', 'failed'];
-requireKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
-hasOnlyKeys(evidence, requiredEvidence, '.agent/verification-evidence.json');
-assert(evidence.artifact_type === 'completion-verification-evidence', '.agent/verification-evidence.json: artifact_type must be completion-verification-evidence');
-assert(evidenceSubjectTypes.includes(evidence.subject_type), '.agent/verification-evidence.json: invalid subject_type');
-assert(evidence.slice_id === null || isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be null or a non-empty string');
-assert(evidence.goal === null || isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be null or a non-empty string');
-assert(isStringArray(evidence.contract_ids), '.agent/verification-evidence.json: contract_ids must be an array of strings');
-assert(evidence.basis_commit === null || isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be null or a non-empty string');
-assert(evidence.head_sha === null || isNonEmptyString(evidence.head_sha), '.agent/verification-evidence.json: head_sha must be null or a non-empty string');
-assert(isStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be an array of strings');
-assert(evidenceOutcomes.includes(evidence.outcome), '.agent/verification-evidence.json: invalid outcome');
-assert(evidence.recorded_at === null || (isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at))), '.agent/verification-evidence.json: recorded_at must be null or an ISO-8601 string');
-assert(isNonEmptyString(evidence.summary), '.agent/verification-evidence.json: summary must be a non-empty string');
-
-assert(state.task_type === profile.task_type, '.agent/state.json: task_type must match .agent/profile.json');
-assert(plan.task_type === profile.task_type, '.agent/plan.json: task_type must match .agent/profile.json');
-assert(active.task_type === profile.task_type, '.agent/active-slice.json: task_type must match .agent/profile.json');
-assert(state.evaluation_profile === profile.evaluation_profile, '.agent/state.json: evaluation_profile must match .agent/profile.json');
-assert(plan.evaluation_profile === profile.evaluation_profile, '.agent/plan.json: evaluation_profile must match .agent/profile.json');
-assert(active.evaluation_profile === profile.evaluation_profile, '.agent/active-slice.json: evaluation_profile must match .agent/profile.json');
-
-const requiresExactHandoff = ['selected', 'in_progress', 'committed', 'done'].includes(active.status);
-if (requiresExactHandoff) {
-  assert(isNonEmptyStringArray(active.acceptance_criteria), '.agent/active-slice.json: acceptance_criteria must be a non-empty array of strings when status carries an exact handoff');
-  assert(typeof active.priority === 'number' && Number.isFinite(active.priority), '.agent/active-slice.json: priority must be a finite number when status carries an exact handoff');
-  assert(isString(active.why_now) && active.why_now.length > 0, '.agent/active-slice.json: why_now must be a non-empty string when status carries an exact handoff');
-  assert(isNonEmptyStringArray(active.implementation_surfaces), '.agent/active-slice.json: implementation_surfaces must be a non-empty array of strings when status carries an exact handoff');
-  assert(isNonEmptyStringArray(active.verification_commands), '.agent/active-slice.json: verification_commands must be a non-empty array of strings when status carries an exact handoff');
-  assert(isString(active.basis_commit) && active.basis_commit.length > 0, '.agent/active-slice.json: basis_commit must be a non-empty string when status carries an exact handoff');
-  assert(typeof active.release_blocker_count_before === 'number' && Number.isFinite(active.release_blocker_count_before), '.agent/active-slice.json: release_blocker_count_before must be a finite number when status carries an exact handoff');
-  assert(typeof active.high_value_gap_count_before === 'number' && Number.isFinite(active.high_value_gap_count_before), '.agent/active-slice.json: high_value_gap_count_before must be a finite number when status carries an exact handoff');
-
-  const planSlice = plan.candidate_slices.find((slice) => isObject(slice) && slice.slice_id === active.slice_id);
-  assert(isObject(planSlice), '.agent/active-slice.json: slice_id must match a slice in .agent/plan.json when status carries an exact handoff');
-  const drift = [];
-  if (planSlice.goal !== active.goal) drift.push('goal');
-  if (!sameStringArrays(planSlice.contract_ids, active.contract_ids)) drift.push('contract_ids');
-  if (!sameStringArrays(planSlice.acceptance_criteria, active.acceptance_criteria)) drift.push('acceptance_criteria');
-  if (!sameStringArrays(planSlice.blocked_on, active.blocked_on)) drift.push('blocked_on');
-  if (planSlice.priority !== active.priority) drift.push('priority');
-  if (planSlice.why_now !== active.why_now) drift.push('why_now');
-
-  const expectPlanArrayMirror = (field) => {
-    if (!hasOwn(planSlice, field) || !sameStringArrays(planSlice[field], active[field])) drift.push(field);
-  };
-  const expectPlanStringMirror = (field) => {
-    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
-  };
-  const expectPlanNumberMirror = (field) => {
-    if (!hasOwn(planSlice, field) || planSlice[field] !== active[field]) drift.push(field);
-  };
-
-  expectPlanArrayMirror('implementation_surfaces');
-  expectPlanArrayMirror('verification_commands');
-  expectPlanArrayMirror('locked_notes');
-  expectPlanArrayMirror('must_fix_findings');
-  expectPlanStringMirror('basis_commit');
-  expectPlanArrayMirror('remaining_contract_ids_before');
-  expectPlanNumberMirror('release_blocker_count_before');
-  expectPlanNumberMirror('high_value_gap_count_before');
-  assert(drift.length === 0, '.agent/active-slice.json must match the selected .agent/plan.json slice across: ' + Array.from(new Set(drift)).join(', '));
-}
-
-const currentHead = (() => {
-  try {
-    return childProcess.execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch {
-    return null;
-  }
-})();
-
-if (requiresExactHandoff) {
-  assert(evidence.subject_type === 'selected_slice', '.agent/verification-evidence.json: subject_type must be selected_slice when active slice exact handoff requires verification evidence');
-  assert(evidence.slice_id === active.slice_id, '.agent/verification-evidence.json: slice_id must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
-  assert(evidence.goal === active.goal, '.agent/verification-evidence.json: goal must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
-  assert(sameStringArrays(evidence.contract_ids, active.contract_ids), '.agent/verification-evidence.json: contract_ids must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
-  assert(evidence.basis_commit === active.basis_commit, '.agent/verification-evidence.json: basis_commit must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
-  assert(sameStringArrays(evidence.verification_commands, active.verification_commands), '.agent/verification-evidence.json: verification_commands must match .agent/active-slice.json when active slice exact handoff requires verification evidence');
-  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when active slice exact handoff requires verification evidence');
-  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when active slice exact handoff requires verification evidence');
-  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when active slice exact handoff requires verification evidence');
-} else if (evidence.subject_type === 'none') {
-  assert(evidence.slice_id === null, '.agent/verification-evidence.json: slice_id must be null when subject_type is none');
-  assert(evidence.goal === null, '.agent/verification-evidence.json: goal must be null when subject_type is none');
-  assert(evidence.contract_ids.length === 0, '.agent/verification-evidence.json: contract_ids must be empty when subject_type is none');
-  assert(evidence.basis_commit === null, '.agent/verification-evidence.json: basis_commit must be null when subject_type is none');
-  assert(evidence.head_sha === null, '.agent/verification-evidence.json: head_sha must be null when subject_type is none');
-  assert(evidence.verification_commands.length === 0, '.agent/verification-evidence.json: verification_commands must be empty when subject_type is none');
-  assert(evidence.outcome === 'not_recorded', '.agent/verification-evidence.json: outcome must be not_recorded when subject_type is none');
-  assert(evidence.recorded_at === null, '.agent/verification-evidence.json: recorded_at must be null when subject_type is none');
-} else {
-  assert(evidence.outcome === 'passed', '.agent/verification-evidence.json: outcome must be passed when verification evidence is recorded');
-  assert(isNonEmptyStringArray(evidence.verification_commands), '.agent/verification-evidence.json: verification_commands must be a non-empty array when verification evidence is recorded');
-  assert(isNonEmptyString(evidence.recorded_at) && !Number.isNaN(Date.parse(evidence.recorded_at)), '.agent/verification-evidence.json: recorded_at must be an ISO-8601 string when verification evidence is recorded');
-  if (currentHead) assert(evidence.head_sha === currentHead, '.agent/verification-evidence.json: head_sha must match current git HEAD when verification evidence is recorded');
-  if (evidence.subject_type === 'selected_slice') {
-    assert(isNonEmptyString(evidence.slice_id), '.agent/verification-evidence.json: slice_id must be a non-empty string when subject_type is selected_slice');
-    assert(isNonEmptyString(evidence.goal), '.agent/verification-evidence.json: goal must be a non-empty string when subject_type is selected_slice');
-    assert(isNonEmptyString(evidence.basis_commit), '.agent/verification-evidence.json: basis_commit must be a non-empty string when subject_type is selected_slice');
-  } else {
-    assert(evidence.subject_type === 'current_head', '.agent/verification-evidence.json: only current_head or selected_slice may carry recorded verification evidence');
-  }
-}
-
-if (!requiresExactHandoff) {
-  assert(active.priority === null || active.priority === undefined || (typeof active.priority === 'number' && Number.isFinite(active.priority)), '.agent/active-slice.json: idle priority must be null/undefined or a finite number');
-  assert(active.why_now === null || active.why_now === undefined || typeof active.why_now === 'string', '.agent/active-slice.json: idle why_now must be null/undefined or a string');
-}
-NODE
-`;
-}
-
-async function ensureGitignore(root: string): Promise<boolean> {
-	const gitignorePath = path.join(root, ".gitignore");
-	const blockLines = [
-		"# completion protocol",
-		".agent/*",
-		"!.agent/README.md",
-		"!.agent/mission.md",
-		"!.agent/profile.json",
-		"!.agent/verify_completion_stop.sh",
-		"!.agent/verify_completion_control_plane.sh",
-		".agent/tmp/",
-	];
-	const block = blockLines.join("\n");
-	const existing = (await pathExists(gitignorePath)) ? await fsp.readFile(gitignorePath, "utf8") : "";
-	const filteredLines = existing
-		.split(/\r?\n/)
-		.filter((line) => !blockLines.includes(line.trim()));
-	while (filteredLines.length > 0 && filteredLines[filteredLines.length - 1]?.trim() === "") {
-		filteredLines.pop();
-	}
-	const base = filteredLines.join("\n").trimEnd();
-	const content = base.length > 0 ? `${base}\n\n${block}\n` : `${block}\n`;
-	if (content === existing) return false;
-	await fsp.writeFile(gitignorePath, content, "utf8");
-	return true;
-}
-
-type ScaffoldResult = {
-	root: string;
-	created: string[];
-	updated: string[];
-	missionAnchor: string;
-};
-
 async function scaffoldCompletionFiles(
 	root: string,
 	missionAnchor: string,
 	options?: { analysis?: ContextProposalAnalysis; continuationReason?: string },
-): Promise<ScaffoldResult> {
-	const files = resolveFiles(root);
-	const created: string[] = [];
-	const updated: string[] = [];
-	await fsp.mkdir(files.agentDir, { recursive: true });
-	await fsp.mkdir(path.join(files.agentDir, "tmp"), { recursive: true });
-	const projectName = path.basename(root);
+) {
 	const routing = finalizeContextProposalAnalysis(options?.analysis, [missionAnchor]);
-	const docsSurfaces = await detectDocsSurfaces(root);
-	const verifierCommand = await detectVerifierCommand(root);
-	const trackedFiles: Array<{ path: string; content: string; executable?: boolean }> = [
-		{ path: path.join(files.agentDir, "README.md"), content: buildAgentReadme(projectName) },
-		{ path: path.join(files.agentDir, "mission.md"), content: buildMission(projectName, missionAnchor) },
-		{
-			path: files.profilePath,
-			content: `${JSON.stringify(buildProfileRecord({ projectName, requiredStopJudges: 3, docsSurfaces, taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n`,
-		},
-		{ path: path.join(files.agentDir, "verify_completion_stop.sh"), content: buildVerifyStopScript(verifierCommand), executable: true },
-		{ path: path.join(files.agentDir, "verify_completion_control_plane.sh"), content: buildVerifyControlPlaneScript(), executable: true },
-		{
-			path: files.statePath,
-			content: `${JSON.stringify(defaultState(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile, continuationReason: options?.continuationReason }), null, 2)}\n`,
-		},
-		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
-		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor, { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile }), null, 2)}\n` },
-		{ path: files.verificationEvidencePath, content: `${JSON.stringify(defaultVerificationEvidence(), null, 2)}\n` },
-		{ path: files.sliceHistoryPath, content: "" },
-		{ path: files.stopHistoryPath, content: "" },
-	];
-	for (const file of trackedFiles) {
-		if (await pathExists(file.path)) continue;
-		await fsp.writeFile(file.path, file.content, "utf8");
-		if (file.executable) await fsp.chmod(file.path, 0o755);
-		created.push(path.relative(root, file.path));
-	}
-	if (await ensureGitignore(root)) updated.push(".gitignore");
-	return { root, created, updated, missionAnchor };
+	return await scaffoldCompletionFilesOnDisk(root, missionAnchor, {
+		analysis: { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile },
+		continuationReason: options?.continuationReason,
+	});
 }
 
 function remainingSliceCount(plan: JsonRecord | undefined): number {
@@ -1375,24 +1011,6 @@ function handoffSnapshotState(active: JsonRecord | undefined): "present" | "miss
 	return activeCarriesExactHandoff(active) && exactArrays.every((items) => items.length > 0) && required.every((value) => value !== undefined && value !== null)
 		? "present"
 		: "missing_or_unclear";
-}
-
-function currentTaskType(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.task_type) ??
-		asString(snapshot.state?.task_type) ??
-		asString(snapshot.plan?.task_type) ??
-		asString(snapshot.profile?.task_type)
-	);
-}
-
-function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.evaluation_profile) ??
-		asString(snapshot.state?.evaluation_profile) ??
-		asString(snapshot.plan?.evaluation_profile) ??
-		asString(snapshot.profile?.evaluation_profile)
-	);
 }
 
 function hasRunningCompletionRole(rootKey: string): boolean {
@@ -1719,224 +1337,6 @@ function buildResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: Jso
 	return lines.join("\n");
 }
 
-function formatCount(count: number, singular: string, plural = `${singular}s`): string {
-	return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function completionRemainingSummary(surface: {
-	remainingContractCount: number;
-	releaseBlockerCount: number;
-	highValueGapCount: number;
-	remainingStopJudgeCount: number;
-}): string {
-	return [
-		formatCount(surface.remainingContractCount, "contract"),
-		formatCount(surface.releaseBlockerCount, "blocker"),
-		formatCount(surface.highValueGapCount, "gap"),
-		formatCount(surface.remainingStopJudgeCount, "stop judge", "stop judges"),
-	].join(" · ");
-}
-
-function envNumber(name: string): number | undefined {
-	const raw = asString(process.env[name]);
-	if (!raw) return undefined;
-	const parsed = Number(raw);
-	return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function nowMs(): number {
-	return envNumber("PI_COMPLETION_TEST_NOW") ?? Date.now();
-}
-
-type LiveActivitySignal = {
-	state: "active" | "waiting" | "stalled";
-	idleMs: number;
-};
-
-function liveActivitySignal(activity: { status?: string; startedAt?: number; updatedAt?: number } | undefined): LiveActivitySignal | undefined {
-	if (!activity || activity.status !== "running") return undefined;
-	const anchor = activity.updatedAt ?? activity.startedAt;
-	if (anchor === undefined) return undefined;
-	const idleMs = Math.max(0, nowMs() - anchor);
-	return {
-		state: idleMs >= LIVE_ROLE_STALLED_MS ? "stalled" : idleMs >= LIVE_ROLE_WAITING_MS ? "waiting" : "active",
-		idleMs,
-	};
-}
-
-function formatLiveActivitySignal(signal: LiveActivitySignal | undefined): string | undefined {
-	if (!signal) return undefined;
-	if (signal.state === "active") return "activity: active";
-	return `activity: ${signal.state} (${formatElapsed(signal.idleMs)} since update)`;
-}
-
-function livePreviewForStatus(activity: LiveRoleActivity | undefined): string | undefined {
-	if (!activity || activity.status !== "running") return undefined;
-	return truncateInline(
-		activity.progress ?? activity.verifying ?? activity.toolActivity ?? activity.assistantSummary ?? activity.currentAction ?? activity.lastAssistantText ?? "",
-		120,
-	) || undefined;
-}
-
-function cloneLiveRoleActivity(activity: LiveRoleActivity, overrides: Partial<LiveRoleActivity> = {}): LiveRoleActivity {
-	return {
-		...activity,
-		...overrides,
-		toolRecentActivity: [...(overrides.toolRecentActivity ?? activity.toolRecentActivity)],
-		recentActivity: [...(overrides.recentActivity ?? activity.recentActivity)],
-		stateDeltas: [...(overrides.stateDeltas ?? activity.stateDeltas)],
-	};
-}
-
-function createLiveRoleActivity(role: string, startedAt = nowMs()): LiveRoleActivity {
-	const currentAction = "Starting role subprocess";
-	return {
-		role,
-		status: "running",
-		currentAction,
-		toolActivity: currentAction,
-		toolRecentActivity: [currentAction],
-		recentActivity: [currentAction],
-		stateDeltas: [],
-		startedAt,
-		updatedAt: startedAt,
-	};
-}
-
-type RoleMessage = {
-	role: string;
-	content: Array<{ type: string; text?: string }>;
-};
-
-function activityTimestampMs(event: JsonRecord | undefined): number | undefined {
-	return asNumber(event?.updatedAt) ?? asNumber(event?.timestampMs) ?? asNumber(event?.timestamp) ?? asNumber(event?.at);
-}
-
-function asRoleMessage(value: unknown): RoleMessage | undefined {
-	if (!isRecord(value)) return undefined;
-	const role = asString(value.role);
-	const content = Array.isArray(value.content)
-		? value.content.flatMap((item) => {
-				if (!isRecord(item)) return [];
-				const type = asString(item.type);
-				if (!type) return [];
-				return [{ type, text: asString(item.text) }];
-		  })
-		: [];
-	if (!role) return undefined;
-	return { role, content };
-}
-
-function applyAssistantTextToLiveRoleActivity(activity: LiveRoleActivity, text: string, activityAt = nowMs()): boolean {
-	if (!text) return false;
-	activity.lastAssistantText = text;
-	const parsed = parseStructuredProgress(text);
-	if (parsed.progress) activity.progress = parsed.progress;
-	if (parsed.rationale) activity.rationale = parsed.rationale;
-	if (parsed.nextStep) activity.nextStep = parsed.nextStep;
-	if (parsed.verifying) activity.verifying = parsed.verifying;
-	if (parsed.stateDeltas.length > 0) activity.stateDeltas = parsed.stateDeltas;
-	const preview = truncateInline(text, 140);
-	activity.assistantSummary = activity.progress ?? activity.verifying ?? preview;
-	activity.currentAction = activity.assistantSummary;
-	if (activity.assistantSummary) activity.recentActivity = pushRecentActivity(activity.recentActivity, `assistant: ${activity.assistantSummary}`);
-	activity.updatedAt = activityAt;
-	return true;
-}
-
-function applyLiveRoleEvent(activity: LiveRoleActivity, event: JsonRecord, messages: RoleMessage[]): boolean {
-	const eventType = asString(event.type);
-	if (!eventType) return false;
-	const activityAt = activityTimestampMs(event) ?? nowMs();
-	if (eventType === "tool_execution_start") {
-		const toolName = asString(event.toolName) ?? "tool";
-		const toolArgs = isRecord(event.args) ? event.args : isRecord(event.input) ? event.input : {};
-		activity.toolActivity = formatToolActivity(toolName, toolArgs);
-		activity.currentAction = activity.toolActivity;
-		activity.toolRecentActivity = pushRecentActivity(activity.toolRecentActivity, activity.toolActivity, 6);
-		activity.recentActivity = pushRecentActivity(activity.recentActivity, activity.toolActivity);
-		activity.updatedAt = activityAt;
-		return true;
-	}
-	if (eventType === "tool_execution_end" || eventType === "tool_result_end") {
-		activity.updatedAt = activityAt;
-		return true;
-	}
-	if ((eventType === "message_update" || eventType === "message_end") && isRecord(event.message)) {
-		const message = asRoleMessage(event.message);
-		if (message && eventType === "message_end") messages.push(message);
-		const nextOutput = message ? lastAssistantText(eventType === "message_end" ? messages : [message]) : "";
-		if (nextOutput) return applyAssistantTextToLiveRoleActivity(activity, nextOutput, activityAt);
-		activity.updatedAt = activityAt;
-		return true;
-	}
-	return false;
-}
-
-function maybeInjectTestLiveRoleActivity(rootKey: string): void {
-	const raw = asString(process.env.PI_COMPLETION_TEST_LIVE_ROLE_ACTIVITY_JSON);
-	if (!raw) return;
-	try {
-		const parsed = JSON.parse(raw);
-		if (!isRecord(parsed)) return;
-		const currentAction = asString(parsed.currentAction);
-		const recentActivity = asStringArray(parsed.recentActivity).length > 0 ? asStringArray(parsed.recentActivity) : currentAction ? [currentAction] : [];
-		const toolActivity =
-			asString(parsed.toolActivity) ??
-			(currentAction && !currentAction.startsWith("assistant:") && !currentAction.startsWith("progress:") ? currentAction : undefined);
-		const assistantSummary =
-			asString(parsed.assistantSummary) ??
-			(currentAction?.startsWith("assistant:") ? currentAction.slice("assistant:".length).trim() : undefined);
-		liveRoleActivityByRoot.set(rootKey, {
-			role: asString(parsed.role) ?? "completion-implementer",
-			status: asString(parsed.status) === "ok" ? "ok" : asString(parsed.status) === "error" ? "error" : "running",
-			currentAction,
-			toolActivity,
-			toolRecentActivity: asStringArray(parsed.toolRecentActivity).length > 0 ? asStringArray(parsed.toolRecentActivity) : toolActivity ? [toolActivity] : [],
-			recentActivity,
-			assistantSummary,
-			lastAssistantText: asString(parsed.lastAssistantText),
-			progress: asString(parsed.progress),
-			rationale: asString(parsed.rationale),
-			nextStep: asString(parsed.nextStep),
-			verifying: asString(parsed.verifying),
-			stateDeltas: asStringArray(parsed.stateDeltas),
-			startedAt: asNumber(parsed.startedAt) ?? nowMs(),
-			updatedAt: asNumber(parsed.updatedAt) ?? nowMs(),
-		});
-	} catch {
-		// ignore malformed test override
-	}
-}
-
-function maybeReplayTestLiveRoleEvents(rootKey: string): void {
-	const raw = asString(process.env.PI_COMPLETION_TEST_ROLE_EVENT_STREAM_JSON);
-	if (!raw) return;
-	try {
-		const parsed = JSON.parse(raw);
-		let role = "completion-implementer";
-		let status: LiveRoleActivity["status"] = "running";
-		let startedAt = nowMs();
-		let events: JsonRecord[] = [];
-		if (Array.isArray(parsed)) {
-			events = parsed.filter(isRecord);
-		} else if (isRecord(parsed)) {
-			role = asString(parsed.role) ?? role;
-			status = asString(parsed.status) === "ok" ? "ok" : asString(parsed.status) === "error" ? "error" : "running";
-			startedAt = asNumber(parsed.startedAt) ?? asNumber(parsed.started_at) ?? startedAt;
-			events = Array.isArray(parsed.events) ? parsed.events.filter(isRecord) : [];
-		} else {
-			return;
-		}
-		const activity = createLiveRoleActivity(role, startedAt);
-		const messages: RoleMessage[] = [];
-		for (const event of events) applyLiveRoleEvent(activity, event, messages);
-		liveRoleActivityByRoot.set(rootKey, cloneLiveRoleActivity(activity, { status }));
-	} catch {
-		// ignore malformed event stream override
-	}
-}
-
 async function gitHeadSha(cwd: string): Promise<string | undefined> {
 	return await new Promise((resolve) => {
 		const proc = spawn("git", ["rev-parse", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"] });
@@ -1949,83 +1349,6 @@ async function gitHeadSha(cwd: string): Promise<string | undefined> {
 		});
 		proc.on("error", () => resolve(undefined));
 	});
-}
-
-function formatElapsed(ms: number | undefined): string {
-	if (!ms || ms < 0) return "00:00";
-	const totalSeconds = Math.floor(ms / 1000);
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const seconds = totalSeconds % 60;
-	if (hours > 0) return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function truncateInline(text: string, maxLength = 120): string {
-	const singleLine = text.replace(/\s+/g, " ").trim();
-	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
-}
-
-
-function formatToolActivity(toolName: string, args: JsonRecord): string {
-	if (toolName === "bash") return `$ ${truncateInline(asString(args.command) ?? "...")}`;
-	if (toolName === "read") return `read ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
-	if (toolName === "write") return `write ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
-	if (toolName === "edit") return `edit ${asString(args.filePath) ?? asString(args.path) ?? "..."}`;
-	if (toolName === "grep") return `grep ${asString(args.pattern) ?? "..."}`;
-	if (toolName === "find") return `find ${asString(args.pattern) ?? "..."}`;
-	if (toolName === "ls") return `ls ${asString(args.path) ?? "."}`;
-	return `${toolName} ${truncateInline(JSON.stringify(args))}`;
-}
-
-function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
-	const normalized = truncateInline(line, 160);
-	if (!normalized) return items;
-	if (items[items.length - 1] === normalized) return items;
-	const next = [...items, normalized];
-	return next.slice(-maxItems);
-}
-
-function parseStructuredProgress(text: string): {
-	progress?: string;
-	rationale?: string;
-	nextStep?: string;
-	verifying?: string;
-	stateDeltas: string[];
-} {
-	const result: { progress?: string; rationale?: string; nextStep?: string; verifying?: string; stateDeltas: string[] } = {
-		stateDeltas: [],
-	};
-	for (const rawLine of text.split("\n")) {
-		const line = rawLine.trim();
-		if (!line) continue;
-		const match = line.match(/^(PROGRESS|RATIONALE|NEXT|VERIFYING|STATE-DELTA):\s*(.+)$/i);
-		if (!match) continue;
-		const [, rawKey, rawValue] = match;
-		const key = rawKey.toUpperCase();
-		const value = rawValue.trim();
-		if (!value) continue;
-		if (key === "PROGRESS") result.progress = value;
-		else if (key === "RATIONALE") result.rationale = value;
-		else if (key === "NEXT") result.nextStep = value;
-		else if (key === "VERIFYING") result.verifying = value;
-		else if (key === "STATE-DELTA") result.stateDeltas.push(value);
-	}
-	if (result.stateDeltas.length > 6) result.stateDeltas = result.stateDeltas.slice(-6);
-	return result;
-}
-
-function lastAssistantText(messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		const texts = message.content
-			.filter((part) => part.type === "text" && typeof part.text === "string")
-			.map((part) => part.text?.trim())
-			.filter((part): part is string => Boolean(part));
-		if (texts.length > 0) return texts.join("\n\n");
-	}
-	return "";
 }
 
 function completionKickoff(

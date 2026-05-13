@@ -62,7 +62,7 @@ export function formatElapsed(ms: number | undefined): string {
 	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function truncateInline(text: string, maxLength = 120): string {
+export function truncateInline(text: string, maxLength = 120): string {
 	const singleLine = text.replace(/\s+/g, " ").trim();
 	return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 3)}...` : singleLine;
 }
@@ -78,7 +78,7 @@ function formatToolActivity(toolName: string, args: JsonRecord): string {
 	return `${toolName} ${truncateInline(JSON.stringify(args))}`;
 }
 
-function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
+export function pushRecentActivity(items: string[], line: string, maxItems = 8): string[] {
 	const normalized = truncateInline(line, 160);
 	if (!normalized) return items;
 	if (items[items.length - 1] === normalized) return items;

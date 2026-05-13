@@ -310,7 +310,7 @@ export function defaultVerificationEvidence(): JsonRecord {
 	};
 }
 
-function buildAgentReadme(projectName: string): string {
+export function buildAgentReadme(projectName: string): string {
 	return `# Completion Control Plane\n\nThis repository uses the \`completion\` workflow for long-running coding tasks.\n\n## Canonical tracked contract files\n\n- \`.agent/README.md\`\n- \`.agent/mission.md\`\n- \`.agent/profile.json\`\n- \`.agent/verify_completion_stop.sh\`\n- \`.agent/verify_completion_control_plane.sh\`\n\n## Ignored canonical execution state\n\n- \`.agent/state.json\`\n- \`.agent/plan.json\`\n- \`.agent/active-slice.json\`\n- \`.agent/slice-history.jsonl\`\n- \`.agent/stop-check-history.jsonl\`\n- \`.agent/verification-evidence.json\`\n- \`.agent/*.log\`\n- \`.agent/tmp/\`\n\n\`.agent/verification-evidence.json\` is the durable canonical record of deterministic verification for the selected slice or current HEAD. Recovery, review, audit, and stop-check reminder surfaces consume it instead of temp-only artifacts or conversational summaries when it is populated.\n\nThe source of truth for long-running completion work is canonical \`.agent/**\` state plus current repo truth.\n\nProject: ${projectName}\n`;
 }
 
@@ -318,12 +318,18 @@ export function buildMission(projectName: string, missionAnchor: string): string
 	return `# Mission\n\nProject: ${projectName}\n\nMission anchor:\n${missionAnchor}\n\nThis file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n`;
 }
 
-function buildVerifyStopScript(verifierCommand?: string): string {
-	const repoCheck = verifierCommand ? `${verifierCommand}\n` : "echo \"No project verifier configured yet\"\n";
+export function buildVerifyStopScript(verifierCommand?: string): string {
+	const repoCheck = verifierCommand
+		? `echo "[completion] running repo-level verification: ${verifierCommand}"\n${verifierCommand}`
+		: `echo "[completion] no repo-specific verifier auto-detected; control-plane verification only"`;
 	return `#!/usr/bin/env bash\nset -euo pipefail\n\nbash .agent/verify_completion_control_plane.sh\n${repoCheck}\n`;
 }
 
-function buildVerifyControlPlaneScript(): string {
+export function buildVerifyControlPlaneScript(): string {
+	const trackedScriptPath = path.resolve(__dirname, "..", "..", ".agent", "verify_completion_control_plane.sh");
+	if (fs.existsSync(trackedScriptPath)) {
+		return fs.readFileSync(trackedScriptPath, "utf8");
+	}
 	return `#!/usr/bin/env node
 const fs = require('node:fs');
 
@@ -348,25 +354,28 @@ for (const file of ['.agent/profile.json', '.agent/state.json', '.agent/plan.jso
 
 async function ensureGitignore(root: string): Promise<boolean> {
 	const gitignorePath = path.join(root, ".gitignore");
-	const requiredLines = [
+	const blockLines = [
+		"# completion protocol",
 		".agent/*",
 		"!.agent/README.md",
 		"!.agent/mission.md",
 		"!.agent/profile.json",
 		"!.agent/verify_completion_stop.sh",
 		"!.agent/verify_completion_control_plane.sh",
-		"!.agent/tmp/",
+		".agent/tmp/",
 	];
-	let existing = "";
-	try {
-		existing = await fsp.readFile(gitignorePath, "utf8");
-	} catch {
-		existing = "";
+	const block = blockLines.join("\n");
+	const existing = (await pathExists(gitignorePath)) ? await fsp.readFile(gitignorePath, "utf8") : "";
+	const filteredLines = existing
+		.split(/\r?\n/)
+		.filter((line) => !blockLines.includes(line.trim()));
+	while (filteredLines.length > 0 && filteredLines[filteredLines.length - 1]?.trim() === "") {
+		filteredLines.pop();
 	}
-	const missing = requiredLines.filter((line) => !existing.split(/\r?\n/).includes(line));
-	if (missing.length === 0) return false;
-	const next = existing.trimEnd().length > 0 ? `${existing.trimEnd()}\n${missing.join("\n")}\n` : `${missing.join("\n")}\n`;
-	await fsp.writeFile(gitignorePath, next, "utf8");
+	const base = filteredLines.join("\n").trimEnd();
+	const content = base.length > 0 ? `${base}\n\n${block}\n` : `${block}\n`;
+	if (content === existing) return false;
+	await fsp.writeFile(gitignorePath, content, "utf8");
 	return true;
 }
 
