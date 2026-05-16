@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.50
+
+### Changed
+
+- simplified the README opening so people can tell at a glance whether this extension helps with their workflow, while preserving the existing `/cook` behavior and release-parity guidance
+
 ## 0.1.49
 
 ### Changed

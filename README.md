@@ -1,17 +1,21 @@
 # @linimin/pi-letscook
 
-A Pi extension that turns `/cook` into a discussion-driven repo-local workflow command for long-running coding work.
+A Pi extension for long-running repo work.
 
-## Why this exists
+It gives you `/cook`: a discussion-driven workflow command that keeps mission, progress, and verification in repo-local `.agent/**` state instead of chat memory.
 
-Normal chat is good for one-off tasks. It is much worse for work that needs to:
+## Is this for you?
 
+**Useful if your work needs to:**
 - continue across sessions
 - stay anchored to one mission
 - resume from repo state instead of chat memory
 - keep review, audit, and verification tied to the repo
 
-`@linimin/pi-letscook` solves that by storing canonical workflow state in `.agent/**` and using `/cook` as one discussion-first command to start, continue, refocus, or advance the workflow.
+**Probably overkill if you mostly do:**
+- one-off chat tasks
+- brainstorming
+- planning docs without immediate implementation
 
 ## What you get
 
@@ -32,20 +36,27 @@ Then run `/reload` in Pi.
 
 ## Quick start
 
-Primary entrypoint:
+`/cook` supports both bare discussion-driven startup and optional inline intent hints.
 
 ```text
 /cook
+/cook login redirect
 ```
 
-Use `/cook` after you discuss the mission in the main chat. You can run it bare or pass a short hint such as `/cook login redirect`. The same command can:
+Use `/cook` after you discuss the mission in the main chat.
 
+What it can do:
 - start a brand-new workflow from recent discussion
 - continue the current workflow when recent discussion still matches it, or when discussion is too weak or ambiguous to justify a refocus
 - surface a conservative refocus chooser when recent discussion clearly points to a different workflow
 - start the next workflow round after the previous one is `done`
 
-`/cook` expects recent main-chat discussion to describe concrete repo changes. README/CHANGELOG updates still count as concrete repo changes, but assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not. `/cook <hint>` acts as a high-priority intent hint that helps proposal derivation interpret the recent discussion, but it still goes through the same fail-closed routing and approval-only Start/Cancel confirmation flow.
+What it expects:
+- recent main-chat discussion about concrete repo changes
+- README/CHANGELOG updates still count as concrete repo changes
+- assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not
+
+`/cook <hint>` acts as a high-priority intent hint that helps proposal derivation interpret the recent discussion, but it still goes through the same fail-closed routing and approval-only Start/Cancel confirmation flow.
 
 On startup and next-round flows, if recent discussion is missing, weak, ambiguous, assistant-produced, or only describes planning artifacts instead of concrete repo changes, `/cook` fails closed, leaves canonical `.agent/**` state unchanged, and tells you to clarify the mission in the main chat before rerunning `/cook`.
 
