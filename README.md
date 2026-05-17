@@ -4,6 +4,8 @@ A Pi extension for long-running repo work.
 
 It gives you `/cook`: a discussion-driven workflow command that keeps mission, progress, and verification in repo-local `.agent/**` state instead of chat memory.
 
+Assist-mode natural-language handoff can also offer to enter that same `/cook` flow before the primary agent starts implementation work, but `/cook` remains the canonical workflow boundary.
+
 ## Is this for you?
 
 **Useful if your work needs to:**
@@ -19,7 +21,8 @@ It gives you `/cook`: a discussion-driven workflow command that keeps mission, p
 
 ## What you get
 
-- one command: `/cook`
+- one canonical workflow boundary: `/cook`
+- assist-mode natural-language handoff that can offer to enter the same `/cook` flow before the primary agent starts implementation work
 - repo-local canonical state in `.agent/**`
 - resumable long-running workflows
 - discussion-first startup, continue, refocus, and next-round routing
@@ -45,6 +48,8 @@ Then run `/reload` in Pi.
 
 Use `/cook` after you discuss the mission in the main chat.
 
+Execution handoff phrases like `開始做`, `開始實作`, or `go ahead` can also trigger an assist-mode confirmation asking whether `/cook` should take over. Accepting that handoff enters the same `/cook` flow; if the trigger is unclear or unavailable, nothing is auto-routed and you can run `/cook` explicitly.
+
 What it can do:
 - start a brand-new workflow from recent discussion
 - continue the current workflow when recent discussion still matches it, or when discussion is too weak or ambiguous to justify a refocus
@@ -63,6 +68,8 @@ On startup and next-round flows, if recent discussion is missing, weak, ambiguou
 ## How `/cook` works
 
 `/cook` supports both bare discussion-driven startup and optional inline intent hints.
+
+Assist-mode natural-language handoff is optional. It only offers to enter the same `/cook` flow from recent discussion; explicit `/cook` remains the canonical workflow boundary and the fallback when the trigger is unclear or unavailable.
 
 | Repo state | `/cook` behavior |
 |---|---|
@@ -225,6 +232,7 @@ Run validation from the package root:
 npm run smoke-test
 npm run refocus-test
 npm run context-proposal-test
+bash ./scripts/cook-trigger-routing-test.sh
 bash scripts/canonical-evidence-artifact-test.sh
 npm run observability-status-test
 npm run evaluator-calibration-test
@@ -232,7 +240,7 @@ npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then asserts the shipped single-command `/cook` public parity surfaces in `README.md`, `CHANGELOG.md`, and the `/cook` help/fail-closed copy in `extensions/completion/index.ts`, reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then asserts the shipped single-command `/cook` public parity surfaces in `README.md`, `CHANGELOG.md`, and the `/cook` help/fail-closed copy in `extensions/completion/index.ts`, reruns `bash ./scripts/cook-trigger-routing-test.sh` for the assist-mode natural-language handoff path, reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 The direct package-root verifier commands above intentionally self-isolate the repo-local extension when they shell back into `pi`, so you should not need to wrap them with `pi --no-extensions` even if `@linimin/pi-letscook` is also installed globally on the same machine.
 

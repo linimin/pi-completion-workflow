@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- documented the shipped assist-mode natural-language handoff that can offer to route `開始做`, `開始實作`, or `go ahead` style execution handoffs into the canonical `/cook` flow before the primary agent starts implementation work, while keeping `/cook` as the explicit workflow boundary and approval gate
+- added `bash ./scripts/cook-trigger-routing-test.sh` to `npm run release-check` so packaged release parity now covers the natural-language takeover path alongside the existing `/cook` startup/refocus/context regressions
+
 ## 0.1.50
 
 ### Changed

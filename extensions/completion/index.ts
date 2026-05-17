@@ -208,9 +208,9 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
 const COOK_BARE_ONLY_GUIDANCE =
-	"/cook supports optional inline hints as high-priority intent cues, but mission selection still comes from recent discussion, repo truth, and the approval-only confirmation flow.";
+	"/cook remains the canonical workflow boundary. Assist-mode natural-language handoff can offer to enter the same /cook flow before implementation starts, while mission selection still comes from recent discussion, repo truth, and the approval-only confirmation flow.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
+	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Natural-language handoff only offers to enter the same /cook flow, so clarify the concrete repo changes in the main chat and rerun /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -923,7 +923,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
 		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
 		cookCommandSpec: {
-			description: "/cook workflow: start, continue, refocus, or start the next round (optional hint supported)",
+			description: "/cook workflow: start, continue, refocus, or start the next round; assist-mode natural-language handoff can offer the same /cook boundary",
 		},
 		buildContextProposalContinuationReason,
 		completionKickoff,

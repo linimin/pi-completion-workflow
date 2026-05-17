@@ -16,6 +16,7 @@ done
 
 node <<'NODE'
 const fs = require('node:fs');
+const { execSync } = require('node:child_process');
 
 function fail(message) {
   console.error(message);
@@ -306,18 +307,54 @@ if (state.mission_anchor !== plan.mission_anchor || state.mission_anchor !== act
   fail('Mission anchor mismatch across .agent/state.json, .agent/plan.json, and .agent/active-slice.json');
 }
 
-if (['selected', 'in_progress', 'committed', 'done'].includes(active.status)) {
+const exactHandoffStatuses = new Set(['selected', 'in_progress', 'committed', 'done']);
+const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];
+
+function currentHeadSha() {
+  try {
+    return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return undefined;
+  }
+}
+
+if (exactHandoffStatuses.has(active.status)) {
   const selectedSlice = Array.isArray(plan.candidate_slices)
     ? plan.candidate_slices.find((slice) => isRecord(slice) && slice.slice_id === active.slice_id)
     : undefined;
-  if (!selectedSlice) fail('Selected/in-progress active slice must exist in .agent/plan.json candidate_slices');
-  const arrayFields = ['contract_ids', 'acceptance_criteria', 'blocked_on', 'locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'remaining_contract_ids_before'];
-  const scalarFields = ['goal', 'priority', 'why_now', 'basis_commit', 'release_blocker_count_before', 'high_value_gap_count_before'];
-  for (const field of arrayFields) {
-    if (!arraysEqual(selectedSlice[field], active[field])) fail(`Active slice field ${field} must match the selected plan slice`);
+  if (!selectedSlice) fail('slice_id must match a slice in .agent/plan.json when status carries an exact handoff');
+
+  const activeParityMismatches = [];
+  if (selectedSlice.goal !== active.goal) activeParityMismatches.push('goal');
+  if (!arraysEqual(selectedSlice.contract_ids, active.contract_ids)) activeParityMismatches.push('contract_ids');
+  if (!arraysEqual(selectedSlice.acceptance_criteria, active.acceptance_criteria)) activeParityMismatches.push('acceptance_criteria');
+  if (!arraysEqual(selectedSlice.blocked_on, active.blocked_on)) activeParityMismatches.push('blocked_on');
+  if (selectedSlice.priority !== active.priority) activeParityMismatches.push('priority');
+  if (selectedSlice.why_now !== active.why_now) activeParityMismatches.push('why_now');
+  for (const field of planMirrorFields) {
+    const left = selectedSlice[field];
+    const right = active[field];
+    const matches = Array.isArray(left) || Array.isArray(right) ? arraysEqual(left, right) : left === right;
+    if (!matches) activeParityMismatches.push(field);
   }
-  for (const field of scalarFields) {
-    if (selectedSlice[field] !== active[field]) fail(`Active slice field ${field} must match the selected plan slice`);
+  if (activeParityMismatches.length > 0) {
+    fail(`.agent/active-slice.json must match the selected .agent/plan.json slice across: ${activeParityMismatches.join(', ')}`);
+  }
+
+  if (evidence.subject_type !== 'selected_slice') {
+    fail('subject_type must be selected_slice when active slice exact handoff requires verification evidence');
+  }
+
+  const evidenceParityMismatches = [];
+  if (evidence.slice_id !== active.slice_id) evidenceParityMismatches.push('slice_id');
+  if (evidence.goal !== active.goal) evidenceParityMismatches.push('goal');
+  if (!arraysEqual(evidence.contract_ids, active.contract_ids)) evidenceParityMismatches.push('contract_ids');
+  if (evidence.basis_commit !== active.basis_commit) evidenceParityMismatches.push('basis_commit');
+  if (!arraysEqual(evidence.verification_commands, active.verification_commands)) evidenceParityMismatches.push('verification_commands');
+  const headSha = currentHeadSha();
+  if (headSha && evidence.head_sha !== headSha) evidenceParityMismatches.push('head_sha');
+  if (evidenceParityMismatches.length > 0) {
+    fail(`.agent/verification-evidence.json must match the active selected-slice verification subject across: ${evidenceParityMismatches.join(', ')}`);
   }
 }
 NODE
