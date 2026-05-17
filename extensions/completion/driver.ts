@@ -530,142 +530,162 @@ function buildMission(projectName: string, missionAnchor: string): string {
 	return `# Mission\n\nProject: ${projectName}\n\nMission anchor:\n${missionAnchor}\n\nThis file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n`;
 }
 
+export type CookInvocationOrigin = "command" | "natural-language-trigger";
+
+export type RunCookEntryOptions = {
+	origin: CookInvocationOrigin;
+	hintText?: string;
+	originalInput?: string;
+};
+
+export async function runCookEntry(
+	pi: ExtensionAPI,
+	ctx: DriverContext,
+	deps: CompletionDriverDeps,
+	options: RunCookEntryOptions,
+): Promise<void> {
+	const explicitHint = options.hintText?.trim() ? options.hintText.trim() : undefined;
+	let goal: string | undefined;
+	const cwd = deps.getCtxCwd(ctx);
+	let snapshot = await loadCompletionSnapshot(cwd);
+	const workflowDone = isWorkflowDone(snapshot);
+	let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
+	let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
+	let kickoffAnalysis: ContextProposalAnalysis | undefined;
+
+	if (!snapshot) {
+		const root = findRepoRoot(cwd) ?? cwd;
+		const projectName = path.basename(root);
+		const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
+		if (!proposal) {
+			deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps), "info");
+			return;
+		}
+		const decision = await deps.confirmContextProposal(ctx, proposal, {
+			title: "Start a completion workflow from the recent discussion?",
+		});
+		if (!decision) {
+			deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal", deps), "info");
+			return;
+		}
+		goal = decision.goalText;
+		kickoffMissionAnchor = decision.missionAnchor;
+		kickoffAnalysis = decision.analysis;
+		const startupRouting = deps.finalizeContextProposalAnalysis(kickoffAnalysis, [goal ?? kickoffMissionAnchor ?? projectName]);
+		const created = await deps.scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName, {
+			analysis: startupRouting,
+			continuationReason: deps.buildContextProposalContinuationReason(
+				"User started workflow via /cook:",
+				goal ?? kickoffMissionAnchor ?? projectName,
+				startupRouting,
+			),
+		});
+		deps.emitCommandText(
+			ctx,
+			`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
+			"info",
+		);
+		snapshot = await loadCompletionSnapshot(root);
+	}
+	if (!snapshot) {
+		deps.emitCommandText(ctx, "Failed to load completion workflow state", "error");
+		return;
+	}
+	deps.activateCompletionRoutingForRoot(snapshot.files.root);
+	if (!goal) {
+		if (workflowDone) {
+			const projectName = path.basename(snapshot.files.root);
+			const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
+			if (!proposal) {
+				deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps, "The previous completion workflow is already done."), "info");
+				return;
+			}
+			const decision = await deps.confirmContextProposal(ctx, proposal, {
+				title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
+			});
+			if (!decision) {
+				deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal", deps), "info");
+				return;
+			}
+			goal = decision.goalText;
+			kickoffIntent = "refocus";
+			kickoffMissionAnchor = decision.missionAnchor;
+			await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis, deps);
+			snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+			deps.emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
+		} else {
+			const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
+			if (!assessment.proposal || assessment.action === "continue") {
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
+				return;
+			}
+			const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, deps, {
+				intro:
+					assessment.action === "refocus"
+						? "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:"
+						: "Recent discussion may point to a different implementation goal. Review the current mission and the latest inferred mission before deciding how /cook should proceed:",
+				proposedMissionLabel: "Proposed mission from recent discussion",
+				refocusChoiceLabel:
+					"Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.",
+				comparison: assessment.action === "refocus" ? "semantic" : "strict",
+			});
+			if (!decision) {
+				deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation", deps), "info");
+				return;
+			}
+			if (decision.action === "continue") {
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
+				return;
+			}
+			const selectedProposal = decision.proposal;
+			const proposalDecision = await deps.confirmContextProposal(ctx, selectedProposal, {
+				title:
+					assessment.action === "refocus"
+						? "Start the replacement workflow from recent discussion?"
+						: "Start the latest inferred workflow from recent discussion?",
+			});
+			if (!proposalDecision) {
+				deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal", deps), "info");
+				return;
+			}
+			goal = proposalDecision.goalText;
+			kickoffIntent = "refocus";
+			kickoffMissionAnchor = proposalDecision.missionAnchor;
+			await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText, proposalDecision.analysis, deps);
+			snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
+			deps.emitCommandText(ctx, `Refocused completion mission from recent discussion to: ${proposalDecision.missionAnchor}`, "info");
+		}
+	}
+	kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
+	const kickoffGoal = goal ?? kickoffMissionAnchor;
+	pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
+	const kickoffPrompt = deps.completionKickoff(
+		kickoffGoal,
+		currentTaskType(snapshot) ?? "(missing)",
+		currentEvaluationProfile(snapshot) ?? "(missing)",
+		kickoffIntent,
+		kickoffMissionAnchor,
+	);
+	const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
+	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
+		kind: "kickoff",
+		mission_anchor: kickoffMissionAnchor,
+		goal: kickoffGoal,
+		intent: kickoffIntent,
+		task_type: currentTaskType(snapshot) ?? "(missing)",
+		evaluation_profile: currentEvaluationProfile(snapshot) ?? "(missing)",
+	});
+	await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, kickoffPrompt, "kickoff", deps);
+}
+
 export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps): void {
 	pi.registerCommand("cook", {
 		description: deps.cookCommandSpec.description,
 		handler: async (args, ctx) => {
-			const explicitHint = args.trim().length > 0 ? args.trim() : undefined;
-			let goal: string | undefined;
-			const cwd = deps.getCtxCwd(ctx);
-			let snapshot = await loadCompletionSnapshot(cwd);
-			const workflowDone = isWorkflowDone(snapshot);
-			let kickoffIntent: "auto" | "continue" | "refocus" = "auto";
-			let kickoffMissionAnchor = snapshot ? currentMissionAnchor(snapshot) : undefined;
-			let kickoffAnalysis: ContextProposalAnalysis | undefined;
-
-			if (!snapshot) {
-				const root = findRepoRoot(cwd) ?? cwd;
-				const projectName = path.basename(root);
-				const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
-				if (!proposal) {
-					deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps), "info");
-					return;
-				}
-				const decision = await deps.confirmContextProposal(ctx, proposal, {
-					title: "Start a completion workflow from the recent discussion?",
-				});
-				if (!decision) {
-					deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal", deps), "info");
-					return;
-				}
-				goal = decision.goalText;
-				kickoffMissionAnchor = decision.missionAnchor;
-				kickoffAnalysis = decision.analysis;
-				const startupRouting = deps.finalizeContextProposalAnalysis(kickoffAnalysis, [goal ?? kickoffMissionAnchor ?? projectName]);
-				const created = await deps.scaffoldCompletionFiles(root, kickoffMissionAnchor ?? projectName, {
-					analysis: startupRouting,
-					continuationReason: deps.buildContextProposalContinuationReason(
-						"User started workflow via /cook:",
-						goal ?? kickoffMissionAnchor ?? projectName,
-						startupRouting,
-					),
-				});
-				deps.emitCommandText(
-					ctx,
-					`Initialized completion control plane in ${created.root}${created.created.length > 0 ? ` (${created.created.length} files created)` : ""}`,
-					"info",
-				);
-				snapshot = await loadCompletionSnapshot(root);
-			}
-			if (!snapshot) {
-				deps.emitCommandText(ctx, "Failed to load completion workflow state", "error");
-				return;
-			}
-			deps.activateCompletionRoutingForRoot(snapshot.files.root);
-			if (!goal) {
-				if (workflowDone) {
-					const projectName = path.basename(snapshot.files.root);
-					const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
-					if (!proposal) {
-						deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps, "The previous completion workflow is already done."), "info");
-						return;
-					}
-					const decision = await deps.confirmContextProposal(ctx, proposal, {
-						title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
-					});
-					if (!decision) {
-						deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal", deps), "info");
-						return;
-					}
-					goal = decision.goalText;
-					kickoffIntent = "refocus";
-					kickoffMissionAnchor = decision.missionAnchor;
-					await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis, deps);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-					deps.emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
-				} else {
-					const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
-					if (!assessment.proposal || assessment.action === "continue") {
-						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
-						return;
-					}
-					const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, deps, {
-						intro:
-							assessment.action === "refocus"
-								? "Recent non-command discussion suggests a different workflow. Choose how /cook should proceed:"
-								: "Recent discussion may point to a different implementation goal. Review the current mission and the latest inferred mission before deciding how /cook should proceed:",
-						proposedMissionLabel: "Proposed mission from recent discussion",
-						refocusChoiceLabel:
-							"Start new workflow from recent discussion\n\nReview the proposed replacement in a final Start/Cancel confirmation before /cook rewrites canonical workflow state.",
-						comparison: assessment.action === "refocus" ? "semantic" : "strict",
-					});
-					if (!decision) {
-						deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled existing workflow confirmation", deps), "info");
-						return;
-					}
-					if (decision.action === "continue") {
-						await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
-						return;
-					}
-					const selectedProposal = decision.proposal;
-					const proposalDecision = await deps.confirmContextProposal(ctx, selectedProposal, {
-						title:
-							assessment.action === "refocus"
-								? "Start the replacement workflow from recent discussion?"
-								: "Start the latest inferred workflow from recent discussion?",
-					});
-					if (!proposalDecision) {
-						deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal", deps), "info");
-						return;
-					}
-					goal = proposalDecision.goalText;
-					kickoffIntent = "refocus";
-					kickoffMissionAnchor = proposalDecision.missionAnchor;
-					await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText, proposalDecision.analysis, deps);
-					snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
-					deps.emitCommandText(ctx, `Refocused completion mission from recent discussion to: ${proposalDecision.missionAnchor}`, "info");
-				}
-			}
-			kickoffMissionAnchor = kickoffMissionAnchor ?? currentMissionAnchor(snapshot);
-			const kickoffGoal = goal ?? kickoffMissionAnchor;
-			pi.setSessionName(`completion: ${kickoffMissionAnchor.slice(0, 60)}`);
-			const kickoffPrompt = deps.completionKickoff(
-				kickoffGoal,
-				currentTaskType(snapshot) ?? "(missing)",
-				currentEvaluationProfile(snapshot) ?? "(missing)",
-				kickoffIntent,
-				kickoffMissionAnchor,
-			);
-			const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
-			const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
-				kind: "kickoff",
-				mission_anchor: kickoffMissionAnchor,
-				goal: kickoffGoal,
-				intent: kickoffIntent,
-				task_type: currentTaskType(snapshot) ?? "(missing)",
-				evaluation_profile: currentEvaluationProfile(snapshot) ?? "(missing)",
+			await runCookEntry(pi, ctx, deps, {
+				origin: "command",
+				hintText: args,
 			});
-			await queueCompletionDriverPrompt(pi, ctx, rootKey, fingerprint, kickoffPrompt, "kickoff", deps);
 		},
 	});
 }

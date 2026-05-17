@@ -7,11 +7,17 @@ import { DynamicBorder, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import {
 	buildContextProposalAnalystPromptFromEntries,
+	extractJsonObjectFromText,
 	parseContextProposalAnalystOutput,
+	serializeRecentDiscussionEntries,
 	type ContextProposal,
 	type RecentDiscussionEntry,
 } from "./proposal";
-import { contextProposalAnalystProgressLines } from "./prompt-surfaces";
+import {
+	buildCookTriggerClassifierPrompt,
+	contextProposalAnalystProgressLines,
+	maybeWriteCookTriggerClassifierSnapshot,
+} from "./prompt-surfaces";
 import {
 	applyLiveRoleEvent,
 	buildInlineRunningLines,
@@ -25,7 +31,13 @@ import {
 } from "./status-surface";
 import { completionRootKey, findCompletionRoot, findRepoRoot, loadCompletionDataForReminder } from "./state-store";
 import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";
-import type { AgentDefinition, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
+import type {
+	AgentDefinition,
+	CompletionRole,
+	CookTriggerClassification,
+	JsonRecord,
+	LiveRoleActivity,
+} from "./types";
 
 export type RunCompletionRoleParams = {
 	root: string;
@@ -67,6 +79,21 @@ export type AnalyzeContextProposalWithAgentParams = {
 	getCtxUi: <T extends { ui: any }>(ctx: T) => any | undefined;
 };
 
+export type ClassifyCookTriggerIntentWithAgentParams = {
+	ctx: { cwd: string; hasUI: boolean; ui: any; model?: any };
+	projectName: string;
+	inputText: string;
+	recentEntries: RecentDiscussionEntry[];
+	workflowContextLines?: string[];
+};
+
+export type CookTriggerClassifierResult = {
+	status: "classified" | "timeout" | "invalid_output" | "error";
+	classification?: CookTriggerClassification;
+	rawOutput?: string;
+	errorMessage?: string;
+};
+
 const AGENT_HOME = path.join(os.homedir(), ".pi", "agent");
 const EXTENSION_DIR = typeof __dirname === "string" ? __dirname : process.cwd();
 const PACKAGE_ROOT_CANDIDATE = path.resolve(EXTENSION_DIR, "..", "..");
@@ -93,6 +120,22 @@ const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 ].join(" ");
 const STARTUP_ANALYST_ROLE = "cook-proposal-analyst";
 const ANALYST_HEARTBEAT_MS = 5_000;
+const COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT = [
+	"You classify whether the latest user input should hand control to the canonical /cook workflow before the primary agent starts implementation work.",
+	"Do not emit markdown, code fences, or commentary.",
+	"Return exactly one JSON object with keys: intent, confidence, reason, evidence, riskFlags, focusHint.",
+	"intent must be exactly one of route_to_cook, normal_prompt, or unclear.",
+	"Use route_to_cook only when the latest input is handing control from discussion into workflow execution or explicitly asking to let /cook take over.",
+	"Use normal_prompt for ordinary questions, explanations, or direct requests that should stay with the primary agent.",
+	"Use unclear for ambiguous approvals, acknowledgements, or mixed signals where false-positive routing risk is material.",
+	"confidence must be a number from 0 to 1.",
+	"reason must be a single concise sentence.",
+	"evidence must be an array of short grounded strings.",
+	"riskFlags must be an array of short machine-readable strings such as ambiguous-approval, possible-normal-agent-request, or active-workflow-refocus-risk.",
+	"focusHint is optional, must stay short, and must never rewrite the workflow mission or invent scope.",
+	"Short acknowledgements like 好, 可以, ok, sure, or 那就這樣 should usually be unclear unless the surrounding context makes the handoff explicit.",
+].join(" ");
+const COOK_TRIGGER_CLASSIFIER_TIMEOUT_MS = 10_000;
 
 class StartupAnalystOverlay extends Container {
 	private readonly border: DynamicBorder;
@@ -321,6 +364,246 @@ export async function analyzeContextProposalWithAgent(params: AnalyzeContextProp
 	} catch (error) {
 		console.warn("[completion] context proposal analyst failed", error);
 		return undefined;
+	}
+}
+
+function uniqueStrings(items: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const item of items) {
+		const normalized = item.trim();
+		if (!normalized) continue;
+		const key = normalized.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(normalized);
+	}
+	return result;
+}
+
+function localAsStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? uniqueStrings(value.filter((item): item is string => typeof item === "string" && item.trim().length > 0))
+		: [];
+}
+
+function confidenceFromUnknown(value: unknown): number {
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && value.trim().length > 0
+				? Number.parseFloat(value)
+				: Number.NaN;
+	if (!Number.isFinite(parsed)) return 0;
+	return Math.min(1, Math.max(0, parsed));
+}
+
+function parseCookTriggerClassification(raw: string): CookTriggerClassification | undefined {
+	const jsonText = extractJsonObjectFromText(raw);
+	if (!jsonText) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(jsonText);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(parsed)) return undefined;
+	const intent = asString(parsed.intent);
+	if (intent !== "route_to_cook" && intent !== "normal_prompt" && intent !== "unclear") return undefined;
+	const evidence = localAsStringArray(parsed.evidence);
+	const riskFlags = localAsStringArray(parsed.riskFlags ?? parsed.risk_flags);
+	const reason = asString(parsed.reason) ?? asString(parsed.rationale) ?? evidence[0] ?? `Classifier returned ${intent}.`;
+	const focusHint = asString(parsed.focusHint ?? parsed.focus_hint);
+	return {
+		intent,
+		confidence: confidenceFromUnknown(parsed.confidence),
+		reason,
+		focusHint,
+		evidence: evidence.length > 0 ? evidence : [reason],
+		riskFlags,
+	};
+}
+
+function triggerClassifierFailureModeFromEnv(): "timeout" | "error" | "invalid_output" | undefined {
+	const raw = asString(process.env.PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_FAILURE)?.toLowerCase();
+	return raw === "timeout" || raw === "error" || raw === "invalid_output" ? raw : undefined;
+}
+
+function triggerClassifierSnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH);
+}
+
+async function runCookTriggerClassifierSubprocess(
+	params: ClassifyCookTriggerIntentWithAgentParams & { prompt: string },
+): Promise<CookTriggerClassifierResult> {
+	const cwd = params.ctx.cwd;
+	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
+	const modelArg = contextProposalAnalystModelArg(params.ctx.model);
+	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-trigger-classifier-", COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT);
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath];
+	if (modelArg) args.push("--model", modelArg);
+	args.push(params.prompt);
+	const invocation = getPiInvocation(args);
+	const liveActivity = createLiveRoleActivity("cook-trigger-classifier");
+	const messages: RoleMessage[] = [];
+	let stderr = "";
+	let timedOut = false;
+	try {
+		const rawOutput = await new Promise<string | undefined>((resolve) => {
+			const proc = spawn(invocation.command, invocation.args, {
+				cwd: runCwd,
+				env: process.env,
+				stdio: ["ignore", "pipe", "pipe"],
+				shell: false,
+			});
+			let settled = false;
+			let buffer = "";
+			const resolveOnce = (value: string | undefined) => {
+				if (settled) return;
+				settled = true;
+				resolve(value);
+			};
+			const timeoutHandle = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGTERM");
+				resolveOnce(undefined);
+			}, COOK_TRIGGER_CLASSIFIER_TIMEOUT_MS);
+			const processLine = (line: string) => {
+				if (!line.trim()) return;
+				try {
+					const event = JSON.parse(line) as JsonRecord;
+					applyLiveRoleEvent(liveActivity, event, messages);
+				} catch {
+					// ignore malformed lines from the subprocess event stream
+				}
+			};
+			proc.stdout.on("data", (chunk) => {
+				buffer += chunk.toString();
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+				for (const line of lines) processLine(line);
+			});
+			proc.stderr.on("data", (chunk) => {
+				stderr += chunk.toString();
+			});
+			proc.on("close", (code) => {
+				clearTimeout(timeoutHandle);
+				if (buffer.trim()) processLine(buffer);
+				if (timedOut) return;
+				resolveOnce(code === 0 ? liveActivity.lastAssistantText?.trim() || undefined : undefined);
+			});
+			proc.on("error", () => {
+				clearTimeout(timeoutHandle);
+				resolveOnce(undefined);
+			});
+		});
+		if (!rawOutput) {
+			if (timedOut) {
+				return {
+					status: "timeout",
+					errorMessage: `Trigger classifier timed out after ${COOK_TRIGGER_CLASSIFIER_TIMEOUT_MS}ms.`,
+				};
+			}
+			return { status: "error", errorMessage: stderr.trim() || "Trigger classifier produced no assistant output." };
+		}
+		const classification = parseCookTriggerClassification(rawOutput);
+		if (!classification) {
+			return {
+				status: "invalid_output",
+				rawOutput,
+				errorMessage: "Trigger classifier returned invalid JSON output.",
+			};
+		}
+		return { status: "classified", classification, rawOutput };
+	} finally {
+		await fsp.rm(systemPromptTemp.dir, { recursive: true, force: true });
+	}
+}
+
+export async function classifyCookTriggerIntentWithAgent(
+	params: ClassifyCookTriggerIntentWithAgentParams,
+): Promise<CookTriggerClassifierResult> {
+	const recentDiscussion = serializeRecentDiscussionEntries(params.recentEntries);
+	const prompt = buildCookTriggerClassifierPrompt({
+		projectName: params.projectName,
+		inputText: params.inputText,
+		recentDiscussion,
+		workflowContextLines: params.workflowContextLines,
+	});
+	const snapshotPath = triggerClassifierSnapshotPath();
+	const testFailureMode = triggerClassifierFailureModeFromEnv();
+	if (testFailureMode) {
+		const result: CookTriggerClassifierResult = {
+			status: testFailureMode,
+			errorMessage: `Forced trigger classifier ${testFailureMode} for deterministic tests.`,
+		};
+		maybeWriteCookTriggerClassifierSnapshot(
+			{
+				projectName: params.projectName,
+				inputText: params.inputText,
+				recentEntries: params.recentEntries,
+				workflowContextLines: params.workflowContextLines ?? [],
+				prompt,
+				result,
+			},
+			snapshotPath,
+		);
+		return result;
+	}
+	const testOutput = asString(process.env.PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT);
+	if (testOutput) {
+		const classification = parseCookTriggerClassification(testOutput);
+		const result: CookTriggerClassifierResult = classification
+			? { status: "classified", classification, rawOutput: testOutput }
+			: {
+				status: "invalid_output",
+				rawOutput: testOutput,
+				errorMessage: "Trigger classifier test override did not match the required JSON schema.",
+			};
+		maybeWriteCookTriggerClassifierSnapshot(
+			{
+				projectName: params.projectName,
+				inputText: params.inputText,
+				recentEntries: params.recentEntries,
+				workflowContextLines: params.workflowContextLines ?? [],
+				prompt,
+				result,
+			},
+			snapshotPath,
+		);
+		return result;
+	}
+	try {
+		const result = await runCookTriggerClassifierSubprocess({ ...params, prompt });
+		maybeWriteCookTriggerClassifierSnapshot(
+			{
+				projectName: params.projectName,
+				inputText: params.inputText,
+				recentEntries: params.recentEntries,
+				workflowContextLines: params.workflowContextLines ?? [],
+				prompt,
+				result,
+			},
+			snapshotPath,
+		);
+		return result;
+	} catch (error) {
+		const result: CookTriggerClassifierResult = {
+			status: "error",
+			errorMessage: error instanceof Error ? error.message : String(error),
+		};
+		maybeWriteCookTriggerClassifierSnapshot(
+			{
+				projectName: params.projectName,
+				inputText: params.inputText,
+				recentEntries: params.recentEntries,
+				workflowContextLines: params.workflowContextLines ?? [],
+				prompt,
+				result,
+			},
+			snapshotPath,
+		);
+		return result;
 	}
 }
 

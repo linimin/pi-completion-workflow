@@ -85,3 +85,45 @@ export type CompletionStatusSurface = {
 	liveStateDeltas?: string[];
 	liveDetailsLines?: string[];
 };
+
+export type NaturalLanguageCookTriggerMode = "off" | "assist" | "auto";
+export type CookTriggerIntent = "route_to_cook" | "normal_prompt" | "unclear";
+
+export type CookTriggerClassification = {
+	intent: CookTriggerIntent;
+	confidence: number;
+	reason: string;
+	focusHint?: string;
+	evidence: string[];
+	riskFlags: string[];
+};
+
+export type CookTriggerConfirmationAction = "start_cook" | "keep_chatting" | "cancel";
+
+export type CookTriggerConfirmationActionItem = {
+	id: CookTriggerConfirmationAction;
+	label: string;
+	description: string;
+};
+
+export type CookTriggerConfirmationLayout = {
+	title: string;
+	intro: string;
+	evidenceHeading?: string;
+	evidenceBody?: string;
+	riskHeading?: string;
+	riskBody?: string;
+	focusHintHeading?: string;
+	focusHintBody?: string;
+	actionsHeading: string;
+	actions: CookTriggerConfirmationActionItem[];
+	footer: string;
+};
+
+export type CookTriggerDecision = {
+	mode: NaturalLanguageCookTriggerMode;
+	action: "continue" | "handled" | "routed_to_cook";
+	reason: string;
+	classification?: CookTriggerClassification;
+	bypassReason?: string;
+};

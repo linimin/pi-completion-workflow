@@ -14,6 +14,7 @@ import {
 	markQueuedDriverPromptInFlight,
 	registerCookCommand,
 } from "./driver";
+import { handleCookNaturalLanguageTrigger } from "./input-routing";
 import {
 	assessMissionAnchor,
 	collectRecentDiscussionEntries,
@@ -951,6 +952,10 @@ export default function completionExtension(pi: ExtensionAPI) {
 		shouldTestAutoContinueOnSessionStart,
 		shouldTreatBareActiveWorkflowProposalAsClearRefocus,
 	};
+
+	pi.on("input", async (event, ctx) => {
+		return await handleCookNaturalLanguageTrigger(pi, event, ctx, driverDeps);
+	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });

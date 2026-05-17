@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { CompletionStateSnapshot, LiveRoleActivity } from "./types";
+import type {
+	CompletionStateSnapshot,
+	CookTriggerClassification,
+	CookTriggerConfirmationActionItem,
+	CookTriggerConfirmationLayout,
+	LiveRoleActivity,
+} from "./types";
 import type {
 	ContextProposal,
 	ContextProposalAnalysis,
@@ -185,6 +191,98 @@ export function maybeWriteContextProposalSnapshot(proposal: ContextProposal, sna
 	} catch {
 		// ignore malformed or unwritable test snapshot paths
 	}
+}
+
+function writeJsonSnapshot(snapshotPath: string | undefined, value: unknown): void {
+	if (!snapshotPath) return;
+	try {
+		fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+		fs.writeFileSync(snapshotPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	} catch {
+		// ignore malformed or unwritable test snapshot paths
+	}
+}
+
+export function buildCookTriggerClassifierPrompt(args: {
+	projectName: string;
+	inputText: string;
+	recentDiscussion: string;
+	workflowContextLines?: string[];
+}): string {
+	const lines = [
+		`Project: ${args.projectName}`,
+		"Classify whether the current input is a natural-language handoff to the canonical /cook workflow before the primary agent starts implementation work.",
+		"Return JSON only with keys: intent, confidence, reason, evidence, riskFlags, focusHint.",
+		"intent must be exactly one of route_to_cook, normal_prompt, or unclear.",
+		"Use route_to_cook only when the user is handing control from recent discussion into workflow execution or explicitly asking to let /cook take over.",
+		"Use normal_prompt for ordinary questions, explanations, or direct agent requests that should stay in the main chat.",
+		"Use unclear for ambiguous approvals, short acknowledgements, or cases where false-positive routing risk is material.",
+		"focusHint is optional, must stay short, and must never rewrite the workflow mission or invent scope.",
+		"evidence and riskFlags must be arrays of short grounded strings.",
+	];
+	if (args.workflowContextLines?.length) lines.push("", "Canonical workflow context:", ...args.workflowContextLines);
+	lines.push("", `Current input: ${args.inputText}`, "", "Recent discussion:", args.recentDiscussion || "(none)");
+	return lines.join("\n");
+}
+
+export function buildCookTriggerConfirmationActions(mainChatRerunGuidance: string): CookTriggerConfirmationActionItem[] {
+	return [
+		{
+			id: "start_cook",
+			label: "Start /cook",
+			description: "Let /cook take over before the primary agent starts implementation work.",
+		},
+		{
+			id: "keep_chatting",
+			label: "Keep chatting",
+			description: "Send the original message to the primary agent instead.",
+		},
+		{
+			id: "cancel",
+			label: "Cancel",
+			description: `Stop here without routing the message. ${mainChatRerunGuidance}`,
+		},
+	];
+}
+
+export function buildCookTriggerAssistConfirmationLayout(args: {
+	classification: CookTriggerClassification;
+	mainChatRerunGuidance: string;
+}): CookTriggerConfirmationLayout {
+	const evidenceBody =
+		args.classification.evidence.length > 0
+			? args.classification.evidence.map((item) => `- ${item}`).join("\n")
+			: "- No additional evidence was captured beyond the current handoff signal.";
+	const riskBody = args.classification.riskFlags.length > 0 ? args.classification.riskFlags.map((item) => `- ${item}`).join("\n") : undefined;
+	return {
+		title: "Let /cook take over from the recent discussion?",
+		intro:
+			"This input looks like a natural-language handoff into the completion workflow. /cook would keep the existing approval-only startup, continue, refocus, and next-round semantics before canonical state changes.",
+		evidenceHeading: "Why it matched",
+		evidenceBody,
+		riskHeading: riskBody ? "Risk checks" : undefined,
+		riskBody,
+		focusHintHeading: args.classification.focusHint ? "Optional focus hint" : undefined,
+		focusHintBody: args.classification.focusHint,
+		actionsHeading: "Actions",
+		actions: buildCookTriggerConfirmationActions(args.mainChatRerunGuidance),
+		footer: "↑↓ navigate • enter select • esc cancel",
+	};
+}
+
+export function maybeWriteCookTriggerClassifierSnapshot(snapshot: Record<string, unknown>, snapshotPath: string | undefined): void {
+	writeJsonSnapshot(snapshotPath, snapshot);
+}
+
+export function maybeWriteCookTriggerConfirmationSnapshot(
+	layout: CookTriggerConfirmationLayout,
+	snapshotPath: string | undefined,
+): void {
+	writeJsonSnapshot(snapshotPath, layout);
+}
+
+export function maybeWriteCookTriggerRoutingSnapshot(snapshot: Record<string, unknown>, snapshotPath: string | undefined): void {
+	writeJsonSnapshot(snapshotPath, snapshot);
 }
 
 export function buildContextProposalConfirmationSelectItems(layout: ContextProposalConfirmationLayout) {

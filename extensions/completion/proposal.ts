@@ -350,7 +350,7 @@ function contextHintEntry(hintText: string | undefined): RecentDiscussionEntry[]
 const RECENT_DISCUSSION_IMPLEMENTATION_INTENT_REGEX =
 	/(?:\b(?:fix|update|add|remove|restore|refactor|ship|support|wire|route|rewrite|replace|preserve|filter|separate|refresh|reroute|suppress|align|convert|reconcile|repair|correct|implement|build|land|block|allow|keep|edit|document|write)\b|(?:修正|修復|修复|更新|新增|移除|恢復|恢复|重構|重构|調整|调整|過濾|过滤|分離|分离|刷新|替換|替换|抑制|對齊|对齐|實作|实现|落地|修補|修补|阻止|允許|允许|轉換|转换|保留|保持))/iu;
 
-function hasRecentDiscussionImplementationIntent(text: string, stripCodeBlocksFn: (text: string) => string): boolean {
+export function hasRecentDiscussionImplementationIntent(text: string, stripCodeBlocksFn: (text: string) => string): boolean {
 	const cleaned = stripCodeBlocksFn(text).replace(/\r/g, " ").trim();
 	if (!cleaned) return false;
 	return hasStructuredContextProposalSignal(cleaned, stripCodeBlocksFn) || RECENT_DISCUSSION_IMPLEMENTATION_INTENT_REGEX.test(cleaned);
