@@ -12,7 +12,7 @@ import {
 	loadCompletionSnapshot,
 	writeJsonFile,
 } from "./state-store";
-import type { CompletionStateSnapshot } from "./types";
+import type { CompletionStateSnapshot, CookTriggerWorkflowBias } from "./types";
 
 type ContextProposalAnalysis = {
 	taskType?: string;
@@ -104,8 +104,21 @@ export type CompletionDriverDeps = {
 		evaluationProfile: string,
 		intent?: "auto" | "continue" | "refocus",
 		missionAnchor?: string,
+		naturalLanguageHandoff?: {
+			preferredRoutingBias?: CookTriggerWorkflowBias;
+			triggerText?: string;
+			hintText?: string;
+		},
 	) => string;
-	completionResumePrompt: (taskType: string, evaluationProfile: string) => string;
+	completionResumePrompt: (
+		taskType: string,
+		evaluationProfile: string,
+		naturalLanguageHandoff?: {
+			preferredRoutingBias?: CookTriggerWorkflowBias;
+			triggerText?: string;
+			hintText?: string;
+		},
+	) => string;
 	deriveCookContextProposal: (ctx: DriverContext, projectName: string, hintText?: string) => Promise<ContextProposal | undefined>;
 	confirmContextProposal: (
 		ctx: { hasUI: boolean; ui: any },
@@ -374,10 +387,19 @@ async function resumeActiveWorkflowFromCanonicalState(
 	ctx: { cwd: string; hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
 	deps: CompletionDriverDeps,
+	naturalLanguageHandoff?: {
+		preferredRoutingBias?: CookTriggerWorkflowBias;
+		triggerText?: string;
+		hintText?: string;
+	},
 ): Promise<void> {
 	const mission = currentMissionAnchor(snapshot);
 	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
-	const resumePrompt = deps.completionResumePrompt(currentTaskType(snapshot) ?? "(missing)", currentEvaluationProfile(snapshot) ?? "(missing)");
+	const resumePrompt = deps.completionResumePrompt(
+		currentTaskType(snapshot) ?? "(missing)",
+		currentEvaluationProfile(snapshot) ?? "(missing)",
+		naturalLanguageHandoff,
+	);
 	const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
 	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
 		kind: "resume",
@@ -536,6 +558,8 @@ export type RunCookEntryOptions = {
 	origin: CookInvocationOrigin;
 	hintText?: string;
 	originalInput?: string;
+	triggerText?: string;
+	preferredRoutingBias?: CookTriggerWorkflowBias;
 };
 
 export async function runCookEntry(
@@ -545,6 +569,14 @@ export async function runCookEntry(
 	options: RunCookEntryOptions,
 ): Promise<void> {
 	const explicitHint = options.hintText?.trim() ? options.hintText.trim() : undefined;
+	const naturalLanguageHandoff =
+		options.origin === "natural-language-trigger"
+			? {
+				preferredRoutingBias: options.preferredRoutingBias,
+				triggerText: options.triggerText?.trim() ? options.triggerText.trim() : options.originalInput?.trim() ? options.originalInput.trim() : undefined,
+				hintText: explicitHint,
+			}
+			: undefined;
 	let goal: string | undefined;
 	const cwd = deps.getCtxCwd(ctx);
 	let snapshot = await loadCompletionSnapshot(cwd);
@@ -616,7 +648,7 @@ export async function runCookEntry(
 		} else {
 			const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
 			if (!assessment.proposal || assessment.action === "continue") {
-				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps, naturalLanguageHandoff);
 				return;
 			}
 			const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, deps, {
@@ -634,7 +666,7 @@ export async function runCookEntry(
 				return;
 			}
 			if (decision.action === "continue") {
-				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps, naturalLanguageHandoff);
 				return;
 			}
 			const selectedProposal = decision.proposal;
@@ -665,6 +697,7 @@ export async function runCookEntry(
 		currentEvaluationProfile(snapshot) ?? "(missing)",
 		kickoffIntent,
 		kickoffMissionAnchor,
+		naturalLanguageHandoff,
 	);
 	const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
 	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({

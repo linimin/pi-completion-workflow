@@ -87,18 +87,20 @@ export type CompletionStatusSurface = {
 };
 
 export type NaturalLanguageCookTriggerMode = "off" | "assist" | "auto";
-export type CookTriggerIntent = "route_to_cook" | "normal_prompt" | "unclear";
+export type CookTriggerClassifierDecision = "offer_workflow" | "normal_prompt" | "unclear";
+export type CookTriggerWorkflowBias = "startup" | "resume" | "refocus" | "next_round" | "unknown";
 
 export type CookTriggerClassification = {
-	intent: CookTriggerIntent;
+	decision: CookTriggerClassifierDecision;
 	confidence: number;
+	workflowBias: CookTriggerWorkflowBias;
 	reason: string;
 	focusHint?: string;
 	evidence: string[];
 	riskFlags: string[];
 };
 
-export type CookTriggerConfirmationAction = "start_cook" | "keep_chatting" | "cancel";
+export type CookTriggerConfirmationAction = "start_workflow" | "keep_chatting" | "cancel";
 
 export type CookTriggerConfirmationActionItem = {
 	id: CookTriggerConfirmationAction;

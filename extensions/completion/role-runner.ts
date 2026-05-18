@@ -123,11 +123,14 @@ const ANALYST_HEARTBEAT_MS = 5_000;
 const COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT = [
 	"You classify whether the latest user input should hand control to the canonical /cook workflow before the primary agent starts implementation work.",
 	"Do not emit markdown, code fences, or commentary.",
-	"Return exactly one JSON object with keys: intent, confidence, reason, evidence, riskFlags, focusHint.",
-	"intent must be exactly one of route_to_cook, normal_prompt, or unclear.",
-	"Use route_to_cook only when the latest input is handing control from discussion into workflow execution or explicitly asking to let /cook take over.",
+	"Return exactly one JSON object with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint.",
+	"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
+	"Use offer_workflow only when the latest input is handing control from discussion into workflow execution or explicitly asking to let /cook take over.",
 	"Use normal_prompt for ordinary questions, explanations, or direct requests that should stay with the primary agent.",
 	"Use unclear for ambiguous approvals, acknowledgements, or mixed signals where false-positive routing risk is material.",
+	"workflow_bias must be exactly one of startup, resume, refocus, next_round, or unknown.",
+	"Use startup when there is no active workflow yet, resume when the user is clearly continuing the current workflow, refocus when the user is clearly switching the active workflow to a different goal, and next_round when the previous workflow is done and the user is starting a new round.",
+	"When decision is not offer_workflow, prefer workflow_bias=unknown unless a stronger routing hint would still aid debugging.",
 	"confidence must be a number from 0 to 1.",
 	"reason must be a single concise sentence.",
 	"evidence must be an array of short grounded strings.",
@@ -218,7 +221,7 @@ async function runContextProposalAnalystSubprocess(params: AnalyzeContextProposa
 	const rootKey = completionRootKey(undefined, cwd);
 	const prompt = buildContextProposalAnalystPromptFromEntries(projectName, recentEntries, params.workflowContextLines);
 	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-proposal-analyst-", CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT);
-	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions", "--append-system-prompt", systemPromptTemp.filePath, "--model", modelArg, prompt];
 	const invocation = getPiInvocation(args);
 	const liveActivity = createLiveRoleActivity(STARTUP_ANALYST_ROLE);
 	liveActivity.progress = "Analyzing recent discussion";
@@ -408,15 +411,33 @@ function parseCookTriggerClassification(raw: string): CookTriggerClassification 
 		return undefined;
 	}
 	if (!isRecord(parsed)) return undefined;
-	const intent = asString(parsed.intent);
-	if (intent !== "route_to_cook" && intent !== "normal_prompt" && intent !== "unclear") return undefined;
+	const rawDecision = asString(parsed.decision ?? parsed.intent);
+	const decision =
+		rawDecision === "offer_workflow" || rawDecision === "normal_prompt" || rawDecision === "unclear"
+			? rawDecision
+			: rawDecision === "route_to_cook"
+				? "offer_workflow"
+				: undefined;
+	if (!decision) return undefined;
+	const rawWorkflowBias = asString(parsed.workflow_bias ?? parsed.workflowBias ?? parsed.routing_bias ?? parsed.routingBias);
+	const workflowBias =
+		rawWorkflowBias === "startup" ||
+		rawWorkflowBias === "resume" ||
+		rawWorkflowBias === "refocus" ||
+		rawWorkflowBias === "next_round" ||
+		rawWorkflowBias === "unknown"
+			? rawWorkflowBias
+			: decision === "offer_workflow" && rawDecision === "route_to_cook"
+				? "unknown"
+				: "unknown";
 	const evidence = localAsStringArray(parsed.evidence);
 	const riskFlags = localAsStringArray(parsed.riskFlags ?? parsed.risk_flags);
-	const reason = asString(parsed.reason) ?? asString(parsed.rationale) ?? evidence[0] ?? `Classifier returned ${intent}.`;
+	const reason = asString(parsed.reason) ?? asString(parsed.rationale) ?? evidence[0] ?? `Classifier returned ${decision}.`;
 	const focusHint = asString(parsed.focusHint ?? parsed.focus_hint);
 	return {
-		intent,
+		decision,
 		confidence: confidenceFromUnknown(parsed.confidence),
+		workflowBias,
 		reason,
 		focusHint,
 		evidence: evidence.length > 0 ? evidence : [reason],
@@ -440,7 +461,7 @@ async function runCookTriggerClassifierSubprocess(
 	const runCwd = findCompletionRoot(cwd) ?? findRepoRoot(cwd) ?? cwd;
 	const modelArg = contextProposalAnalystModelArg(params.ctx.model);
 	const systemPromptTemp = await writeTempFile(runCwd, "pi-cook-trigger-classifier-", COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT);
-	const args: string[] = ["--mode", "json", "-p", "--no-session", "--append-system-prompt", systemPromptTemp.filePath];
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions", "--append-system-prompt", systemPromptTemp.filePath];
 	if (modelArg) args.push("--model", modelArg);
 	args.push(params.prompt);
 	const invocation = getPiInvocation(args);

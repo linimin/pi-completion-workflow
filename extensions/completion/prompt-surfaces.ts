@@ -5,6 +5,7 @@ import type {
 	CookTriggerClassification,
 	CookTriggerConfirmationActionItem,
 	CookTriggerConfirmationLayout,
+	CookTriggerWorkflowBias,
 	LiveRoleActivity,
 } from "./types";
 import type {
@@ -212,11 +213,14 @@ export function buildCookTriggerClassifierPrompt(args: {
 	const lines = [
 		`Project: ${args.projectName}`,
 		"Classify whether the current input is a natural-language handoff to the canonical /cook workflow before the primary agent starts implementation work.",
-		"Return JSON only with keys: intent, confidence, reason, evidence, riskFlags, focusHint.",
-		"intent must be exactly one of route_to_cook, normal_prompt, or unclear.",
-		"Use route_to_cook only when the user is handing control from recent discussion into workflow execution or explicitly asking to let /cook take over.",
+		"Return JSON only with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint.",
+		"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
+		"Use offer_workflow only when the user is handing control from recent discussion into workflow execution or explicitly asking to let /cook take over.",
 		"Use normal_prompt for ordinary questions, explanations, or direct agent requests that should stay in the main chat.",
 		"Use unclear for ambiguous approvals, short acknowledgements, or cases where false-positive routing risk is material.",
+		"workflow_bias must be exactly one of startup, resume, refocus, next_round, or unknown.",
+		"Use startup when there is no active workflow yet, resume when the user is clearly continuing the current workflow, refocus when the user is clearly switching the active workflow to a different goal, and next_round when the previous workflow is done and the user is starting a new round.",
+		"When decision is not offer_workflow, prefer workflow_bias=unknown unless a stronger routing hint is still useful for later debugging.",
 		"focusHint is optional, must stay short, and must never rewrite the workflow mission or invent scope.",
 		"evidence and riskFlags must be arrays of short grounded strings.",
 	];
@@ -225,24 +229,126 @@ export function buildCookTriggerClassifierPrompt(args: {
 	return lines.join("\n");
 }
 
-export function buildCookTriggerConfirmationActions(mainChatRerunGuidance: string): CookTriggerConfirmationActionItem[] {
-	return [
-		{
-			id: "start_cook",
-			label: "Start /cook",
-			description: "Let /cook take over before the primary agent starts implementation work.",
-		},
-		{
-			id: "keep_chatting",
-			label: "Keep chatting",
-			description: "Send the original message to the primary agent instead.",
-		},
-		{
-			id: "cancel",
-			label: "Cancel",
-			description: `Stop here without routing the message. ${mainChatRerunGuidance}`,
-		},
-	];
+function cookTriggerOfferCopyForBias(
+	workflowBias: CookTriggerWorkflowBias,
+	mainChatRerunGuidance: string,
+): { title: string; intro: string; startAction: CookTriggerConfirmationActionItem; keepChatting: CookTriggerConfirmationActionItem; cancel: CookTriggerConfirmationActionItem } {
+	switch (workflowBias) {
+		case "startup":
+			return {
+				title: "Start a completion workflow from the recent discussion?",
+				intro:
+					"This input looks like a startup handoff into the completion workflow. The shared /cook entry would initialize or continue the canonical workflow boundary only after you confirm.",
+				startAction: {
+					id: "start_workflow",
+					label: "Start workflow",
+					description: "Enter the shared /cook workflow entry from the recent discussion before the primary agent starts implementation work.",
+				},
+				keepChatting: {
+					id: "keep_chatting",
+					label: "Keep chatting",
+					description: "Dismiss this workflow offer without sending the original start-intent message anywhere.",
+				},
+				cancel: {
+					id: "cancel",
+					label: "Cancel",
+					description: `Stop here without routing or replaying the original message. ${mainChatRerunGuidance}`,
+				},
+			};
+		case "resume":
+			return {
+				title: "Resume the current completion workflow?",
+				intro:
+					"This input looks like a resume handoff for the current completion workflow. The shared /cook entry would continue from canonical state only after you confirm.",
+				startAction: {
+					id: "start_workflow",
+					label: "Resume workflow",
+					description: "Resume the current canonical completion workflow through the shared /cook entry.",
+				},
+				keepChatting: {
+					id: "keep_chatting",
+					label: "Keep chatting",
+					description: "Dismiss this resume offer without routing or replaying the original start-intent message.",
+				},
+				cancel: {
+					id: "cancel",
+					label: "Cancel",
+					description: `Stop here without resuming or replaying the original message. ${mainChatRerunGuidance}`,
+				},
+			};
+		case "refocus":
+			return {
+				title: "Refocus the completion workflow from the recent discussion?",
+				intro:
+					"This input looks like a refocus handoff. The shared /cook entry would keep the existing chooser and confirmation semantics before any canonical workflow state is rewritten.",
+				startAction: {
+					id: "start_workflow",
+					label: "Refocus workflow",
+					description: "Review the recent discussion through the shared /cook entry and refocus the canonical workflow only if the follow-up confirmations agree.",
+				},
+				keepChatting: {
+					id: "keep_chatting",
+					label: "Keep chatting",
+					description: "Dismiss this refocus offer without routing or replaying the original start-intent message.",
+				},
+				cancel: {
+					id: "cancel",
+					label: "Cancel",
+					description: `Stop here without refocusing or replaying the original message. ${mainChatRerunGuidance}`,
+				},
+			};
+		case "next_round":
+			return {
+				title: "Start the next completion workflow round from the recent discussion?",
+				intro:
+					"This input looks like a next-round handoff after a completed workflow. The shared /cook entry would preserve the same canonical workflow boundary while starting the next round only after you confirm.",
+				startAction: {
+					id: "start_workflow",
+					label: "Start next round",
+					description: "Start the next workflow round through the shared /cook entry using the recent discussion as the new focus.",
+				},
+				keepChatting: {
+					id: "keep_chatting",
+					label: "Keep chatting",
+					description: "Dismiss this next-round offer without routing or replaying the original start-intent message.",
+				},
+				cancel: {
+					id: "cancel",
+					label: "Cancel",
+					description: `Stop here without starting a new workflow round or replaying the original message. ${mainChatRerunGuidance}`,
+				},
+			};
+		case "unknown":
+		default:
+			return {
+				title: "Let the completion workflow take over from the recent discussion?",
+				intro:
+					"This input looks like a natural-language handoff into the completion workflow. The shared /cook entry would keep the existing approval-only startup, continue, refocus, and next-round semantics before canonical state changes.",
+				startAction: {
+					id: "start_workflow",
+					label: "Start workflow",
+					description: "Enter the shared /cook workflow entry before the primary agent starts implementation work.",
+				},
+				keepChatting: {
+					id: "keep_chatting",
+					label: "Keep chatting",
+					description: "Dismiss this workflow offer without routing or replaying the original start-intent message.",
+				},
+				cancel: {
+					id: "cancel",
+					label: "Cancel",
+					description: `Stop here without routing or replaying the original message. ${mainChatRerunGuidance}`,
+				},
+			};
+	}
+}
+
+export function buildCookTriggerConfirmationActions(
+	workflowBias: CookTriggerWorkflowBias,
+	mainChatRerunGuidance: string,
+): CookTriggerConfirmationActionItem[] {
+	const copy = cookTriggerOfferCopyForBias(workflowBias, mainChatRerunGuidance);
+	return [copy.startAction, copy.keepChatting, copy.cancel];
 }
 
 export function buildCookTriggerAssistConfirmationLayout(args: {
@@ -254,10 +360,10 @@ export function buildCookTriggerAssistConfirmationLayout(args: {
 			? args.classification.evidence.map((item) => `- ${item}`).join("\n")
 			: "- No additional evidence was captured beyond the current handoff signal.";
 	const riskBody = args.classification.riskFlags.length > 0 ? args.classification.riskFlags.map((item) => `- ${item}`).join("\n") : undefined;
+	const copy = cookTriggerOfferCopyForBias(args.classification.workflowBias, args.mainChatRerunGuidance);
 	return {
-		title: "Let /cook take over from the recent discussion?",
-		intro:
-			"This input looks like a natural-language handoff into the completion workflow. /cook would keep the existing approval-only startup, continue, refocus, and next-round semantics before canonical state changes.",
+		title: copy.title,
+		intro: copy.intro,
 		evidenceHeading: "Why it matched",
 		evidenceBody,
 		riskHeading: riskBody ? "Risk checks" : undefined,
@@ -265,7 +371,7 @@ export function buildCookTriggerAssistConfirmationLayout(args: {
 		focusHintHeading: args.classification.focusHint ? "Optional focus hint" : undefined,
 		focusHintBody: args.classification.focusHint,
 		actionsHeading: "Actions",
-		actions: buildCookTriggerConfirmationActions(args.mainChatRerunGuidance),
+		actions: [copy.startAction, copy.keepChatting, copy.cancel],
 		footer: "↑↓ navigate • enter select • esc cancel",
 	};
 }

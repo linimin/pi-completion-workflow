@@ -44,8 +44,8 @@ type InputRoutingContext = {
 const MAX_TRIGGER_CANDIDATE_LENGTH = 120;
 const MAX_TRIGGER_CANDIDATE_LINES = 3;
 const CLEAR_TRIGGER_PATTERNS = [
-	/^(?:go ahead|please go ahead|proceed|let'?s do it|let'?s start|start(?: implementing| implementation)?|begin(?: implementing| implementation)?|continue(?: with implementation| implementing)?|ship it|work on it|do it)\b/i,
-	/^(?:開始(?:做|實作|实现|落地)|开始(?:做|实作|实现|落地)|那就做吧|照(?:剛剛|刚刚|這個|这个|上述|上面的)?(?:討論|讨论|方向).*(?:做|實作|实现|落地)|可以開始(?:做|實作|实现)?|可以开始(?:做|实作|实现)?|繼續(?:做|實作|实现|往下做)|继续(?:做|实作|实现|往下做))/u,
+	/^(?:go ahead|please go ahead|proceed|let'?s do it|let'?s start|start(?: implementing| implementation| the workflow| the next round)?|begin(?: implementing| implementation| the workflow| the next round)?|continue(?: with implementation| implementing| the workflow)?|resume(?: the workflow| where we left off)?|next step|work on it|do it|ship it|let'?s do this instead|switch to this)\b/i,
+	/^(?:開始(?:做|實作|实现|落地|下一輪)|开始(?:做|实作|实现|落地|下一轮)|那就做吧|照(?:剛剛|刚刚|這個|这个|上述|上面的)?(?:討論|讨论|方向).*(?:做|實作|实现|落地)|可以開始(?:做|實作|实现|下一輪)?|可以开始(?:做|实作|实现|下一轮)?|繼續(?:做|實作|实现|往下做)|继续(?:做|实作|实现|往下做)|接著(?:做|實作|实现)|接着(?:做|实作|实现)|下一步|那改做(?:這個|这个)|先做新的那個方向|先做新的那个方向|好，開始做這個|好，开始做这个)/u,
 ];
 const AMBIGUOUS_ACK_PATTERNS = [/^(?:ok|okay|sure|fine|yes|yeah|yep)$/i, /^(?:好|好的|可以|嗯|那就這樣|那就这样|就這樣|就这样|先這樣|先这样|收到)$/u];
 
@@ -76,9 +76,9 @@ function triggerConfirmationSnapshotPath(): string | undefined {
 function triggerConfirmationOverride(): CookTriggerConfirmationAction | undefined {
 	const raw = asString(process.env.PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION)?.toLowerCase();
 	if (!raw) return undefined;
-	if (raw === "start" || raw === "start_cook" || raw === "cook") return "start_cook";
+	if (raw === "start" || raw === "start_cook" || raw === "start_workflow" || raw === "cook") return "start_workflow";
 	if (raw === "continue" || raw === "keep_chatting" || raw === "keep-chatting") return "keep_chatting";
-	if (raw === "cancel") return "cancel";
+	if (raw === "cancel" || raw === "dismiss") return "cancel";
 	return undefined;
 }
 
@@ -132,7 +132,8 @@ function writeRoutingDecision(event: InputRoutingEvent, decision: CookTriggerDec
 			action: decision.action,
 			reason: decision.reason,
 			bypassReason: decision.bypassReason ?? null,
-			classificationIntent: decision.classification?.intent ?? null,
+			classificationDecision: decision.classification?.decision ?? null,
+			workflowBias: decision.classification?.workflowBias ?? null,
 			confidence: decision.classification?.confidence ?? null,
 			classifierReason: decision.classification?.reason ?? null,
 			focusHint: decision.classification?.focusHint ?? null,
@@ -290,7 +291,7 @@ export async function handleCookNaturalLanguageTrigger(
 	}
 
 	const classification = classifier.classification;
-	if (classification.intent === "normal_prompt") {
+	if (classification.decision === "normal_prompt") {
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "continue",
@@ -299,7 +300,7 @@ export async function handleCookNaturalLanguageTrigger(
 		});
 		return { action: "continue" };
 	}
-	if (classification.intent === "unclear") {
+	if (classification.decision === "unclear") {
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "continue",
@@ -311,13 +312,20 @@ export async function handleCookNaturalLanguageTrigger(
 
 	const confirmation = await promptCookTriggerTakeover(ctx, classification, deps);
 	if (confirmation === "keep_chatting") {
+		deps.emitCommandText(
+			ctx,
+			"Kept the workflow offer side-effect free. Continue the discussion in the main chat and send a fresh message when you are ready to enter /cook.",
+			"info",
+		);
 		writeRoutingDecision(event, {
 			mode: configuredMode,
-			action: "continue",
-			reason: "user_declined_takeover",
+			action: "handled",
+			reason: "user_kept_chatting",
 			classification,
+		}, {
+			confirmationAction: confirmation,
 		});
-		return { action: "continue" };
+		return { action: "handled" };
 	}
 	if (confirmation === "cancel") {
 		deps.emitCommandText(
@@ -330,6 +338,8 @@ export async function handleCookNaturalLanguageTrigger(
 			action: "handled",
 			reason: ctx.hasUI ? "user_cancelled_takeover" : "assist_confirmation_unavailable",
 			classification,
+		}, {
+			confirmationAction: confirmation,
 		});
 		return { action: "handled" };
 	}
@@ -340,11 +350,15 @@ export async function handleCookNaturalLanguageTrigger(
 		action: "routed_to_cook",
 		reason: "accepted_takeover",
 		classification,
+	}, {
+		confirmationAction: confirmation,
 	});
 	await runCookEntry(pi, ctx, deps, {
 		origin: "natural-language-trigger",
 		hintText: classification.focusHint,
 		originalInput: event.text,
+		triggerText: event.text,
+		preferredRoutingBias: classification.workflowBias,
 	});
 	return { action: "handled" };
 }

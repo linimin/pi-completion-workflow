@@ -47,6 +47,123 @@ with session_path.open('w', encoding='utf-8') as fh:
 PY
 }
 
+write_completion_state() {
+  local root="$1"
+  local mission="$2"
+  local continuation_policy="$3"
+  local project_done="$4"
+  local current_phase="$5"
+  local next_role="$6"
+  local next_action="$7"
+  python3 - "$root" "$mission" "$continuation_policy" "$project_done" "$current_phase" "$next_role" "$next_action" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+mission = sys.argv[2]
+continuation_policy = sys.argv[3]
+project_done = sys.argv[4].lower() == 'true'
+current_phase = sys.argv[5]
+next_role = None if sys.argv[6] == 'null' else sys.argv[6]
+next_action = None if sys.argv[7] == 'null' else sys.argv[7]
+agent = root / '.agent'
+agent.mkdir(parents=True, exist_ok=True)
+(agent / 'mission.md').write_text(
+    '# Mission\n\n'
+    f'Project: {root.name}\n\n'
+    'Mission anchor:\n'
+    f'{mission}\n\n'
+    "This file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n",
+    encoding='utf-8',
+)
+profile = {
+    'schema_version': 1,
+    'protocol_id': 'completion',
+    'project_name': root.name,
+    'required_stop_judges': 3,
+    'priority_policy_id': 'completion-default',
+    'task_type': 'completion-workflow',
+    'evaluation_profile': 'completion-rubric-v1',
+    'docs_surfaces': ['README.md', 'CHANGELOG.md'],
+}
+state = {
+    'schema_version': 1,
+    'mission_anchor': mission,
+    'current_phase': current_phase,
+    'continuation_policy': continuation_policy,
+    'continuation_reason': 'test fixture',
+    'project_done': project_done,
+    'task_type': 'completion-workflow',
+    'evaluation_profile': 'completion-rubric-v1',
+    'requires_reground': continuation_policy == 'done',
+    'slices_since_last_reground': 0,
+    'remaining_release_blockers': 0,
+    'remaining_high_value_gaps': 0,
+    'unsatisfied_contract_ids': [],
+    'release_blocker_ids': [],
+    'next_mandatory_action': next_action,
+    'next_mandatory_role': next_role,
+    'remaining_stop_judges': 3,
+    'last_reground_at': '2026-01-01T00:00:00Z',
+    'last_auditor_verdict': None,
+    'contract_status': 'partial' if continuation_policy != 'done' else 'done',
+    'latest_completed_slice': None,
+    'latest_verified_slice': None,
+}
+plan = {
+    'schema_version': 1,
+    'mission_anchor': mission,
+    'task_type': 'completion-workflow',
+    'evaluation_profile': 'completion-rubric-v1',
+    'last_reground_at': '2026-01-01T00:00:00Z',
+    'plan_basis': 'test-fixture',
+    'candidate_slices': [],
+}
+active = {
+    'schema_version': 1,
+    'mission_anchor': mission,
+    'task_type': 'completion-workflow',
+    'evaluation_profile': 'completion-rubric-v1',
+    'status': 'idle',
+    'slice_id': None,
+    'goal': None,
+    'contract_ids': [],
+    'acceptance_criteria': [],
+    'priority': None,
+    'why_now': None,
+    'blocked_on': [],
+    'locked_notes': [],
+    'must_fix_findings': [],
+    'implementation_surfaces': [],
+    'verification_commands': [],
+    'basis_commit': None,
+    'remaining_contract_ids_before': [],
+    'release_blocker_count_before': None,
+    'high_value_gap_count_before': None,
+}
+verification = {
+    'schema_version': 1,
+    'artifact_type': 'completion-verification-evidence',
+    'subject_type': 'fixture',
+    'slice_id': None,
+    'goal': None,
+    'contract_ids': [],
+    'basis_commit': None,
+    'head_sha': None,
+    'verification_commands': [],
+    'outcome': 'not_recorded',
+    'recorded_at': None,
+    'summary': 'test fixture',
+}
+(agent / 'profile.json').write_text(json.dumps(profile, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+(agent / 'state.json').write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+(agent / 'plan.json').write_text(json.dumps(plan, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+(agent / 'active-slice.json').write_text(json.dumps(active, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+(agent / 'verification-evidence.json').write_text(json.dumps(verification, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+PY
+}
+
 write_fallback_extension() {
   local target="$1"
   cat >"$target" <<'TS'
@@ -95,22 +212,32 @@ SENDER_EXTENSION="$TMPDIR/extension-sender.ts"
 write_fallback_extension "$FALLBACK_EXTENSION"
 write_extension_sender_extension "$SENDER_EXTENSION"
 
-DISCUSSION=$'Mission: Route natural-language handoff into the shared /cook entry.\nScope:\n- Add an input hook before the primary agent starts implementation work.\n- Keep /cook as the canonical workflow boundary.\nConstraints:\n- Do not transform natural-language input into /cook.\nAcceptance:\n- Route execution handoff text into the shared /cook entry behind approval-only confirmation.'
-MISSION='Route natural-language handoff into the shared /cook entry.'
-ROUTE_CLASSIFIER_OUTPUT='{"intent":"route_to_cook","confidence":0.95,"reason":"The latest input is an execution handoff that should transfer control into /cook.","focusHint":"shared /cook entry handoff","evidence":["current input is a start-execution phrase","recent discussion already defines a concrete workflow mission"],"riskFlags":[]}'
-NORMAL_CLASSIFIER_OUTPUT='{"intent":"normal_prompt","confidence":0.82,"reason":"The latest input is still asking the main agent to explain instead of handing control to /cook.","evidence":["the user is still asking for explanation in the main chat"],"riskFlags":["possible-normal-agent-request"]}'
+STARTUP_DISCUSSION=$'Mission: Route natural-language handoff into the shared /cook entry.\nScope:\n- Add an input hook before the primary agent starts implementation work.\n- Keep /cook as the canonical workflow boundary.\nConstraints:\n- Do not transform natural-language input into /cook.\nAcceptance:\n- Route execution handoff text into the shared /cook entry behind approval-only confirmation.'
+STARTUP_MISSION='Route natural-language handoff into the shared /cook entry.'
+ACTIVE_MISSION='Keep the startup-only natural-language /cook handoff working.'
+REFOCUS_DISCUSSION=$'Mission: Expand commandless routing to bias-aware resume and refocus offers.\nScope:\n- Distinguish startup, resume, refocus, and next-round workflow offers before the primary agent runs.\n- Keep confirmed handoffs on the shared /cook entry.\nConstraints:\n- Do not duplicate /cook workflow logic.\nAcceptance:\n- Resume and refocus handoffs reach the shared /cook entry with bias metadata.'
+REFOCUS_MISSION='Expand commandless routing to bias-aware resume and refocus offers.'
+NEXT_ROUND_DISCUSSION=$'Mission: Start the next completion workflow round for docs parity cleanup.\nScope:\n- Refresh docs and tests around commandless workflow entry.\n- Keep the existing workflow history done.\nConstraints:\n- Do not reopen the finished workflow mission.\nAcceptance:\n- The next workflow round uses a new mission anchor without reopening the finished one.'
+NEXT_ROUND_MISSION='Start the next completion workflow round for docs parity cleanup.'
 
-# Assist-mode accepted routing should enter the shared /cook flow before the primary agent sees the handoff.
+STARTUP_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.95,"workflow_bias":"startup","reason":"The latest input is a startup handoff from recent discussion into the canonical workflow.","focusHint":"shared /cook entry handoff","evidence":["current input is a start-execution phrase","recent discussion already defines a concrete workflow mission"],"riskFlags":[]}'
+RESUME_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.94,"workflow_bias":"resume","reason":"The latest input is continuing the active workflow.","focusHint":"resume current workflow","evidence":["canonical state already exists","the latest input is a continue-style handoff"],"riskFlags":[]}'
+REFOCUS_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.91,"workflow_bias":"refocus","reason":"The latest input is starting a different workflow direction from recent discussion.","focusHint":"bias-aware resume and refocus offers","evidence":["recent discussion changes the mission","the latest input confirms starting the new direction"],"riskFlags":["active-workflow-refocus-risk"]}'
+NEXT_ROUND_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.92,"workflow_bias":"next_round","reason":"The previous workflow is done and the latest input starts a new implementation round.","focusHint":"next workflow round docs parity","evidence":["canonical workflow is already done","recent discussion defines a new task"],"riskFlags":[]}'
+NORMAL_CLASSIFIER_OUTPUT='{"decision":"normal_prompt","confidence":0.82,"workflow_bias":"unknown","reason":"The latest input is still asking the main agent to explain instead of handing control to /cook.","evidence":["the user is still asking for explanation in the main chat"],"riskFlags":["possible-normal-agent-request"]}'
+
+# Startup accepted routing should enter the shared /cook flow with natural-language metadata.
 ROUTE_ROOT="$TMPDIR/route-repo"
 ROUTE_SESSION="$TMPDIR/route-session.jsonl"
 ROUTE_PROMPT="$TMPDIR/route-driver-prompt.txt"
 ROUTE_ROUTING="$TMPDIR/route-routing.json"
 ROUTE_CLASSIFIER="$TMPDIR/route-classifier.json"
+ROUTE_CONFIRMATION="$TMPDIR/route-confirmation.json"
 ROUTE_FALLBACK="$TMPDIR/route-fallback.json"
 mkdir -p "$ROUTE_ROOT"
 cd "$ROUTE_ROOT"
 git init -q
-write_session "$ROUTE_SESSION" "$ROUTE_ROOT" "$DISCUSSION"
+write_session "$ROUTE_SESSION" "$ROUTE_ROOT" "$STARTUP_DISCUSSION"
 
 PI_COOK_TRIGGER_FALLBACK_PATH="$ROUTE_FALLBACK" \
 PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
@@ -118,14 +245,15 @@ PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
 PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$ROUTE_PROMPT" \
-PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$ROUTE_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
 PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$ROUTE_CLASSIFIER" \
 PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$ROUTE_CONFIRMATION" \
 PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$ROUTE_ROUTING" \
 pi --session "$ROUTE_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "開始做" \
   >"$TMPDIR/pi-cook-trigger-route.out" 2>"$TMPDIR/pi-cook-trigger-route.err"
 
-python3 - "$ROUTE_PROMPT" "$ROUTE_ROUTING" "$ROUTE_CLASSIFIER" "$ROUTE_FALLBACK" "$MISSION" "$TMPDIR/pi-cook-trigger-route.out" "$TMPDIR/pi-cook-trigger-route.err" <<'PY'
+python3 - "$ROUTE_PROMPT" "$ROUTE_ROUTING" "$ROUTE_CLASSIFIER" "$ROUTE_CONFIRMATION" "$ROUTE_FALLBACK" "$STARTUP_MISSION" "$TMPDIR/pi-cook-trigger-route.out" "$TMPDIR/pi-cook-trigger-route.err" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -133,28 +261,84 @@ from pathlib import Path
 prompt = Path(sys.argv[1]).read_text()
 routing = json.loads(Path(sys.argv[2]).read_text())
 classifier = json.loads(Path(sys.argv[3]).read_text())
-fallback = Path(sys.argv[4])
-mission = sys.argv[5]
-output = Path(sys.argv[6]).read_text() + Path(sys.argv[7]).read_text()
+confirmation = json.loads(Path(sys.argv[4]).read_text())
+fallback = Path(sys.argv[5])
+mission = sys.argv[6]
+output = Path(sys.argv[7]).read_text() + Path(sys.argv[8]).read_text()
 profile = json.loads(Path('.agent/profile.json').read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 plan = json.loads(Path('.agent/plan.json').read_text())
 active = json.loads(Path('.agent/active-slice.json').read_text())
 
-assert routing['action'] == 'routed_to_cook', 'accepted handoff should route into the shared /cook entry'
-assert routing['reason'] == 'accepted_takeover', 'accepted handoff should record the takeover reason'
-assert routing['classificationIntent'] == 'route_to_cook', 'accepted handoff should snapshot the route_to_cook classifier result'
-assert routing['focusHint'] == 'shared /cook entry handoff', 'accepted handoff should preserve the classifier focus hint'
-assert classifier['result']['status'] == 'classified', 'accepted handoff should snapshot a classified trigger result'
-assert classifier['result']['classification']['intent'] == 'route_to_cook', 'accepted handoff classifier snapshot should preserve route_to_cook intent'
-assert not fallback.exists(), 'accepted handoff should keep the original interactive input away from later fallback handlers'
-assert 'Start or continue the completion workflow for this repo.' in prompt, 'accepted handoff should queue the shared completion driver prompt'
-assert 'Canonical routing profile:' in prompt, 'accepted handoff driver prompt should keep the canonical routing metadata'
-assert state['mission_anchor'] == mission, 'accepted handoff should bootstrap canonical mission state through the shared /cook entry'
-assert plan['mission_anchor'] == mission, 'accepted handoff should bootstrap plan.json through the shared /cook entry'
-assert active['mission_anchor'] == mission, 'accepted handoff should bootstrap active-slice.json through the shared /cook entry'
-assert profile['task_type'] == 'completion-workflow', 'accepted handoff should keep the canonical task_type'
-assert 'Routing natural-language handoff into /cook.' in output, 'accepted handoff should notify that /cook took over'
+assert routing['action'] == 'routed_to_cook', 'accepted startup handoff should route into the shared /cook entry'
+assert routing['reason'] == 'accepted_takeover', 'accepted startup handoff should record the takeover reason'
+assert routing['classificationDecision'] == 'offer_workflow', 'accepted startup handoff should snapshot the offer_workflow classifier result'
+assert routing['workflowBias'] == 'startup', 'accepted startup handoff should preserve the startup routing bias'
+assert routing['confirmationAction'] == 'start_workflow', 'accepted startup handoff should record the confirmed workflow action'
+assert confirmation['title'] == 'Start a completion workflow from the recent discussion?', 'startup handoff should show the startup-specific workflow offer'
+assert confirmation['actions'][0]['label'] == 'Start workflow', 'startup handoff should show the startup-specific primary action label'
+assert classifier['result']['status'] == 'classified', 'accepted startup handoff should snapshot a classified trigger result'
+assert classifier['result']['classification']['decision'] == 'offer_workflow', 'startup classifier snapshot should preserve offer_workflow'
+assert classifier['result']['classification']['workflowBias'] == 'startup', 'startup classifier snapshot should preserve the startup bias'
+assert not fallback.exists(), 'accepted startup handoff should keep the original interactive input away from later fallback handlers'
+assert 'Start or continue the completion workflow for this repo.' in prompt, 'accepted startup handoff should queue the shared completion driver prompt'
+assert 'Natural-language handoff metadata:' in prompt, 'accepted startup handoff should pass structured handoff metadata into the shared driver prompt'
+assert '- preferred_routing_bias: startup' in prompt, 'accepted startup handoff should preserve the startup routing bias in the shared driver prompt'
+assert '- trigger_text: 開始做' in prompt, 'accepted startup handoff should preserve the trigger text in the shared driver prompt'
+assert state['mission_anchor'] == mission, 'accepted startup handoff should bootstrap canonical mission state through the shared /cook entry'
+assert plan['mission_anchor'] == mission, 'accepted startup handoff should bootstrap plan.json through the shared /cook entry'
+assert active['mission_anchor'] == mission, 'accepted startup handoff should bootstrap active-slice.json through the shared /cook entry'
+assert profile['task_type'] == 'completion-workflow', 'accepted startup handoff should keep the canonical task_type'
+assert 'Routing natural-language handoff into /cook.' in output, 'accepted startup handoff should notify that /cook took over'
+PY
+
+# Keep chatting should stay side-effect free and should not replay the original start-intent message.
+KEEP_ROOT="$TMPDIR/keep-chatting-repo"
+KEEP_SESSION="$TMPDIR/keep-chatting-session.jsonl"
+KEEP_PROMPT="$TMPDIR/keep-chatting-driver-prompt.txt"
+KEEP_ROUTING="$TMPDIR/keep-chatting-routing.json"
+KEEP_CLASSIFIER="$TMPDIR/keep-chatting-classifier.json"
+KEEP_CONFIRMATION="$TMPDIR/keep-chatting-confirmation.json"
+KEEP_FALLBACK="$TMPDIR/keep-chatting-fallback.json"
+mkdir -p "$KEEP_ROOT"
+cd "$KEEP_ROOT"
+git init -q
+write_session "$KEEP_SESSION" "$KEEP_ROOT" "$STARTUP_DISCUSSION"
+
+PI_COOK_TRIGGER_FALLBACK_PATH="$KEEP_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$KEEP_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$KEEP_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=keep_chatting \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$KEEP_CONFIRMATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$KEEP_ROUTING" \
+pi --session "$KEEP_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "開始做" \
+  >"$TMPDIR/pi-cook-trigger-keep.out" 2>"$TMPDIR/pi-cook-trigger-keep.err"
+
+python3 - "$KEEP_ROUTING" "$KEEP_CLASSIFIER" "$KEEP_CONFIRMATION" "$KEEP_FALLBACK" "$KEEP_PROMPT" "$TMPDIR/pi-cook-trigger-keep.out" "$TMPDIR/pi-cook-trigger-keep.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+routing = json.loads(Path(sys.argv[1]).read_text())
+classifier = json.loads(Path(sys.argv[2]).read_text())
+confirmation = json.loads(Path(sys.argv[3]).read_text())
+fallback = Path(sys.argv[4])
+driver_prompt = Path(sys.argv[5])
+output = Path(sys.argv[6]).read_text() + Path(sys.argv[7]).read_text()
+
+assert routing['action'] == 'handled', 'keep chatting should keep the workflow offer side-effect free'
+assert routing['reason'] == 'user_kept_chatting', 'keep chatting should record the user_kept_chatting routing reason'
+assert routing['classificationDecision'] == 'offer_workflow', 'keep chatting should still snapshot the offer_workflow classifier result'
+assert routing['workflowBias'] == 'startup', 'keep chatting should preserve the original workflow bias'
+assert routing['confirmationAction'] == 'keep_chatting', 'keep chatting should record the keep_chatting confirmation action'
+assert confirmation['actions'][1]['label'] == 'Keep chatting', 'keep chatting should expose the side-effect-free keep-chatting action'
+assert classifier['result']['classification']['workflowBias'] == 'startup', 'keep chatting should preserve the startup bias in the classifier snapshot'
+assert not fallback.exists(), 'keep chatting should not replay the original interactive start-intent message to later fallback handlers'
+assert not driver_prompt.exists(), 'keep chatting should not queue a /cook driver prompt'
+assert not Path('.agent').exists(), 'keep chatting should not bootstrap canonical workflow state'
+assert 'side-effect free' in output, 'keep chatting should tell the user that the workflow offer stayed side-effect free'
 PY
 
 # Candidate natural-language prompts classified as normal prompts should continue to the main agent path.
@@ -167,7 +351,7 @@ NORMAL_PROMPT="$TMPDIR/normal-driver-prompt.txt"
 mkdir -p "$NORMAL_ROOT"
 cd "$NORMAL_ROOT"
 git init -q
-write_session "$NORMAL_SESSION" "$NORMAL_ROOT" "$DISCUSSION"
+write_session "$NORMAL_SESSION" "$NORMAL_ROOT" "$STARTUP_DISCUSSION"
 
 PI_COOK_TRIGGER_FALLBACK_PATH="$NORMAL_FALLBACK" \
 PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
@@ -190,13 +374,169 @@ driver_prompt = Path(sys.argv[4])
 
 assert routing['action'] == 'continue', 'normal prompts should pass through to the main agent path'
 assert routing['reason'] == 'classifier_normal_prompt', 'normal prompts should record the classifier_normal_prompt routing reason'
-assert routing['classificationIntent'] == 'normal_prompt', 'normal prompts should snapshot the normal_prompt classifier intent'
+assert routing['classificationDecision'] == 'normal_prompt', 'normal prompts should snapshot the normal_prompt classifier decision'
+assert routing['workflowBias'] == 'unknown', 'normal prompts should preserve the unknown workflow bias'
 assert classifier['result']['status'] == 'classified', 'normal prompt pass-through should snapshot a classified trigger result'
-assert classifier['result']['classification']['intent'] == 'normal_prompt', 'normal prompt pass-through should preserve the normal_prompt intent'
+assert classifier['result']['classification']['decision'] == 'normal_prompt', 'normal prompt pass-through should preserve the normal_prompt decision'
 assert fallback['source'] == 'interactive', 'normal prompt pass-through should reach a later interactive fallback handler'
 assert fallback['text'] == 'start by explaining the current repo state', 'normal prompt pass-through should preserve the original prompt text'
 assert not Path('.agent').exists(), 'normal prompt pass-through should not bootstrap canonical workflow state'
 assert not driver_prompt.exists(), 'normal prompt pass-through should not queue a /cook driver prompt'
+PY
+
+# Resume offers should keep the active workflow on the shared canonical resume path.
+RESUME_ROOT="$TMPDIR/resume-repo"
+RESUME_SESSION="$TMPDIR/resume-session.jsonl"
+RESUME_PROMPT="$TMPDIR/resume-driver-prompt.txt"
+RESUME_ROUTING="$TMPDIR/resume-routing.json"
+RESUME_CLASSIFIER="$TMPDIR/resume-classifier.json"
+RESUME_CONFIRMATION="$TMPDIR/resume-confirmation.json"
+RESUME_FALLBACK="$TMPDIR/resume-fallback.json"
+mkdir -p "$RESUME_ROOT"
+cd "$RESUME_ROOT"
+git init -q
+write_completion_state "$RESUME_ROOT" "$ACTIVE_MISSION" continue false implement completion-implementer "Implement the active workflow slice"
+write_session "$RESUME_SESSION" "$RESUME_ROOT" "$STARTUP_DISCUSSION"
+
+PI_COOK_TRIGGER_FALLBACK_PATH="$RESUME_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$RESUME_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$RESUME_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$RESUME_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$RESUME_CONFIRMATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$RESUME_ROUTING" \
+pi --session "$RESUME_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "繼續做" \
+  >"$TMPDIR/pi-cook-trigger-resume.out" 2>"$TMPDIR/pi-cook-trigger-resume.err"
+
+python3 - "$RESUME_PROMPT" "$RESUME_ROUTING" "$RESUME_CLASSIFIER" "$RESUME_CONFIRMATION" "$RESUME_FALLBACK" "$ACTIVE_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+classifier = json.loads(Path(sys.argv[3]).read_text())
+confirmation = json.loads(Path(sys.argv[4]).read_text())
+fallback = Path(sys.argv[5])
+mission = sys.argv[6]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'routed_to_cook', 'resume handoff should route into the shared /cook entry'
+assert routing['workflowBias'] == 'resume', 'resume handoff should preserve the resume routing bias'
+assert routing['confirmationAction'] == 'start_workflow', 'resume handoff should record the workflow confirmation action'
+assert confirmation['title'] == 'Resume the current completion workflow?', 'resume handoff should show the resume-specific workflow offer'
+assert confirmation['actions'][0]['label'] == 'Resume workflow', 'resume handoff should show the resume-specific primary action label'
+assert classifier['result']['classification']['workflowBias'] == 'resume', 'resume classifier snapshot should preserve the resume bias'
+assert not fallback.exists(), 'resume handoff should keep the original interactive input away from later fallback handlers'
+assert 'Resume the completion workflow from canonical state.' in prompt, 'resume handoff should queue the shared canonical resume prompt'
+assert 'Natural-language handoff metadata:' in prompt, 'resume handoff should pass structured handoff metadata into the resume prompt'
+assert '- preferred_routing_bias: resume' in prompt, 'resume handoff should preserve the resume bias in the resume prompt'
+assert '- trigger_text: 繼續做' in prompt, 'resume handoff should preserve the trigger text in the resume prompt'
+assert state['mission_anchor'] == mission, 'resume handoff should preserve the active mission anchor'
+PY
+
+# Refocus offers should keep the chooser semantics inside the shared /cook entry before rewriting canonical state.
+REFOCUS_ROOT="$TMPDIR/refocus-repo"
+REFOCUS_SESSION="$TMPDIR/refocus-session.jsonl"
+REFOCUS_PROMPT="$TMPDIR/refocus-driver-prompt.txt"
+REFOCUS_ROUTING="$TMPDIR/refocus-routing.json"
+REFOCUS_CLASSIFIER="$TMPDIR/refocus-classifier.json"
+REFOCUS_CONFIRMATION="$TMPDIR/refocus-confirmation.json"
+REFOCUS_CHOOSER="$TMPDIR/refocus-chooser.json"
+mkdir -p "$REFOCUS_ROOT"
+cd "$REFOCUS_ROOT"
+git init -q
+write_completion_state "$REFOCUS_ROOT" "$ACTIVE_MISSION" continue false implement completion-implementer "Implement the active workflow slice"
+write_session "$REFOCUS_SESSION" "$REFOCUS_ROOT" "$REFOCUS_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$REFOCUS_PROMPT" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$REFOCUS_CHOOSER" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$REFOCUS_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$REFOCUS_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$REFOCUS_CONFIRMATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$REFOCUS_ROUTING" \
+pi --session "$REFOCUS_SESSION" -e "$PKG_ROOT" -p "好，開始做這個" \
+  >"$TMPDIR/pi-cook-trigger-refocus.out" 2>"$TMPDIR/pi-cook-trigger-refocus.err"
+
+python3 - "$REFOCUS_PROMPT" "$REFOCUS_ROUTING" "$REFOCUS_CLASSIFIER" "$REFOCUS_CONFIRMATION" "$REFOCUS_CHOOSER" "$REFOCUS_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+classifier = json.loads(Path(sys.argv[3]).read_text())
+confirmation = json.loads(Path(sys.argv[4]).read_text())
+chooser = json.loads(Path(sys.argv[5]).read_text())
+mission = sys.argv[6]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'routed_to_cook', 'refocus handoff should route into the shared /cook entry'
+assert routing['workflowBias'] == 'refocus', 'refocus handoff should preserve the refocus routing bias'
+assert confirmation['title'] == 'Refocus the completion workflow from the recent discussion?', 'refocus handoff should show the refocus-specific workflow offer'
+assert confirmation['actions'][0]['label'] == 'Refocus workflow', 'refocus handoff should show the refocus-specific primary action label'
+assert classifier['result']['classification']['workflowBias'] == 'refocus', 'refocus classifier snapshot should preserve the refocus bias'
+assert chooser['candidateMissions'][0] == mission, 'refocus chooser snapshot should preserve the replacement mission'
+assert 'Start or continue the completion workflow for this repo.' in prompt, 'refocus handoff should queue the shared completion driver prompt'
+assert 'Natural-language handoff metadata:' in prompt, 'refocus handoff should pass structured handoff metadata into the shared driver prompt'
+assert '- preferred_routing_bias: refocus' in prompt, 'refocus handoff should preserve the refocus bias in the shared driver prompt'
+assert '- trigger_text: 好，開始做這個' in prompt, 'refocus handoff should preserve the trigger text in the shared driver prompt'
+assert state['mission_anchor'] == mission, 'refocus handoff should rewrite canonical mission state only through the shared /cook entry'
+PY
+
+# Next-round offers should start a new workflow round from recent discussion after a completed workflow.
+NEXT_ROOT="$TMPDIR/next-round-repo"
+NEXT_SESSION="$TMPDIR/next-round-session.jsonl"
+NEXT_PROMPT="$TMPDIR/next-round-driver-prompt.txt"
+NEXT_ROUTING="$TMPDIR/next-round-routing.json"
+NEXT_CLASSIFIER="$TMPDIR/next-round-classifier.json"
+NEXT_CONFIRMATION="$TMPDIR/next-round-confirmation.json"
+mkdir -p "$NEXT_ROOT"
+cd "$NEXT_ROOT"
+git init -q
+write_completion_state "$NEXT_ROOT" "$ACTIVE_MISSION" done true done null null
+write_session "$NEXT_SESSION" "$NEXT_ROOT" "$NEXT_ROUND_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$NEXT_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$NEXT_ROUND_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$NEXT_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$NEXT_CONFIRMATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$NEXT_ROUTING" \
+pi --session "$NEXT_SESSION" -e "$PKG_ROOT" -p "開始下一輪" \
+  >"$TMPDIR/pi-cook-trigger-next-round.out" 2>"$TMPDIR/pi-cook-trigger-next-round.err"
+
+python3 - "$NEXT_PROMPT" "$NEXT_ROUTING" "$NEXT_CLASSIFIER" "$NEXT_CONFIRMATION" "$NEXT_ROUND_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+classifier = json.loads(Path(sys.argv[3]).read_text())
+confirmation = json.loads(Path(sys.argv[4]).read_text())
+mission = sys.argv[5]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'routed_to_cook', 'next-round handoff should route into the shared /cook entry'
+assert routing['workflowBias'] == 'next_round', 'next-round handoff should preserve the next_round routing bias'
+assert confirmation['title'] == 'Start the next completion workflow round from the recent discussion?', 'next-round handoff should show the next-round-specific workflow offer'
+assert confirmation['actions'][0]['label'] == 'Start next round', 'next-round handoff should show the next-round-specific primary action label'
+assert classifier['result']['classification']['workflowBias'] == 'next_round', 'next-round classifier snapshot should preserve the next_round bias'
+assert 'Natural-language handoff metadata:' in prompt, 'next-round handoff should pass structured handoff metadata into the shared driver prompt'
+assert '- preferred_routing_bias: next_round' in prompt, 'next-round handoff should preserve the next_round bias in the shared driver prompt'
+assert '- trigger_text: 開始下一輪' in prompt, 'next-round handoff should preserve the trigger text in the shared driver prompt'
+assert state['mission_anchor'] == mission, 'next-round handoff should start a new mission anchor through the shared /cook entry'
 PY
 
 # Extension-originated turns should bypass natural-language routing and continue unchanged.
@@ -245,7 +585,7 @@ COOK_PROMPT="$TMPDIR/explicit-cook-driver-prompt.txt"
 mkdir -p "$COOK_ROOT"
 cd "$COOK_ROOT"
 git init -q
-write_session "$COOK_SESSION" "$COOK_ROOT" "$DISCUSSION"
+write_session "$COOK_SESSION" "$COOK_ROOT" "$STARTUP_DISCUSSION"
 
 PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
 PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
@@ -255,7 +595,7 @@ PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$COOK_ROUTING" \
 pi --session "$COOK_SESSION" -e "$PKG_ROOT" -p "/cook" \
   >"$TMPDIR/pi-cook-trigger-explicit-cook.out" 2>"$TMPDIR/pi-cook-trigger-explicit-cook.err"
 
-python3 - "$COOK_PROMPT" "$COOK_ROUTING" "$MISSION" <<'PY'
+python3 - "$COOK_PROMPT" "$COOK_ROUTING" "$STARTUP_MISSION" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -280,7 +620,7 @@ TIMEOUT_PROMPT="$TMPDIR/timeout-driver-prompt.txt"
 mkdir -p "$TIMEOUT_ROOT"
 cd "$TIMEOUT_ROOT"
 git init -q
-write_session "$TIMEOUT_SESSION" "$TIMEOUT_ROOT" "$DISCUSSION"
+write_session "$TIMEOUT_SESSION" "$TIMEOUT_ROOT" "$STARTUP_DISCUSSION"
 
 PI_COOK_TRIGGER_FALLBACK_PATH="$TIMEOUT_FALLBACK" \
 PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
