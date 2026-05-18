@@ -100,14 +100,15 @@ export type CookTriggerClassification = {
 	riskFlags: string[];
 };
 
-export type CookTriggerConfirmationAction = "start_workflow" | "keep_chatting" | "cancel";
+export type CookTriggerConfirmationAction = "start_workflow" | "send_as_normal_chat" | "cancel";
 export type CookTriggerClarificationAction =
 	| "route_startup"
 	| "route_resume"
 	| "route_refocus"
 	| "route_next_round"
-	| "keep_chatting"
+	| "send_as_normal_chat"
 	| "cancel";
+export type CookTriggerRecoveryAction = "retry_routing" | "send_as_normal_chat" | "cancel";
 export type CookTriggerAdoptedArtifactKind = "recent_plan" | "repo_markdown";
 
 export type CookTriggerConfirmationActionItem = {
@@ -172,6 +173,22 @@ export type CookTriggerClarificationLayout = {
 	adoptedArtifactBody?: string;
 	actionsHeading: string;
 	actions: CookTriggerClarificationActionItem[];
+	footer: string;
+};
+
+export type CookTriggerRecoveryActionItem = {
+	id: CookTriggerRecoveryAction;
+	label: string;
+	description: string;
+};
+
+export type CookTriggerRecoveryLayout = {
+	title: string;
+	intro: string;
+	failureHeading?: string;
+	failureBody?: string;
+	actionsHeading: string;
+	actions: CookTriggerRecoveryActionItem[];
 	footer: string;
 };
 

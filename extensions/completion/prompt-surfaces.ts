@@ -9,6 +9,8 @@ import type {
 	CookTriggerClassification,
 	CookTriggerConfirmationActionItem,
 	CookTriggerConfirmationLayout,
+	CookTriggerRecoveryActionItem,
+	CookTriggerRecoveryLayout,
 	CookTriggerWorkflowBias,
 	LiveRoleActivity,
 } from "./types";
@@ -239,7 +241,7 @@ export function buildCookTriggerClassifierPrompt(args: {
 function cookTriggerOfferCopyForBias(
 	workflowBias: CookTriggerWorkflowBias,
 	mainChatRerunGuidance: string,
-): { title: string; intro: string; startAction: CookTriggerConfirmationActionItem; keepChatting: CookTriggerConfirmationActionItem; cancel: CookTriggerConfirmationActionItem } {
+): { title: string; intro: string; startAction: CookTriggerConfirmationActionItem; sendAsNormalChat: CookTriggerConfirmationActionItem; cancel: CookTriggerConfirmationActionItem } {
 	switch (workflowBias) {
 		case "startup":
 			return {
@@ -251,10 +253,10 @@ function cookTriggerOfferCopyForBias(
 					label: "Start workflow",
 					description: "Enter the shared /cook workflow entry from the recent discussion before the primary agent starts implementation work.",
 				},
-				keepChatting: {
-					id: "keep_chatting",
-					label: "Keep chatting",
-					description: "Dismiss this workflow offer without sending the original start-intent message anywhere.",
+				sendAsNormalChat: {
+					id: "send_as_normal_chat",
+					label: "Send as normal chat",
+					description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 				},
 				cancel: {
 					id: "cancel",
@@ -272,10 +274,10 @@ function cookTriggerOfferCopyForBias(
 					label: "Resume workflow",
 					description: "Resume the current canonical completion workflow through the shared /cook entry.",
 				},
-				keepChatting: {
-					id: "keep_chatting",
-					label: "Keep chatting",
-					description: "Dismiss this resume offer without routing or replaying the original start-intent message.",
+				sendAsNormalChat: {
+					id: "send_as_normal_chat",
+					label: "Send as normal chat",
+					description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 				},
 				cancel: {
 					id: "cancel",
@@ -293,10 +295,10 @@ function cookTriggerOfferCopyForBias(
 					label: "Refocus workflow",
 					description: "Review the recent discussion through the shared /cook entry and refocus the canonical workflow only if the follow-up confirmations agree.",
 				},
-				keepChatting: {
-					id: "keep_chatting",
-					label: "Keep chatting",
-					description: "Dismiss this refocus offer without routing or replaying the original start-intent message.",
+				sendAsNormalChat: {
+					id: "send_as_normal_chat",
+					label: "Send as normal chat",
+					description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 				},
 				cancel: {
 					id: "cancel",
@@ -314,10 +316,10 @@ function cookTriggerOfferCopyForBias(
 					label: "Start next round",
 					description: "Start the next workflow round through the shared /cook entry using the recent discussion as the new focus.",
 				},
-				keepChatting: {
-					id: "keep_chatting",
-					label: "Keep chatting",
-					description: "Dismiss this next-round offer without routing or replaying the original start-intent message.",
+				sendAsNormalChat: {
+					id: "send_as_normal_chat",
+					label: "Send as normal chat",
+					description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 				},
 				cancel: {
 					id: "cancel",
@@ -336,10 +338,10 @@ function cookTriggerOfferCopyForBias(
 					label: "Start workflow",
 					description: "Enter the shared /cook workflow entry before the primary agent starts implementation work.",
 				},
-				keepChatting: {
-					id: "keep_chatting",
-					label: "Keep chatting",
-					description: "Dismiss this workflow offer without routing or replaying the original start-intent message.",
+				sendAsNormalChat: {
+					id: "send_as_normal_chat",
+					label: "Send as normal chat",
+					description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 				},
 				cancel: {
 					id: "cancel",
@@ -355,7 +357,7 @@ export function buildCookTriggerConfirmationActions(
 	mainChatRerunGuidance: string,
 ): CookTriggerConfirmationActionItem[] {
 	const copy = cookTriggerOfferCopyForBias(workflowBias, mainChatRerunGuidance);
-	return [copy.startAction, copy.keepChatting, copy.cancel];
+	return [copy.startAction, copy.sendAsNormalChat, copy.cancel];
 }
 
 function summarizeAdoptedArtifact(adoptedArtifact: CookTriggerAdoptedArtifact | undefined): string | undefined {
@@ -408,9 +410,9 @@ export function buildCookTriggerClarificationLayout(args: {
 	}
 	actions.push(
 		{
-			id: "keep_chatting",
-			label: "Keep chatting",
-			description: "Dismiss this clarification without routing or replaying the original start-intent message.",
+			id: "send_as_normal_chat",
+			label: "Send as normal chat",
+			description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
 		},
 		{
 			id: "cancel",
@@ -454,7 +456,40 @@ export function buildCookTriggerAssistConfirmationLayout(args: {
 		focusHintHeading: args.classification.focusHint ? "Optional focus hint" : undefined,
 		focusHintBody: args.classification.focusHint,
 		actionsHeading: "Actions",
-		actions: [copy.startAction, copy.keepChatting, copy.cancel],
+		actions: [copy.startAction, copy.sendAsNormalChat, copy.cancel],
+		footer: "↑↓ navigate • enter select • esc cancel",
+	};
+}
+
+export function buildCookTriggerRecoveryLayout(args: {
+	failureLabel: string;
+	mainChatRerunGuidance: string;
+}): CookTriggerRecoveryLayout {
+	const actions: CookTriggerRecoveryActionItem[] = [
+		{
+			id: "retry_routing",
+			label: "Retry routing",
+			description: "Run the workflow-aware router classifier once more before deciding whether /cook should take over.",
+		},
+		{
+			id: "send_as_normal_chat",
+			label: "Send as normal chat",
+			description: "Replay the original message exactly once to the primary agent and bypass router interception for that replay.",
+		},
+		{
+			id: "cancel",
+			label: "Cancel",
+			description: `Stop here without routing or replaying the original message. ${args.mainChatRerunGuidance}`,
+		},
+	];
+	return {
+		title: "Router recovery needed before this prompt can continue",
+		intro:
+			"The workflow-aware router could not safely classify this prompt, so it stayed fail-closed instead of silently sending the prompt to the primary agent. Choose an explicit recovery path or cancel.",
+		failureHeading: "Router failure",
+		failureBody: args.failureLabel,
+		actionsHeading: "Actions",
+		actions,
 		footer: "↑↓ navigate • enter select • esc cancel",
 	};
 }
@@ -474,6 +509,10 @@ export function maybeWriteCookTriggerClarificationSnapshot(
 	layout: CookTriggerClarificationLayout,
 	snapshotPath: string | undefined,
 ): void {
+	writeJsonSnapshot(snapshotPath, layout);
+}
+
+export function maybeWriteCookTriggerRecoverySnapshot(layout: CookTriggerRecoveryLayout, snapshotPath: string | undefined): void {
 	writeJsonSnapshot(snapshotPath, layout);
 }
 

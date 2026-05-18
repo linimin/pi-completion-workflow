@@ -354,31 +354,31 @@ assert profile['task_type'] == 'completion-workflow', 'accepted startup handoff 
 assert 'Routing natural-language handoff into /cook.' in output, 'accepted startup handoff should notify that /cook took over'
 PY
 
-# Keep chatting should stay side-effect free and should not replay the original start-intent message.
-KEEP_ROOT="$TMPDIR/keep-chatting-repo"
-KEEP_SESSION="$TMPDIR/keep-chatting-session.jsonl"
-KEEP_PROMPT="$TMPDIR/keep-chatting-driver-prompt.txt"
-KEEP_ROUTING="$TMPDIR/keep-chatting-routing.json"
-KEEP_CLASSIFIER="$TMPDIR/keep-chatting-classifier.json"
-KEEP_CONFIRMATION="$TMPDIR/keep-chatting-confirmation.json"
-KEEP_FALLBACK="$TMPDIR/keep-chatting-fallback.json"
-mkdir -p "$KEEP_ROOT"
-cd "$KEEP_ROOT"
+# Send as normal chat should replay the original start-intent message exactly once through the main chat path.
+REPLAY_ROOT="$TMPDIR/replay-repo"
+REPLAY_SESSION="$TMPDIR/replay-session.jsonl"
+REPLAY_PROMPT="$TMPDIR/replay-driver-prompt.txt"
+REPLAY_ROUTING="$TMPDIR/replay-routing.json"
+REPLAY_CLASSIFIER="$TMPDIR/replay-classifier.json"
+REPLAY_CONFIRMATION="$TMPDIR/replay-confirmation.json"
+REPLAY_FALLBACK="$TMPDIR/replay-fallback.json"
+mkdir -p "$REPLAY_ROOT"
+cd "$REPLAY_ROOT"
 git init -q
-write_session "$KEEP_SESSION" "$KEEP_ROOT" "$STARTUP_DISCUSSION"
+write_session "$REPLAY_SESSION" "$REPLAY_ROOT" "$STARTUP_DISCUSSION"
 
-PI_COOK_TRIGGER_FALLBACK_PATH="$KEEP_FALLBACK" \
-PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
-PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$KEEP_PROMPT" \
+PI_COOK_TRIGGER_FALLBACK_PATH="$REPLAY_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=any \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$REPLAY_PROMPT" \
 PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
-PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$KEEP_CLASSIFIER" \
-PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=keep_chatting \
-PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$KEEP_CONFIRMATION" \
-PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$KEEP_ROUTING" \
-pi --session "$KEEP_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$STARTUP_ROUTER_TEXT" \
-  >"$TMPDIR/pi-cook-trigger-keep.out" 2>"$TMPDIR/pi-cook-trigger-keep.err"
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$REPLAY_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=send_as_normal_chat \
+PI_COMPLETION_TEST_TRIGGER_CONFIRMATION_PATH="$REPLAY_CONFIRMATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$REPLAY_ROUTING" \
+pi --session "$REPLAY_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$STARTUP_ROUTER_TEXT" \
+  >"$TMPDIR/pi-cook-trigger-replay.out" 2>"$TMPDIR/pi-cook-trigger-replay.err"
 
-python3 - "$KEEP_ROUTING" "$KEEP_CLASSIFIER" "$KEEP_CONFIRMATION" "$KEEP_FALLBACK" "$KEEP_PROMPT" "$TMPDIR/pi-cook-trigger-keep.out" "$TMPDIR/pi-cook-trigger-keep.err" <<'PY'
+python3 - "$REPLAY_ROUTING" "$REPLAY_CLASSIFIER" "$REPLAY_CONFIRMATION" "$REPLAY_FALLBACK" "$REPLAY_PROMPT" "$STARTUP_ROUTER_TEXT" "$TMPDIR/pi-cook-trigger-replay.out" "$TMPDIR/pi-cook-trigger-replay.err" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -386,21 +386,25 @@ from pathlib import Path
 routing = json.loads(Path(sys.argv[1]).read_text())
 classifier = json.loads(Path(sys.argv[2]).read_text())
 confirmation = json.loads(Path(sys.argv[3]).read_text())
-fallback = Path(sys.argv[4])
+fallback = json.loads(Path(sys.argv[4]).read_text())
 driver_prompt = Path(sys.argv[5])
-output = Path(sys.argv[6]).read_text() + Path(sys.argv[7]).read_text()
+trigger_text = sys.argv[6]
+output = Path(sys.argv[7]).read_text() + Path(sys.argv[8]).read_text()
 
-assert routing['action'] == 'handled', 'keep chatting should keep the workflow offer side-effect free'
-assert routing['reason'] == 'user_kept_chatting', 'keep chatting should record the user_kept_chatting routing reason'
-assert routing['classificationDecision'] == 'offer_workflow', 'keep chatting should still snapshot the offer_workflow classifier result'
-assert routing['workflowBias'] == 'startup', 'keep chatting should preserve the original workflow bias'
-assert routing['confirmationAction'] == 'keep_chatting', 'keep chatting should record the keep_chatting confirmation action'
-assert confirmation['actions'][1]['label'] == 'Keep chatting', 'keep chatting should expose the side-effect-free keep-chatting action'
-assert classifier['result']['classification']['workflowBias'] == 'startup', 'keep chatting should preserve the startup bias in the classifier snapshot'
-assert not fallback.exists(), 'keep chatting should not replay the original interactive start-intent message to later fallback handlers'
-assert not driver_prompt.exists(), 'keep chatting should not queue a /cook driver prompt'
-assert not Path('.agent').exists(), 'keep chatting should not bootstrap canonical workflow state'
-assert 'side-effect free' in output, 'keep chatting should tell the user that the workflow offer stayed side-effect free'
+assert routing['action'] == 'handled', 'send as normal chat should intercept the original workflow offer turn'
+assert routing['reason'] == 'user_sent_as_normal_chat', 'send as normal chat should record the explicit replay decision'
+assert routing['classificationDecision'] == 'offer_workflow', 'send as normal chat should still snapshot the offer_workflow classifier result'
+assert routing['workflowBias'] == 'startup', 'send as normal chat should preserve the original workflow bias'
+assert routing['confirmationAction'] == 'send_as_normal_chat', 'send as normal chat should record the replay confirmation action'
+assert routing['replayedToPrimaryAgent'] is True, 'send as normal chat should record that the original message was replayed to the primary agent'
+assert routing['replayBypassMarkerApplied'] is True, 'send as normal chat should record that the replay used the router-bypass marker'
+assert confirmation['actions'][1]['label'] == 'Send as normal chat', 'workflow offers should expose send as normal chat instead of keep chatting'
+assert classifier['result']['classification']['workflowBias'] == 'startup', 'send as normal chat should preserve the startup bias in the classifier snapshot'
+assert fallback['source'] == 'extension', 'send as normal chat should replay through an extension-originated bypass turn'
+assert fallback['text'] == trigger_text, 'send as normal chat should replay the original prompt text exactly once'
+assert not driver_prompt.exists(), 'send as normal chat should not queue a /cook driver prompt'
+assert not Path('.agent').exists(), 'send as normal chat should not bootstrap canonical workflow state'
+assert 'bypassed router interception' in output, 'send as normal chat should tell the user that the replay bypassed router interception'
 PY
 
 # Router-mode normal prompts should still continue to the main agent path after per-turn classification.
@@ -654,10 +658,63 @@ assert classifier['result']['classification']['decision'] == 'unclear', 'unclear
 assert clarification['title'] == 'Clarify how the completion workflow should proceed', 'unclear routing should show the clarification chooser'
 assert clarification['actions'][0]['id'] == 'route_resume', 'unclear active workflow clarification should offer resume first'
 assert clarification['actions'][1]['id'] == 'route_refocus', 'unclear active workflow clarification should offer refocus'
+assert clarification['actions'][2]['id'] == 'send_as_normal_chat', 'unclear clarification should expose send as normal chat before cancel'
 assert 'Natural-language handoff metadata:' in prompt, 'clarified commandless routing should still pass structured handoff metadata into the shared driver prompt'
 assert '- clarification_selected_bias: refocus' in prompt, 'clarified commandless routing should carry clarification bias into the shared driver prompt'
 assert f'- clarification_goal: {mission}' in prompt, 'clarified commandless routing should carry the clarified mission goal into the shared driver prompt'
 assert state['mission_anchor'] == mission, 'clarified refocus routing should still rewrite canonical state only through the shared /cook entry'
+PY
+
+# Clarification send as normal chat should replay the original message exactly once without rewriting canonical workflow state.
+UNCLEAR_REPLAY_ROOT="$TMPDIR/unclear-replay-repo"
+UNCLEAR_REPLAY_SESSION="$TMPDIR/unclear-replay-session.jsonl"
+UNCLEAR_REPLAY_PROMPT="$TMPDIR/unclear-replay-driver-prompt.txt"
+UNCLEAR_REPLAY_ROUTING="$TMPDIR/unclear-replay-routing.json"
+UNCLEAR_REPLAY_CLARIFICATION="$TMPDIR/unclear-replay-clarification.json"
+UNCLEAR_REPLAY_FALLBACK="$TMPDIR/unclear-replay-fallback.json"
+mkdir -p "$UNCLEAR_REPLAY_ROOT"
+cd "$UNCLEAR_REPLAY_ROOT"
+git init -q
+write_completion_state "$UNCLEAR_REPLAY_ROOT" "$ACTIVE_MISSION" continue false implement completion-implementer "Implement the active workflow slice"
+write_session "$UNCLEAR_REPLAY_SESSION" "$UNCLEAR_REPLAY_ROOT" "$REFOCUS_DISCUSSION"
+
+PI_COOK_TRIGGER_FALLBACK_PATH="$UNCLEAR_REPLAY_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=any \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$UNCLEAR_REPLAY_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$UNCLEAR_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_ACTION=send_as_normal_chat \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_PATH="$UNCLEAR_REPLAY_CLARIFICATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$UNCLEAR_REPLAY_ROUTING" \
+pi --session "$UNCLEAR_REPLAY_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$UNCLEAR_ROUTER_TEXT" \
+  >"$TMPDIR/pi-cook-trigger-unclear-replay.out" 2>"$TMPDIR/pi-cook-trigger-unclear-replay.err"
+
+python3 - "$UNCLEAR_REPLAY_ROUTING" "$UNCLEAR_REPLAY_CLARIFICATION" "$UNCLEAR_REPLAY_FALLBACK" "$UNCLEAR_REPLAY_PROMPT" "$UNCLEAR_ROUTER_TEXT" "$ACTIVE_MISSION" "$TMPDIR/pi-cook-trigger-unclear-replay.out" "$TMPDIR/pi-cook-trigger-unclear-replay.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+routing = json.loads(Path(sys.argv[1]).read_text())
+clarification = json.loads(Path(sys.argv[2]).read_text())
+fallback = json.loads(Path(sys.argv[3]).read_text())
+driver_prompt = Path(sys.argv[4])
+trigger_text = sys.argv[5]
+mission = sys.argv[6]
+output = Path(sys.argv[7]).read_text() + Path(sys.argv[8]).read_text()
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'handled', 'clarification send as normal chat should keep the original intercepted turn handled'
+assert routing['reason'] == 'user_sent_as_normal_chat_after_clarification', 'clarification send as normal chat should record the explicit replay reason'
+assert routing['clarificationAction'] == 'send_as_normal_chat', 'clarification send as normal chat should record the replay clarification action'
+assert routing['replayedToPrimaryAgent'] is True, 'clarification send as normal chat should record that the original message was replayed'
+assert routing['replayBypassMarkerApplied'] is True, 'clarification send as normal chat should record the router-bypass replay marker'
+assert clarification['actions'][2]['label'] == 'Send as normal chat', 'clarification UI should expose send as normal chat instead of keep chatting'
+assert fallback['source'] == 'extension', 'clarification send as normal chat should replay through an extension-originated bypass turn'
+assert fallback['text'] == trigger_text, 'clarification send as normal chat should replay the original prompt text exactly once'
+assert not driver_prompt.exists(), 'clarification send as normal chat should not queue a /cook driver prompt'
+assert state['mission_anchor'] == mission, 'clarification send as normal chat should keep canonical workflow state unchanged'
+assert 'bypassed router interception' in output, 'clarification send as normal chat should tell the user that the replay bypassed router interception'
 PY
 
 # Clarification cancel should fail closed without replaying the original message or rewriting canonical state.
@@ -914,28 +971,83 @@ assert not routing.exists(), 'explicit /cook should bypass the natural-language 
 assert state['mission_anchor'] == mission, 'explicit /cook should keep the existing startup behavior'
 PY
 
-# Classifier timeout/failure should conservatively stop the original input from reaching the main agent.
+# Classifier timeout should surface recovery UI and allow explicit send-as-normal-chat replay.
 TIMEOUT_ROOT="$TMPDIR/timeout-repo"
 TIMEOUT_SESSION="$TMPDIR/timeout-session.jsonl"
 TIMEOUT_ROUTING="$TMPDIR/timeout-routing.json"
 TIMEOUT_CLASSIFIER="$TMPDIR/timeout-classifier.json"
 TIMEOUT_FALLBACK="$TMPDIR/timeout-fallback.json"
 TIMEOUT_PROMPT="$TMPDIR/timeout-driver-prompt.txt"
+TIMEOUT_RECOVERY="$TMPDIR/timeout-recovery.json"
 mkdir -p "$TIMEOUT_ROOT"
 cd "$TIMEOUT_ROOT"
 git init -q
 write_session "$TIMEOUT_SESSION" "$TIMEOUT_ROOT" "$STARTUP_DISCUSSION"
 
 PI_COOK_TRIGGER_FALLBACK_PATH="$TIMEOUT_FALLBACK" \
-PI_COOK_TRIGGER_FALLBACK_SOURCE=interactive \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=any \
 PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$TIMEOUT_PROMPT" \
 PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_FAILURE=timeout \
 PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$TIMEOUT_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_ACTION=send_as_normal_chat \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_PATH="$TIMEOUT_RECOVERY" \
 PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$TIMEOUT_ROUTING" \
 pi --session "$TIMEOUT_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$STARTUP_ROUTER_TEXT" \
   >"$TMPDIR/pi-cook-trigger-timeout.out" 2>"$TMPDIR/pi-cook-trigger-timeout.err"
 
-python3 - "$TIMEOUT_ROUTING" "$TIMEOUT_CLASSIFIER" "$TIMEOUT_FALLBACK" "$TIMEOUT_PROMPT" "$TMPDIR/pi-cook-trigger-timeout.out" "$TMPDIR/pi-cook-trigger-timeout.err" <<'PY'
+python3 - "$TIMEOUT_ROUTING" "$TIMEOUT_CLASSIFIER" "$TIMEOUT_FALLBACK" "$TIMEOUT_PROMPT" "$TIMEOUT_RECOVERY" "$STARTUP_ROUTER_TEXT" "$TMPDIR/pi-cook-trigger-timeout.out" "$TMPDIR/pi-cook-trigger-timeout.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+routing = json.loads(Path(sys.argv[1]).read_text())
+classifier = json.loads(Path(sys.argv[2]).read_text())
+fallback = json.loads(Path(sys.argv[3]).read_text())
+driver_prompt = Path(sys.argv[4])
+recovery = json.loads(Path(sys.argv[5]).read_text())
+trigger_text = sys.argv[6]
+output = Path(sys.argv[7]).read_text() + Path(sys.argv[8]).read_text()
+
+assert routing['action'] == 'handled', 'classifier timeout recovery should keep the original intercepted turn handled'
+assert routing['reason'] == 'classifier_timeout_send_as_normal_chat', 'classifier timeout recovery should record the explicit replay outcome'
+assert routing['recoveryAction'] == 'send_as_normal_chat', 'classifier timeout recovery should record the chosen recovery action'
+assert routing['replayedToPrimaryAgent'] is True, 'classifier timeout recovery should record that the original message was replayed'
+assert routing['replayBypassMarkerApplied'] is True, 'classifier timeout recovery should record the router-bypass replay marker'
+assert classifier['result']['status'] == 'timeout', 'classifier timeout should snapshot the timeout result'
+assert recovery['actions'][0]['id'] == 'retry_routing', 'classifier timeout recovery should offer retry routing first'
+assert recovery['actions'][1]['id'] == 'send_as_normal_chat', 'classifier timeout recovery should offer send as normal chat'
+assert fallback['source'] == 'extension', 'classifier timeout send as normal chat should replay through an extension-originated bypass turn'
+assert fallback['text'] == trigger_text, 'classifier timeout send as normal chat should replay the original prompt text exactly once'
+assert not driver_prompt.exists(), 'classifier timeout send as normal chat should not queue a /cook driver prompt'
+assert not Path('.agent').exists(), 'classifier timeout send as normal chat should not bootstrap canonical workflow state'
+assert 'bypassed router interception' in output, 'classifier timeout recovery should tell the user that the replay bypassed router interception'
+PY
+
+# Invalid classifier output should surface recovery UI and stay fail-closed on cancel.
+INVALID_ROOT="$TMPDIR/invalid-output-repo"
+INVALID_SESSION="$TMPDIR/invalid-output-session.jsonl"
+INVALID_ROUTING="$TMPDIR/invalid-output-routing.json"
+INVALID_CLASSIFIER="$TMPDIR/invalid-output-classifier.json"
+INVALID_FALLBACK="$TMPDIR/invalid-output-fallback.json"
+INVALID_PROMPT="$TMPDIR/invalid-output-driver-prompt.txt"
+INVALID_RECOVERY="$TMPDIR/invalid-output-recovery.json"
+mkdir -p "$INVALID_ROOT"
+cd "$INVALID_ROOT"
+git init -q
+write_session "$INVALID_SESSION" "$INVALID_ROOT" "$STARTUP_DISCUSSION"
+
+PI_COOK_TRIGGER_FALLBACK_PATH="$INVALID_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=any \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$INVALID_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_FAILURE=invalid_output \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$INVALID_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_ACTION=cancel \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_PATH="$INVALID_RECOVERY" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$INVALID_ROUTING" \
+pi --session "$INVALID_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$STARTUP_ROUTER_TEXT" \
+  >"$TMPDIR/pi-cook-trigger-invalid.out" 2>"$TMPDIR/pi-cook-trigger-invalid.err"
+
+python3 - "$INVALID_ROUTING" "$INVALID_CLASSIFIER" "$INVALID_FALLBACK" "$INVALID_PROMPT" "$INVALID_RECOVERY" "$TMPDIR/pi-cook-trigger-invalid.out" "$TMPDIR/pi-cook-trigger-invalid.err" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -944,15 +1056,67 @@ routing = json.loads(Path(sys.argv[1]).read_text())
 classifier = json.loads(Path(sys.argv[2]).read_text())
 fallback = Path(sys.argv[3])
 driver_prompt = Path(sys.argv[4])
-output = Path(sys.argv[5]).read_text() + Path(sys.argv[6]).read_text()
+recovery = json.loads(Path(sys.argv[5]).read_text())
+output = Path(sys.argv[6]).read_text() + Path(sys.argv[7]).read_text()
 
-assert routing['action'] == 'handled', 'classifier timeout should conservatively handle the original input'
-assert routing['reason'] == 'classifier_timeout', 'classifier timeout should record the conservative timeout reason'
-assert classifier['result']['status'] == 'timeout', 'classifier timeout should snapshot the timeout result'
-assert not fallback.exists(), 'classifier timeout should keep the original interactive input away from later fallback handlers'
-assert not driver_prompt.exists(), 'classifier timeout should not queue a /cook driver prompt'
-assert not Path('.agent').exists(), 'classifier timeout should not bootstrap canonical workflow state'
-assert 'run /cook explicitly' in output, 'classifier timeout should guide the user toward explicit /cook handoff'
+assert routing['action'] == 'handled', 'invalid classifier output should stay fail-closed instead of continuing to the main agent'
+assert routing['reason'] == 'classifier_invalid_output_cancelled', 'invalid classifier output cancel should record the cancel outcome'
+assert routing['recoveryAction'] == 'cancel', 'invalid classifier output should record the cancel recovery action'
+assert routing['replayedToPrimaryAgent'] is False, 'invalid classifier output cancel should not replay the original message'
+assert classifier['result']['status'] == 'invalid_output', 'invalid classifier output should snapshot the invalid_output result'
+assert recovery['title'] == 'Router recovery needed before this prompt can continue', 'invalid classifier output should show the recovery chooser'
+assert not fallback.exists(), 'invalid classifier output cancel should keep the original input away from later fallback handlers'
+assert not driver_prompt.exists(), 'invalid classifier output cancel should not queue a /cook driver prompt'
+assert not Path('.agent').exists(), 'invalid classifier output cancel should not bootstrap canonical workflow state'
+assert 'rerun /cook explicitly' in output, 'invalid classifier output cancel should direct the user back to explicit /cook when needed'
+PY
+
+# Classifier subprocess errors should also surface recovery UI and stay fail-closed on cancel.
+ERROR_ROOT="$TMPDIR/error-repo"
+ERROR_SESSION="$TMPDIR/error-session.jsonl"
+ERROR_ROUTING="$TMPDIR/error-routing.json"
+ERROR_CLASSIFIER="$TMPDIR/error-classifier.json"
+ERROR_FALLBACK="$TMPDIR/error-fallback.json"
+ERROR_PROMPT="$TMPDIR/error-driver-prompt.txt"
+ERROR_RECOVERY="$TMPDIR/error-recovery.json"
+mkdir -p "$ERROR_ROOT"
+cd "$ERROR_ROOT"
+git init -q
+write_session "$ERROR_SESSION" "$ERROR_ROOT" "$STARTUP_DISCUSSION"
+
+PI_COOK_TRIGGER_FALLBACK_PATH="$ERROR_FALLBACK" \
+PI_COOK_TRIGGER_FALLBACK_SOURCE=any \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$ERROR_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_FAILURE=error \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$ERROR_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_ACTION=cancel \
+PI_COMPLETION_TEST_TRIGGER_RECOVERY_PATH="$ERROR_RECOVERY" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$ERROR_ROUTING" \
+pi --session "$ERROR_SESSION" -e "$PKG_ROOT" -e "$FALLBACK_EXTENSION" -p "$STARTUP_ROUTER_TEXT" \
+  >"$TMPDIR/pi-cook-trigger-error.out" 2>"$TMPDIR/pi-cook-trigger-error.err"
+
+python3 - "$ERROR_ROUTING" "$ERROR_CLASSIFIER" "$ERROR_FALLBACK" "$ERROR_PROMPT" "$ERROR_RECOVERY" "$TMPDIR/pi-cook-trigger-error.out" "$TMPDIR/pi-cook-trigger-error.err" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+routing = json.loads(Path(sys.argv[1]).read_text())
+classifier = json.loads(Path(sys.argv[2]).read_text())
+fallback = Path(sys.argv[3])
+driver_prompt = Path(sys.argv[4])
+recovery = json.loads(Path(sys.argv[5]).read_text())
+output = Path(sys.argv[6]).read_text() + Path(sys.argv[7]).read_text()
+
+assert routing['action'] == 'handled', 'classifier errors should stay fail-closed instead of continuing to the main agent'
+assert routing['reason'] == 'classifier_error_cancelled', 'classifier errors should record the cancel outcome'
+assert routing['recoveryAction'] == 'cancel', 'classifier errors should record the cancel recovery action'
+assert routing['replayedToPrimaryAgent'] is False, 'classifier error cancel should not replay the original message'
+assert classifier['result']['status'] == 'error', 'classifier errors should snapshot the error result'
+assert recovery['actions'][2]['id'] == 'cancel', 'classifier errors should expose cancel in the recovery chooser'
+assert not fallback.exists(), 'classifier error cancel should keep the original input away from later fallback handlers'
+assert not driver_prompt.exists(), 'classifier error cancel should not queue a /cook driver prompt'
+assert not Path('.agent').exists(), 'classifier error cancel should not bootstrap canonical workflow state'
+assert 'rerun /cook explicitly' in output, 'classifier error cancel should direct the user back to explicit /cook when needed'
 PY
 
 echo "cook trigger routing test passed: $TMPDIR"

@@ -5,8 +5,10 @@ import { runCookEntry, type CompletionDriverDeps } from "./driver";
 import {
 	buildCookTriggerAssistConfirmationLayout,
 	buildCookTriggerClarificationLayout,
+	buildCookTriggerRecoveryLayout,
 	maybeWriteCookTriggerClarificationSnapshot,
 	maybeWriteCookTriggerConfirmationSnapshot,
+	maybeWriteCookTriggerRecoverySnapshot,
 	maybeWriteCookTriggerRoutingSnapshot,
 } from "./prompt-surfaces";
 import {
@@ -29,6 +31,7 @@ import type {
 	CookTriggerClassification,
 	CookTriggerConfirmationAction,
 	CookTriggerDecision,
+	CookTriggerRecoveryAction,
 	CookTriggerWorkflowBias,
 	NaturalLanguageCookTriggerMode,
 } from "./types";
@@ -60,6 +63,8 @@ type RecentSessionMessage = {
 const MAX_TRIGGER_CANDIDATE_LENGTH = 120;
 const MAX_TRIGGER_CANDIDATE_LINES = 3;
 const ADOPTED_ARTIFACT_PREVIEW_LIMIT = 280;
+const ROUTER_BYPASS_REPLAY_PREFIX = "__pi_completion_router_bypass__:";
+const ROUTER_FAILURE_RETRY_LIMIT = 2;
 const CLEAR_TRIGGER_PATTERNS = [
 	/^(?:go ahead|please go ahead|proceed|let'?s do it|let'?s start|start(?: implementing| implementation| the workflow| the next round)?|begin(?: implementing| implementation| the workflow| the next round)?|continue(?: with implementation| implementing| the workflow)?|resume(?: the workflow| where we left off)?|next step|work on it|do it|ship it|let'?s do this instead|switch to this)\b/i,
 	/^(?:開始(?:做|實作|实现|落地|下一輪)|开始(?:做|实作|实现|落地|下一轮)|那就做吧|照(?:剛剛|刚刚|這個|这个|上述|上面的)?(?:討論|讨论|方向).*(?:做|實作|实现|落地)|可以開始(?:做|實作|实现|下一輪)?|可以开始(?:做|实作|实现|下一轮)?|繼續(?:做|實作|实现|往下做)|继续(?:做|实作|实现|往下做)|接著(?:做|實作|实现)|接着(?:做|实作|实现)|下一步|那改做(?:這個|这个)|先做新的那個方向|先做新的那个方向|好，開始做這個|好，开始做这个)/u,
@@ -106,11 +111,15 @@ function triggerClarificationSnapshotPath(): string | undefined {
 	return asString(process.env.PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_PATH);
 }
 
+function triggerRecoverySnapshotPath(): string | undefined {
+	return asString(process.env.PI_COMPLETION_TEST_TRIGGER_RECOVERY_PATH);
+}
+
 function triggerConfirmationOverride(): CookTriggerConfirmationAction | undefined {
 	const raw = asString(process.env.PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION)?.toLowerCase();
 	if (!raw) return undefined;
 	if (raw === "start" || raw === "start_cook" || raw === "start_workflow" || raw === "cook") return "start_workflow";
-	if (raw === "continue" || raw === "keep_chatting" || raw === "keep-chatting") return "keep_chatting";
+	if (raw === "send_as_normal_chat" || raw === "send-as-normal-chat" || raw === "normal_chat" || raw === "normal-chat") return "send_as_normal_chat";
 	if (raw === "cancel" || raw === "dismiss") return "cancel";
 	return undefined;
 }
@@ -122,7 +131,16 @@ function triggerClarificationOverride(): CookTriggerClarificationAction | undefi
 	if (raw === "resume" || raw === "route_resume") return "route_resume";
 	if (raw === "refocus" || raw === "route_refocus") return "route_refocus";
 	if (raw === "next_round" || raw === "next-round" || raw === "route_next_round") return "route_next_round";
-	if (raw === "keep_chatting" || raw === "keep-chatting" || raw === "continue") return "keep_chatting";
+	if (raw === "send_as_normal_chat" || raw === "send-as-normal-chat" || raw === "normal_chat" || raw === "normal-chat") return "send_as_normal_chat";
+	if (raw === "cancel" || raw === "dismiss") return "cancel";
+	return undefined;
+}
+
+function triggerRecoveryOverride(): CookTriggerRecoveryAction | undefined {
+	const raw = asString(process.env.PI_COMPLETION_TEST_TRIGGER_RECOVERY_ACTION)?.toLowerCase();
+	if (!raw) return undefined;
+	if (raw === "retry" || raw === "retry_routing" || raw === "retry-routing") return "retry_routing";
+	if (raw === "send_as_normal_chat" || raw === "send-as-normal-chat" || raw === "normal_chat" || raw === "normal-chat") return "send_as_normal_chat";
 	if (raw === "cancel" || raw === "dismiss") return "cancel";
 	return undefined;
 }
@@ -209,6 +227,35 @@ function classifierFailureReason(result: CookTriggerClassifierResult): string {
 		default:
 			return "classifier_error";
 	}
+}
+
+function classifierFailureLabel(result: CookTriggerClassifierResult): string {
+	switch (result.status) {
+		case "timeout":
+			return "The router classifier timed out before it could decide whether /cook should take over.";
+		case "invalid_output":
+			return "The router classifier returned invalid JSON output, so the router refused to guess.";
+		case "error":
+		default:
+			return result.errorMessage?.trim() || "The router classifier failed before it could return a valid decision.";
+	}
+}
+
+function routerBypassReplayText(text: string): string {
+	return `${ROUTER_BYPASS_REPLAY_PREFIX}${text}`;
+}
+
+function consumeRouterBypassReplay(event: InputRoutingEvent): string | undefined {
+	if (event.source !== "extension") return undefined;
+	if (typeof event.text !== "string" || !event.text.startsWith(ROUTER_BYPASS_REPLAY_PREFIX)) return undefined;
+	return event.text.slice(ROUTER_BYPASS_REPLAY_PREFIX.length);
+}
+
+async function replayOriginalMessageToPrimaryAgent(
+	pi: ExtensionAPI,
+	event: InputRoutingEvent,
+): Promise<void> {
+	await pi.sendUserMessage(routerBypassReplayText(event.text));
 }
 
 function extractMessageText(content: unknown): string {
@@ -446,11 +493,26 @@ async function promptCookTriggerClarification(
 	return index >= 0 ? layout.actions[index].id : "cancel";
 }
 
-function guidanceForClassifierFailure(result: CookTriggerClassifierResult): string {
-	if (result.status === "timeout") {
-		return "Could not safely determine whether /cook should take over before implementation work started because the trigger classifier timed out. If you want the completion workflow boundary, run /cook explicitly.";
-	}
-	return "Could not safely determine whether /cook should take over before implementation work started. If you want the completion workflow boundary, run /cook explicitly.";
+async function promptCookTriggerRecovery(
+	ctx: InputRoutingContext,
+	result: CookTriggerClassifierResult,
+	deps: CompletionDriverDeps,
+): Promise<CookTriggerRecoveryAction> {
+	const override = triggerRecoveryOverride();
+	const layout = buildCookTriggerRecoveryLayout({
+		failureLabel: classifierFailureLabel(result),
+		mainChatRerunGuidance: deps.mainChatRerunGuidance,
+	});
+	maybeWriteCookTriggerRecoverySnapshot(layout, triggerRecoverySnapshotPath());
+	if (override) return override;
+	if (!ctx.hasUI || !ctx.ui) return "cancel";
+	const choices = layout.actions.map((action) => `${action.label}\n\n${action.description}`);
+	const titleParts = [layout.title, "", layout.intro];
+	if (layout.failureHeading && layout.failureBody) titleParts.push("", layout.failureHeading, layout.failureBody);
+	const choice = await ctx.ui.select(titleParts.join("\n"), choices);
+	if (!choice) return "cancel";
+	const index = choices.indexOf(choice);
+	return index >= 0 ? layout.actions[index].id : "cancel";
 }
 
 function buildHandoffHintText(
@@ -466,7 +528,12 @@ export async function handleCookNaturalLanguageTrigger(
 	event: InputRoutingEvent,
 	ctx: InputRoutingContext,
 	deps: CompletionDriverDeps,
-): Promise<{ action: "continue" | "handled" }> {
+): Promise<{ action: "continue" | "handled" } | { action: "transform"; text: string; images?: unknown[] }> {
+	const replayText = consumeRouterBypassReplay(event);
+	if (replayText !== undefined) {
+		return { action: "transform", text: replayText, images: event.images };
+	}
+
 	const configuredMode = configuredTriggerMode();
 	const mode = effectiveTriggerMode(configuredMode);
 	if (mode === "off") {
@@ -548,23 +615,71 @@ export async function handleCookNaturalLanguageTrigger(
 		return { action: "continue" };
 	}
 
-	const classifier = await classifyCookTriggerIntentWithAgent({
-		ctx,
-		projectName,
-		inputText: normalizeTriggerText(event.text),
-		recentEntries,
-		workflowContextLines: buildTriggerWorkflowContextLines(snapshot),
-	});
-	if (classifier.status !== "classified" || !classifier.classification) {
-		deps.emitCommandText(ctx, guidanceForClassifierFailure(classifier), "info");
+	let classifier: CookTriggerClassifierResult | undefined;
+	for (let attempt = 0; attempt < ROUTER_FAILURE_RETRY_LIMIT; attempt += 1) {
+		classifier = await classifyCookTriggerIntentWithAgent({
+			ctx,
+			projectName,
+			inputText: normalizeTriggerText(event.text),
+			recentEntries,
+			workflowContextLines: buildTriggerWorkflowContextLines(snapshot),
+		});
+		if (classifier.status === "classified" && classifier.classification) break;
+		const recovery = await promptCookTriggerRecovery(ctx, classifier, deps);
+		if (recovery === "retry_routing" && attempt + 1 < ROUTER_FAILURE_RETRY_LIMIT) {
+			deps.emitCommandText(ctx, "Retrying workflow-aware router once before deciding whether /cook should take over.", "info");
+			continue;
+		}
+		if (recovery === "send_as_normal_chat") {
+			await replayOriginalMessageToPrimaryAgent(pi, event);
+			deps.emitCommandText(ctx, "Replayed the original message once to the main chat path and bypassed router interception for that replay.", "info");
+			writeRoutingDecision(event, {
+				mode: configuredMode,
+				action: "handled",
+				reason: `${classifierFailureReason(classifier)}_send_as_normal_chat`,
+			}, {
+				...routingExtrasForArtifact(adoptedArtifact),
+				recoveryAction: recovery,
+				errorMessage: classifier.errorMessage ?? null,
+				rawOutput: classifier.rawOutput ?? null,
+				replayedToPrimaryAgent: true,
+				replayBypassMarkerApplied: true,
+			});
+			return { action: "handled" };
+		}
+		deps.emitCommandText(
+			ctx,
+			"Cancelled router recovery without replaying the original message. If you want the completion workflow boundary, rerun /cook explicitly.",
+			"info",
+		);
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "handled",
-			reason: classifierFailureReason(classifier),
+			reason: `${classifierFailureReason(classifier)}_cancelled`,
 		}, {
 			...routingExtrasForArtifact(adoptedArtifact),
+			recoveryAction: recovery,
 			errorMessage: classifier.errorMessage ?? null,
 			rawOutput: classifier.rawOutput ?? null,
+			replayedToPrimaryAgent: false,
+			replayBypassMarkerApplied: false,
+		});
+		return { action: "handled" };
+	}
+
+	if (!classifier || classifier.status !== "classified" || !classifier.classification) {
+		deps.emitCommandText(ctx, "Router recovery stopped without replaying the original message. If you still want the workflow boundary, rerun /cook explicitly.", "info");
+		writeRoutingDecision(event, {
+			mode: configuredMode,
+			action: "handled",
+			reason: classifier ? `${classifierFailureReason(classifier)}_retry_exhausted` : "classifier_error_retry_exhausted",
+		}, {
+			...routingExtrasForArtifact(adoptedArtifact),
+			recoveryAction: "retry_routing",
+			errorMessage: classifier?.errorMessage ?? null,
+			rawOutput: classifier?.rawOutput ?? null,
+			replayedToPrimaryAgent: false,
+			replayBypassMarkerApplied: false,
 		});
 		return { action: "handled" };
 	}
@@ -584,20 +699,19 @@ export async function handleCookNaturalLanguageTrigger(
 	if (classification.decision === "unclear") {
 		const proposal = await deps.deriveCookContextProposal(ctx, projectName, proposalHint);
 		const clarification = await promptCookTriggerClarification(ctx, snapshot, proposal, adoptedArtifact, deps);
-		if (clarification === "keep_chatting") {
-			deps.emitCommandText(
-				ctx,
-				"Kept the clarification side-effect free. Continue the discussion in the main chat and send a fresh message when you are ready to enter /cook.",
-				"info",
-			);
+		if (clarification === "send_as_normal_chat") {
+			await replayOriginalMessageToPrimaryAgent(pi, event);
+			deps.emitCommandText(ctx, "Replayed the original message once to the main chat path and bypassed router interception for that clarification replay.", "info");
 			writeRoutingDecision(event, {
 				mode: configuredMode,
 				action: "handled",
-				reason: "user_kept_chatting_after_clarification",
+				reason: "user_sent_as_normal_chat_after_clarification",
 				classification,
 			}, {
 				...routingExtrasForArtifact(adoptedArtifact),
 				clarificationAction: clarification,
+				replayedToPrimaryAgent: true,
+				replayBypassMarkerApplied: true,
 			});
 			return { action: "handled" };
 		}
@@ -615,6 +729,8 @@ export async function handleCookNaturalLanguageTrigger(
 			}, {
 				...routingExtrasForArtifact(adoptedArtifact),
 				clarificationAction: clarification,
+				replayedToPrimaryAgent: false,
+				replayBypassMarkerApplied: false,
 			});
 			return { action: "handled" };
 		}
@@ -644,20 +760,19 @@ export async function handleCookNaturalLanguageTrigger(
 	}
 
 	const confirmation = await promptCookTriggerTakeover(ctx, classification, deps);
-	if (confirmation === "keep_chatting") {
-		deps.emitCommandText(
-			ctx,
-			"Kept the workflow offer side-effect free. Continue the discussion in the main chat and send a fresh message when you are ready to enter /cook.",
-			"info",
-		);
+	if (confirmation === "send_as_normal_chat") {
+		await replayOriginalMessageToPrimaryAgent(pi, event);
+		deps.emitCommandText(ctx, "Replayed the original message once to the main chat path and bypassed router interception for that workflow-offer replay.", "info");
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "handled",
-			reason: "user_kept_chatting",
+			reason: "user_sent_as_normal_chat",
 			classification,
 		}, {
 			...routingExtrasForArtifact(adoptedArtifact),
 			confirmationAction: confirmation,
+			replayedToPrimaryAgent: true,
+			replayBypassMarkerApplied: true,
 		});
 		return { action: "handled" };
 	}
@@ -675,6 +790,8 @@ export async function handleCookNaturalLanguageTrigger(
 		}, {
 			...routingExtrasForArtifact(adoptedArtifact),
 			confirmationAction: confirmation,
+			replayedToPrimaryAgent: false,
+			replayBypassMarkerApplied: false,
 		});
 		return { action: "handled" };
 	}
