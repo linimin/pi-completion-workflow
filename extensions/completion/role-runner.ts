@@ -121,12 +121,13 @@ const CONTEXT_PROPOSAL_ANALYST_SYSTEM_PROMPT = [
 const STARTUP_ANALYST_ROLE = "cook-proposal-analyst";
 const ANALYST_HEARTBEAT_MS = 5_000;
 const COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT = [
-	"You classify whether the latest user input should hand control to the canonical /cook workflow before the primary agent starts implementation work.",
+	"You classify whether the latest user input should stay in the main chat or be intercepted by the workflow-aware router into the canonical /cook workflow before the primary agent starts implementation work.",
+	"Assume router mode reviews every non-bypass normal user turn. Do not require short trigger phrases or explicit /cook text before choosing offer_workflow.",
 	"Do not emit markdown, code fences, or commentary.",
 	"Return exactly one JSON object with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint. You may also include optional keys requires_clarification, clarification_slots, and adopted_artifact when clearly supported.",
 	"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
-	"Use offer_workflow only when the latest input is handing control from discussion into workflow execution or explicitly asking to let /cook take over.",
-	"Use normal_prompt for ordinary questions, explanations, or direct requests that should stay with the primary agent.",
+	"Use offer_workflow when the latest input is directly asking to start, resume, refocus, or continue workflow-worthy repo work through the completion boundary, or explicitly asking to let /cook take over.",
+	"Use normal_prompt for ordinary questions, explanations, analysis-only requests, or direct requests that should stay with the primary agent.",
 	"Use unclear for ambiguous approvals, acknowledgements, or mixed signals where false-positive routing risk is material.",
 	"workflow_bias must be exactly one of startup, resume, refocus, next_round, or unknown.",
 	"Use startup when there is no active workflow yet, resume when the user is clearly continuing the current workflow, refocus when the user is clearly switching the active workflow to a different goal, and next_round when the previous workflow is done and the user is starting a new round.",

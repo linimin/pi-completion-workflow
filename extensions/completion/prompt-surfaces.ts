@@ -216,11 +216,12 @@ export function buildCookTriggerClassifierPrompt(args: {
 }): string {
 	const lines = [
 		`Project: ${args.projectName}`,
-		"Classify whether the current input is a natural-language handoff to the canonical /cook workflow before the primary agent starts implementation work.",
+		"Classify whether the current input should stay in the main chat or be intercepted by the workflow-aware router into the canonical /cook workflow before the primary agent starts implementation work.",
+		"Assume router mode reviews every non-bypass normal user turn. Do not require short trigger phrases or explicit /cook text before choosing offer_workflow.",
 		"Return JSON only with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint. You may also include optional keys requires_clarification, clarification_slots, and adopted_artifact when clearly supported.",
 		"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
-		"Use offer_workflow only when the user is handing control from recent discussion into workflow execution or explicitly asking to let /cook take over.",
-		"Use normal_prompt for ordinary questions, explanations, or direct agent requests that should stay in the main chat.",
+		"Use offer_workflow when the user is directly asking to start, resume, refocus, or continue workflow-worthy repo work through the completion boundary, or explicitly asking to let /cook take over.",
+		"Use normal_prompt for ordinary questions, explanations, analysis-only requests, or direct agent requests that should stay in the main chat.",
 		"Use unclear for ambiguous approvals, short acknowledgements, or cases where false-positive routing risk is material.",
 		"workflow_bias must be exactly one of startup, resume, refocus, next_round, or unknown.",
 		"Use startup when there is no active workflow yet, resume when the user is clearly continuing the current workflow, refocus when the user is clearly switching the active workflow to a different goal, and next_round when the previous workflow is done and the user is starting a new round.",

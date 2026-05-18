@@ -5,7 +5,7 @@
   "required_stop_judges": 3,
   "priority_policy_id": "completion-default",
   "task_type": "implementation",
-  "evaluation_profile": "feature-regression-and-parity",
+  "evaluation_profile": "spec-conformant-routing-integration",
   "docs_surfaces": [
     "README.md",
     "CHANGELOG.md"

@@ -85,11 +85,13 @@ function configuredTriggerMode(): NaturalLanguageCookTriggerMode {
 		asString(process.env.PI_COMPLETION_TEST_TRIGGER_MODE)?.toLowerCase() ??
 		asString(process.env.PI_COMPLETION_TRIGGER_MODE)?.toLowerCase() ??
 		"assist";
-	return raw === "off" || raw === "assist" || raw === "auto" ? raw : "assist";
+	return raw === "off" || raw === "assist" || raw === "router" || raw === "auto" ? raw : "assist";
 }
 
-function effectiveTriggerMode(mode: NaturalLanguageCookTriggerMode): "off" | "assist" {
-	return mode === "off" ? "off" : "assist";
+function effectiveTriggerMode(mode: NaturalLanguageCookTriggerMode): "off" | "assist" | "router" {
+	if (mode === "off") return "off";
+	if (mode === "assist") return "assist";
+	return "router";
 }
 
 function triggerRoutingSnapshotPath(): string | undefined {
@@ -526,7 +528,8 @@ export async function handleCookNaturalLanguageTrigger(
 	}, 6);
 	const recentMessages = recentSessionMessages(ctx, 12);
 	const adoptedArtifact = await detectExplicitAdoptedArtifact(event.text, ctx, root, recentMessages);
-	if (!activeWorkflowContext(snapshot) && !hasRecentImplementationContext(recentEntries) && !adoptedArtifact) {
+	const routerMode = mode === "router";
+	if (!routerMode && !activeWorkflowContext(snapshot) && !hasRecentImplementationContext(recentEntries) && !adoptedArtifact) {
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "continue",
@@ -535,7 +538,7 @@ export async function handleCookNaturalLanguageTrigger(
 		}, routingExtrasForArtifact(adoptedArtifact));
 		return { action: "continue" };
 	}
-	if (!looksLikeTriggerCandidate(event.text)) {
+	if (!routerMode && !looksLikeTriggerCandidate(event.text)) {
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "continue",
