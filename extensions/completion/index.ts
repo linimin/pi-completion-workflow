@@ -42,6 +42,7 @@ import {
 	buildContextProposalContinuationReason as buildExtractedContextProposalContinuationReason,
 	buildEvaluationRoleContextLines as buildExtractedEvaluationRoleContextLines,
 	buildEvaluationRoleReminderText as buildExtractedEvaluationRoleReminderText,
+	buildNaturalLanguageHandoffMetadataLines,
 	buildResumeCapsule as buildExtractedResumeCapsule,
 	buildSystemReminder as buildExtractedSystemReminder,
 	maybeWriteContextProposalConfirmationSnapshot,
@@ -78,7 +79,7 @@ import {
 } from "./state-store";
 import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
-import type { CompletionStateSnapshot, CompletionRole, CookTriggerWorkflowBias, JsonRecord, LiveRoleActivity } from "./types";
+import type { CompletionStateSnapshot, CompletionRole, CookNaturalLanguageHandoff, JsonRecord, LiveRoleActivity } from "./types";
 
 const PROTOCOL_ID = "completion";
 const ROLE_NAMES = [
@@ -895,22 +896,9 @@ function completionKickoff(
 	evaluationProfile: string,
 	intent: "auto" | "continue" | "refocus" = "auto",
 	missionAnchor?: string,
-	naturalLanguageHandoff?: {
-		preferredRoutingBias?: CookTriggerWorkflowBias;
-		triggerText?: string;
-		hintText?: string;
-	},
+	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 ): string {
-	const naturalLanguageHandoffBlock = naturalLanguageHandoff
-		? [
-			"Natural-language handoff metadata:",
-			`- source: natural_language_handoff`,
-			`- preferred_routing_bias: ${naturalLanguageHandoff.preferredRoutingBias ?? "unknown"}`,
-			`- trigger_text: ${naturalLanguageHandoff.triggerText ?? "(none)"}`,
-			`- focus_hint: ${naturalLanguageHandoff.hintText ?? "(none)"}`,
-			"",
-		].join("\n")
-		: "";
+	const naturalLanguageHandoffBlock = buildNaturalLanguageHandoffMetadataLines(naturalLanguageHandoff).join("\n");
 	const intentBlock =
 		intent === "continue" && missionAnchor
 			? `Existing canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- Continue the existing workflow.\n- Treat the new user text as supplemental direction unless canonical reconciliation proves the mission itself must change.\n\n`
@@ -923,22 +911,9 @@ function completionKickoff(
 function completionResumePrompt(
 	taskType: string,
 	evaluationProfile: string,
-	naturalLanguageHandoff?: {
-		preferredRoutingBias?: CookTriggerWorkflowBias;
-		triggerText?: string;
-		hintText?: string;
-	},
+	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 ): string {
-	const naturalLanguageHandoffBlock = naturalLanguageHandoff
-		? [
-			"Natural-language handoff metadata:",
-			`- source: natural_language_handoff`,
-			`- preferred_routing_bias: ${naturalLanguageHandoff.preferredRoutingBias ?? "unknown"}`,
-			`- trigger_text: ${naturalLanguageHandoff.triggerText ?? "(none)"}`,
-			`- focus_hint: ${naturalLanguageHandoff.hintText ?? "(none)"}`,
-			"",
-		].join("\n")
-		: "";
+	const naturalLanguageHandoffBlock = buildNaturalLanguageHandoffMetadataLines(naturalLanguageHandoff).join("\n");
 	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\n${naturalLanguageHandoffBlock}Resume instructions:\n- Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 

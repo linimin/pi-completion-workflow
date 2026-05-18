@@ -123,7 +123,7 @@ const ANALYST_HEARTBEAT_MS = 5_000;
 const COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT = [
 	"You classify whether the latest user input should hand control to the canonical /cook workflow before the primary agent starts implementation work.",
 	"Do not emit markdown, code fences, or commentary.",
-	"Return exactly one JSON object with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint.",
+	"Return exactly one JSON object with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint. You may also include optional keys requires_clarification, clarification_slots, and adopted_artifact when clearly supported.",
 	"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
 	"Use offer_workflow only when the latest input is handing control from discussion into workflow execution or explicitly asking to let /cook take over.",
 	"Use normal_prompt for ordinary questions, explanations, or direct requests that should stay with the primary agent.",
@@ -136,6 +136,8 @@ const COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT = [
 	"evidence must be an array of short grounded strings.",
 	"riskFlags must be an array of short machine-readable strings such as ambiguous-approval, possible-normal-agent-request, or active-workflow-refocus-risk.",
 	"focusHint is optional, must stay short, and must never rewrite the workflow mission or invent scope.",
+	"When explicit user adoption of a recent plan or repo markdown artifact is evident, adopted_artifact may describe it with kind recent_plan|repo_markdown, path when known, and basis explicit_user_adoption.",
+	"requires_clarification may be true when chooser-style disambiguation is safer than guessing, and clarification_slots may list short needs such as goal, scope, or non_goal.",
 	"Short acknowledgements like 好, 可以, ok, sure, or 那就這樣 should usually be unclear unless the surrounding context makes the handoff explicit.",
 ].join(" ");
 const COOK_TRIGGER_CLASSIFIER_TIMEOUT_MS = 10_000;

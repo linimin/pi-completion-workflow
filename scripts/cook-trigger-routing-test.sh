@@ -47,6 +47,58 @@ with session_path.open('w', encoding='utf-8') as fh:
 PY
 }
 
+write_mixed_session() {
+  local session_path="$1"
+  local cwd="$2"
+  local assistant_text="$3"
+  local user_text="$4"
+  python3 - "$session_path" "$cwd" "$assistant_text" "$user_text" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+session_path = Path(sys.argv[1])
+cwd = sys.argv[2]
+assistant_text = sys.argv[3]
+user_text = sys.argv[4]
+session_path.parent.mkdir(parents=True, exist_ok=True)
+entries = [
+    {
+        "type": "session",
+        "version": 3,
+        "id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "cwd": cwd,
+    },
+    {
+        "type": "message",
+        "id": "a1b2c3d4",
+        "parentId": None,
+        "timestamp": "2026-01-01T00:00:01.000Z",
+        "message": {
+            "role": "assistant",
+            "content": assistant_text,
+            "timestamp": 1767225601000,
+        },
+    },
+    {
+        "type": "message",
+        "id": "b2c3d4e5",
+        "parentId": "a1b2c3d4",
+        "timestamp": "2026-01-01T00:00:02.000Z",
+        "message": {
+            "role": "user",
+            "content": user_text,
+            "timestamp": 1767225602000,
+        },
+    },
+]
+with session_path.open('w', encoding='utf-8') as fh:
+    for entry in entries:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+}
+
 write_completion_state() {
   local root="$1"
   local mission="$2"
@@ -225,6 +277,7 @@ RESUME_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.94,"workfl
 REFOCUS_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.91,"workflow_bias":"refocus","reason":"The latest input is starting a different workflow direction from recent discussion.","focusHint":"bias-aware resume and refocus offers","evidence":["recent discussion changes the mission","the latest input confirms starting the new direction"],"riskFlags":["active-workflow-refocus-risk"]}'
 NEXT_ROUND_CLASSIFIER_OUTPUT='{"decision":"offer_workflow","confidence":0.92,"workflow_bias":"next_round","reason":"The previous workflow is done and the latest input starts a new implementation round.","focusHint":"next workflow round docs parity","evidence":["canonical workflow is already done","recent discussion defines a new task"],"riskFlags":[]}'
 NORMAL_CLASSIFIER_OUTPUT='{"decision":"normal_prompt","confidence":0.82,"workflow_bias":"unknown","reason":"The latest input is still asking the main agent to explain instead of handing control to /cook.","evidence":["the user is still asking for explanation in the main chat"],"riskFlags":["possible-normal-agent-request"]}'
+UNCLEAR_CLASSIFIER_OUTPUT='{"decision":"unclear","confidence":0.41,"workflow_bias":"unknown","reason":"The latest input looks workflow-related but the safer path is to clarify whether this should resume or refocus the workflow.","focusHint":"bias-aware resume and refocus offers","evidence":["the latest input is a short start-intent acknowledgement","recent discussion suggests a different workflow candidate"],"riskFlags":["ambiguous-approval","multiple_candidate_missions"]}'
 
 # Startup accepted routing should enter the shared /cook flow with natural-language metadata.
 ROUTE_ROOT="$TMPDIR/route-repo"
@@ -537,6 +590,209 @@ assert 'Natural-language handoff metadata:' in prompt, 'next-round handoff shoul
 assert '- preferred_routing_bias: next_round' in prompt, 'next-round handoff should preserve the next_round bias in the shared driver prompt'
 assert '- trigger_text: 開始下一輪' in prompt, 'next-round handoff should preserve the trigger text in the shared driver prompt'
 assert state['mission_anchor'] == mission, 'next-round handoff should start a new mission anchor through the shared /cook entry'
+PY
+
+# Unclear low-confidence commandless inputs should clarify instead of silently falling through.
+UNCLEAR_ROOT="$TMPDIR/unclear-repo"
+UNCLEAR_SESSION="$TMPDIR/unclear-session.jsonl"
+UNCLEAR_PROMPT="$TMPDIR/unclear-driver-prompt.txt"
+UNCLEAR_ROUTING="$TMPDIR/unclear-routing.json"
+UNCLEAR_CLASSIFIER="$TMPDIR/unclear-classifier.json"
+UNCLEAR_CLARIFICATION="$TMPDIR/unclear-clarification.json"
+mkdir -p "$UNCLEAR_ROOT"
+cd "$UNCLEAR_ROOT"
+git init -q
+write_completion_state "$UNCLEAR_ROOT" "$ACTIVE_MISSION" continue false implement completion-implementer "Implement the active workflow slice"
+write_session "$UNCLEAR_SESSION" "$UNCLEAR_ROOT" "$REFOCUS_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$UNCLEAR_PROMPT" \
+PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$REFOCUS_CHOOSER" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$UNCLEAR_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$UNCLEAR_CLASSIFIER" \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_ACTION=refocus \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_PATH="$UNCLEAR_CLARIFICATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$UNCLEAR_ROUTING" \
+pi --session "$UNCLEAR_SESSION" -e "$PKG_ROOT" -p "好，開始做這個" \
+  >"$TMPDIR/pi-cook-trigger-unclear.out" 2>"$TMPDIR/pi-cook-trigger-unclear.err"
+
+python3 - "$UNCLEAR_PROMPT" "$UNCLEAR_ROUTING" "$UNCLEAR_CLASSIFIER" "$UNCLEAR_CLARIFICATION" "$REFOCUS_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+classifier = json.loads(Path(sys.argv[3]).read_text())
+clarification = json.loads(Path(sys.argv[4]).read_text())
+mission = sys.argv[5]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'routed_to_cook', 'unclear commandless routing should resolve through clarification instead of silently continuing'
+assert routing['reason'] == 'clarification_resolved', 'unclear commandless routing should record clarification_resolved'
+assert routing['classificationDecision'] == 'unclear', 'unclear routing should preserve the unclear classifier decision'
+assert routing['clarificationAction'] == 'route_refocus', 'unclear routing should record the selected clarification action'
+assert routing['clarificationSelectedBias'] == 'refocus', 'unclear routing should preserve the clarification-selected routing bias'
+assert routing['clarificationGoal'] == mission, 'unclear routing should preserve the clarified mission goal'
+assert classifier['result']['classification']['decision'] == 'unclear', 'unclear classifier snapshot should preserve the unclear decision'
+assert clarification['title'] == 'Clarify how the completion workflow should proceed', 'unclear routing should show the clarification chooser'
+assert clarification['actions'][0]['id'] == 'route_resume', 'unclear active workflow clarification should offer resume first'
+assert clarification['actions'][1]['id'] == 'route_refocus', 'unclear active workflow clarification should offer refocus'
+assert 'Natural-language handoff metadata:' in prompt, 'clarified commandless routing should still pass structured handoff metadata into the shared driver prompt'
+assert '- clarification_selected_bias: refocus' in prompt, 'clarified commandless routing should carry clarification bias into the shared driver prompt'
+assert f'- clarification_goal: {mission}' in prompt, 'clarified commandless routing should carry the clarified mission goal into the shared driver prompt'
+assert state['mission_anchor'] == mission, 'clarified refocus routing should still rewrite canonical state only through the shared /cook entry'
+PY
+
+# Clarification cancel should fail closed without replaying the original message or rewriting canonical state.
+UNCLEAR_CANCEL_ROOT="$TMPDIR/unclear-cancel-repo"
+UNCLEAR_CANCEL_SESSION="$TMPDIR/unclear-cancel-session.jsonl"
+UNCLEAR_CANCEL_PROMPT="$TMPDIR/unclear-cancel-driver-prompt.txt"
+UNCLEAR_CANCEL_ROUTING="$TMPDIR/unclear-cancel-routing.json"
+UNCLEAR_CANCEL_CLARIFICATION="$TMPDIR/unclear-cancel-clarification.json"
+mkdir -p "$UNCLEAR_CANCEL_ROOT"
+cd "$UNCLEAR_CANCEL_ROOT"
+git init -q
+write_completion_state "$UNCLEAR_CANCEL_ROOT" "$ACTIVE_MISSION" continue false implement completion-implementer "Implement the active workflow slice"
+write_session "$UNCLEAR_CANCEL_SESSION" "$UNCLEAR_CANCEL_ROOT" "$REFOCUS_DISCUSSION"
+
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$UNCLEAR_CANCEL_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$UNCLEAR_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_ACTION=cancel \
+PI_COMPLETION_TEST_TRIGGER_CLARIFICATION_PATH="$UNCLEAR_CANCEL_CLARIFICATION" \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$UNCLEAR_CANCEL_ROUTING" \
+pi --session "$UNCLEAR_CANCEL_SESSION" -e "$PKG_ROOT" -p "好，開始做這個" \
+  >"$TMPDIR/pi-cook-trigger-unclear-cancel.out" 2>"$TMPDIR/pi-cook-trigger-unclear-cancel.err"
+
+python3 - "$UNCLEAR_CANCEL_ROUTING" "$UNCLEAR_CANCEL_PROMPT" "$TMPDIR/pi-cook-trigger-unclear-cancel.out" "$TMPDIR/pi-cook-trigger-unclear-cancel.err" "$ACTIVE_MISSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+routing = json.loads(Path(sys.argv[1]).read_text())
+driver_prompt = Path(sys.argv[2])
+output = Path(sys.argv[3]).read_text() + Path(sys.argv[4]).read_text()
+mission = sys.argv[5]
+state = json.loads(Path('.agent/state.json').read_text())
+
+assert routing['action'] == 'handled', 'clarification cancel should fail closed instead of continuing to the main agent'
+assert routing['reason'] == 'user_cancelled_clarification', 'clarification cancel should record the user_cancelled_clarification reason'
+assert routing['clarificationAction'] == 'cancel', 'clarification cancel should record the cancel action'
+assert not driver_prompt.exists(), 'clarification cancel should not queue a /cook driver prompt'
+assert 'rerun /cook explicitly' in output, 'clarification cancel should direct the user back to explicit /cook when needed'
+assert state['mission_anchor'] == mission, 'clarification cancel should keep canonical state unchanged'
+PY
+
+# Explicit adoption of a recent assistant plan should carry adopted context into the shared /cook entry.
+ADOPTED_PLAN_ROOT="$TMPDIR/adopted-plan-repo"
+ADOPTED_PLAN_SESSION="$TMPDIR/adopted-plan-session.jsonl"
+ADOPTED_PLAN_PROMPT="$TMPDIR/adopted-plan-driver-prompt.txt"
+ADOPTED_PLAN_ROUTING="$TMPDIR/adopted-plan-routing.json"
+mkdir -p "$ADOPTED_PLAN_ROOT"
+cd "$ADOPTED_PLAN_ROOT"
+git init -q
+write_mixed_session "$ADOPTED_PLAN_SESSION" "$ADOPTED_PLAN_ROOT" "$STARTUP_DISCUSSION" "$STARTUP_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$ADOPTED_PLAN_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$ADOPTED_PLAN_ROUTING" \
+pi --session "$ADOPTED_PLAN_SESSION" -e "$PKG_ROOT" -p "就照剛剛那份方案做" \
+  >"$TMPDIR/pi-cook-trigger-adopted-plan.out" 2>"$TMPDIR/pi-cook-trigger-adopted-plan.err"
+
+python3 - "$ADOPTED_PLAN_PROMPT" "$ADOPTED_PLAN_ROUTING" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+
+assert routing['adoptedArtifactKind'] == 'recent_plan', 'explicit adoption of the recent assistant plan should surface as a recent_plan artifact'
+assert routing['adoptedArtifactBasis'] == 'explicit_user_adoption', 'adopted recent plans should preserve the explicit_user_adoption basis'
+assert '- adopted_artifact_kind: recent_plan' in prompt, 'adopted recent plans should be forwarded into the shared /cook entry metadata'
+assert '- adopted_artifact_basis: explicit_user_adoption' in prompt, 'adopted recent plans should preserve their trust-boundary basis in the shared driver prompt'
+assert '- adopted_artifact_title: latest discussed assistant plan' in prompt, 'adopted recent plans should include the adopted artifact title in the shared driver prompt'
+assert '- adopted_artifact_preview:' in prompt, 'adopted recent plans should include preview context in the shared driver prompt'
+PY
+
+# Explicit adoption of a repo markdown artifact should carry the path into the shared /cook entry.
+ADOPTED_MD_ROOT="$TMPDIR/adopted-md-repo"
+ADOPTED_MD_SESSION="$TMPDIR/adopted-md-session.jsonl"
+ADOPTED_MD_PROMPT="$TMPDIR/adopted-md-driver-prompt.txt"
+ADOPTED_MD_ROUTING="$TMPDIR/adopted-md-routing.json"
+mkdir -p "$ADOPTED_MD_ROOT/docs"
+cd "$ADOPTED_MD_ROOT"
+git init -q
+cat > docs/plan.md <<'EOF'
+# Plan
+
+Mission: Route natural-language handoff into the shared /cook entry.
+EOF
+write_session "$ADOPTED_MD_SESSION" "$ADOPTED_MD_ROOT" "$STARTUP_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$ADOPTED_MD_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$ADOPTED_MD_ROUTING" \
+pi --session "$ADOPTED_MD_SESSION" -e "$PKG_ROOT" -p "照 docs/plan.md 開始" \
+  >"$TMPDIR/pi-cook-trigger-adopted-md.out" 2>"$TMPDIR/pi-cook-trigger-adopted-md.err"
+
+python3 - "$ADOPTED_MD_PROMPT" "$ADOPTED_MD_ROUTING" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+
+assert routing['adoptedArtifactKind'] == 'repo_markdown', 'explicit adoption of a repo markdown artifact should surface as repo_markdown'
+assert routing['adoptedArtifactPath'] == 'docs/plan.md', 'repo markdown adoption should preserve the adopted path'
+assert '- adopted_artifact_kind: repo_markdown' in prompt, 'repo markdown adoption should be forwarded into the shared /cook entry metadata'
+assert '- adopted_artifact_path: docs/plan.md' in prompt, 'repo markdown adoption should preserve the adopted path in the shared driver prompt'
+PY
+
+# Unadopted assistant plans should remain background only and should not be elevated into handoff context.
+UNADOPTED_PLAN_ROOT="$TMPDIR/unadopted-plan-repo"
+UNADOPTED_PLAN_SESSION="$TMPDIR/unadopted-plan-session.jsonl"
+UNADOPTED_PLAN_PROMPT="$TMPDIR/unadopted-plan-driver-prompt.txt"
+UNADOPTED_PLAN_ROUTING="$TMPDIR/unadopted-plan-routing.json"
+mkdir -p "$UNADOPTED_PLAN_ROOT"
+cd "$UNADOPTED_PLAN_ROOT"
+git init -q
+write_mixed_session "$UNADOPTED_PLAN_SESSION" "$UNADOPTED_PLAN_ROOT" "$STARTUP_DISCUSSION" "$STARTUP_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$UNADOPTED_PLAN_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$UNADOPTED_PLAN_ROUTING" \
+pi --session "$UNADOPTED_PLAN_SESSION" -e "$PKG_ROOT" -p "開始做" \
+  >"$TMPDIR/pi-cook-trigger-unadopted-plan.out" 2>"$TMPDIR/pi-cook-trigger-unadopted-plan.err"
+
+python3 - "$UNADOPTED_PLAN_PROMPT" "$UNADOPTED_PLAN_ROUTING" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+
+assert routing['adoptedArtifactKind'] is None, 'unadopted assistant plans must stay background-only in routing snapshots'
+assert '- adopted_artifact_kind:' not in prompt, 'unadopted assistant plans must not be elevated into the shared /cook handoff metadata'
 PY
 
 # Extension-originated turns should bypass natural-language routing and continue unchanged.

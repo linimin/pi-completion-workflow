@@ -101,9 +101,23 @@ export type CookTriggerClassification = {
 };
 
 export type CookTriggerConfirmationAction = "start_workflow" | "keep_chatting" | "cancel";
+export type CookTriggerClarificationAction =
+	| "route_startup"
+	| "route_resume"
+	| "route_refocus"
+	| "route_next_round"
+	| "keep_chatting"
+	| "cancel";
+export type CookTriggerAdoptedArtifactKind = "recent_plan" | "repo_markdown";
 
 export type CookTriggerConfirmationActionItem = {
 	id: CookTriggerConfirmationAction;
+	label: string;
+	description: string;
+};
+
+export type CookTriggerClarificationActionItem = {
+	id: CookTriggerClarificationAction;
 	label: string;
 	description: string;
 };
@@ -119,6 +133,45 @@ export type CookTriggerConfirmationLayout = {
 	focusHintBody?: string;
 	actionsHeading: string;
 	actions: CookTriggerConfirmationActionItem[];
+	footer: string;
+};
+
+export type CookTriggerClarificationCapsule = {
+	goal?: string;
+	scope?: string[];
+	nonGoal?: string[];
+	doneWhen?: string[];
+	selectedWorkflowBias: CookTriggerWorkflowBias;
+	reason: string;
+};
+
+export type CookTriggerAdoptedArtifact = {
+	kind: CookTriggerAdoptedArtifactKind;
+	basis: "explicit_user_adoption";
+	title: string;
+	path?: string;
+	preview?: string;
+};
+
+export type CookNaturalLanguageHandoff = {
+	preferredRoutingBias?: CookTriggerWorkflowBias;
+	triggerText?: string;
+	hintText?: string;
+	clarificationCapsule?: CookTriggerClarificationCapsule;
+	adoptedArtifact?: CookTriggerAdoptedArtifact;
+};
+
+export type CookTriggerClarificationLayout = {
+	title: string;
+	intro: string;
+	currentMissionHeading?: string;
+	currentMissionBody?: string;
+	candidateMissionHeading?: string;
+	candidateMissionBody?: string;
+	adoptedArtifactHeading?: string;
+	adoptedArtifactBody?: string;
+	actionsHeading: string;
+	actions: CookTriggerClarificationActionItem[];
 	footer: string;
 };
 

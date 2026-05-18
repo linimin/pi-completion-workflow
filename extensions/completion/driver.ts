@@ -12,7 +12,7 @@ import {
 	loadCompletionSnapshot,
 	writeJsonFile,
 } from "./state-store";
-import type { CompletionStateSnapshot, CookTriggerWorkflowBias } from "./types";
+import type { CompletionStateSnapshot, CookNaturalLanguageHandoff, CookTriggerWorkflowBias } from "./types";
 
 type ContextProposalAnalysis = {
 	taskType?: string;
@@ -104,20 +104,12 @@ export type CompletionDriverDeps = {
 		evaluationProfile: string,
 		intent?: "auto" | "continue" | "refocus",
 		missionAnchor?: string,
-		naturalLanguageHandoff?: {
-			preferredRoutingBias?: CookTriggerWorkflowBias;
-			triggerText?: string;
-			hintText?: string;
-		},
+		naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 	) => string;
 	completionResumePrompt: (
 		taskType: string,
 		evaluationProfile: string,
-		naturalLanguageHandoff?: {
-			preferredRoutingBias?: CookTriggerWorkflowBias;
-			triggerText?: string;
-			hintText?: string;
-		},
+		naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 	) => string;
 	deriveCookContextProposal: (ctx: DriverContext, projectName: string, hintText?: string) => Promise<ContextProposal | undefined>;
 	confirmContextProposal: (
@@ -387,11 +379,7 @@ async function resumeActiveWorkflowFromCanonicalState(
 	ctx: { cwd: string; hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
 	deps: CompletionDriverDeps,
-	naturalLanguageHandoff?: {
-		preferredRoutingBias?: CookTriggerWorkflowBias;
-		triggerText?: string;
-		hintText?: string;
-	},
+	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 ): Promise<void> {
 	const mission = currentMissionAnchor(snapshot);
 	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
@@ -560,7 +548,28 @@ export type RunCookEntryOptions = {
 	originalInput?: string;
 	triggerText?: string;
 	preferredRoutingBias?: CookTriggerWorkflowBias;
+	clarificationCapsule?: CookNaturalLanguageHandoff["clarificationCapsule"];
+	adoptedArtifact?: CookNaturalLanguageHandoff["adoptedArtifact"];
 };
+
+function buildNaturalLanguageDerivationHint(handoff: CookNaturalLanguageHandoff | undefined): string | undefined {
+	if (!handoff) return undefined;
+	const lines: string[] = [];
+	if (handoff.hintText) lines.push(`Focus hint: ${handoff.hintText}`);
+	if (handoff.clarificationCapsule?.goal) lines.push(`Clarified goal: ${handoff.clarificationCapsule.goal}`);
+	if (handoff.clarificationCapsule?.scope?.length) lines.push(`Clarified scope: ${handoff.clarificationCapsule.scope.join(" | ")}`);
+	if (handoff.clarificationCapsule?.nonGoal?.length) lines.push(`Clarified non-goal: ${handoff.clarificationCapsule.nonGoal.join(" | ")}`);
+	if (handoff.clarificationCapsule?.doneWhen?.length) lines.push(`Clarified done-when: ${handoff.clarificationCapsule.doneWhen.join(" | ")}`);
+	if (handoff.clarificationCapsule?.selectedWorkflowBias) {
+		lines.push(`Clarified routing bias: ${handoff.clarificationCapsule.selectedWorkflowBias}`);
+	}
+	if (handoff.adoptedArtifact) {
+		lines.push(`User explicitly adopted artifact: ${handoff.adoptedArtifact.title}`);
+		if (handoff.adoptedArtifact.path) lines.push(`Adopted artifact path: ${handoff.adoptedArtifact.path}`);
+		if (handoff.adoptedArtifact.preview) lines.push(`Adopted artifact preview: ${handoff.adoptedArtifact.preview}`);
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
 
 export async function runCookEntry(
 	pi: ExtensionAPI,
@@ -568,15 +577,18 @@ export async function runCookEntry(
 	deps: CompletionDriverDeps,
 	options: RunCookEntryOptions,
 ): Promise<void> {
-	const explicitHint = options.hintText?.trim() ? options.hintText.trim() : undefined;
 	const naturalLanguageHandoff =
 		options.origin === "natural-language-trigger"
 			? {
 				preferredRoutingBias: options.preferredRoutingBias,
 				triggerText: options.triggerText?.trim() ? options.triggerText.trim() : options.originalInput?.trim() ? options.originalInput.trim() : undefined,
-				hintText: explicitHint,
+				hintText: options.hintText?.trim() ? options.hintText.trim() : undefined,
+				clarificationCapsule: options.clarificationCapsule,
+				adoptedArtifact: options.adoptedArtifact,
 			}
 			: undefined;
+	const derivationHint = buildNaturalLanguageDerivationHint(naturalLanguageHandoff);
+	const explicitHint = [options.hintText?.trim(), derivationHint].filter((value): value is string => Boolean(value)).join("\n\n") || undefined;
 	let goal: string | undefined;
 	const cwd = deps.getCtxCwd(ctx);
 	let snapshot = await loadCompletionSnapshot(cwd);

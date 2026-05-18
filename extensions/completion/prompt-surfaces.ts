@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
 	CompletionStateSnapshot,
+	CookNaturalLanguageHandoff,
+	CookTriggerAdoptedArtifact,
+	CookTriggerClarificationActionItem,
+	CookTriggerClarificationLayout,
 	CookTriggerClassification,
 	CookTriggerConfirmationActionItem,
 	CookTriggerConfirmationLayout,
@@ -213,7 +217,7 @@ export function buildCookTriggerClassifierPrompt(args: {
 	const lines = [
 		`Project: ${args.projectName}`,
 		"Classify whether the current input is a natural-language handoff to the canonical /cook workflow before the primary agent starts implementation work.",
-		"Return JSON only with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint.",
+		"Return JSON only with keys: decision, confidence, workflow_bias, reason, evidence, riskFlags, focusHint. You may also include optional keys requires_clarification, clarification_slots, and adopted_artifact when clearly supported.",
 		"decision must be exactly one of offer_workflow, normal_prompt, or unclear.",
 		"Use offer_workflow only when the user is handing control from recent discussion into workflow execution or explicitly asking to let /cook take over.",
 		"Use normal_prompt for ordinary questions, explanations, or direct agent requests that should stay in the main chat.",
@@ -222,6 +226,8 @@ export function buildCookTriggerClassifierPrompt(args: {
 		"Use startup when there is no active workflow yet, resume when the user is clearly continuing the current workflow, refocus when the user is clearly switching the active workflow to a different goal, and next_round when the previous workflow is done and the user is starting a new round.",
 		"When decision is not offer_workflow, prefer workflow_bias=unknown unless a stronger routing hint is still useful for later debugging.",
 		"focusHint is optional, must stay short, and must never rewrite the workflow mission or invent scope.",
+		"When explicit user adoption of a recent plan or repo markdown artifact is evident, adopted_artifact may describe it with kind recent_plan|repo_markdown, path when known, and basis explicit_user_adoption.",
+		"requires_clarification may be true when chooser-style disambiguation is safer than guessing, and clarification_slots may list short needs such as goal, scope, or non_goal.",
 		"evidence and riskFlags must be arrays of short grounded strings.",
 	];
 	if (args.workflowContextLines?.length) lines.push("", "Canonical workflow context:", ...args.workflowContextLines);
@@ -351,6 +357,82 @@ export function buildCookTriggerConfirmationActions(
 	return [copy.startAction, copy.keepChatting, copy.cancel];
 }
 
+function summarizeAdoptedArtifact(adoptedArtifact: CookTriggerAdoptedArtifact | undefined): string | undefined {
+	if (!adoptedArtifact) return undefined;
+	const lines = [
+		`- kind: ${adoptedArtifact.kind}`,
+		`- basis: ${adoptedArtifact.basis}`,
+		`- title: ${adoptedArtifact.title}`,
+	];
+	if (adoptedArtifact.path) lines.push(`- path: ${adoptedArtifact.path}`);
+	if (adoptedArtifact.preview) lines.push(`- preview: ${adoptedArtifact.preview}`);
+	return lines.join("\n");
+}
+
+export function buildCookTriggerClarificationLayout(args: {
+	currentMission?: string;
+	candidateMission?: string;
+	workflowBiases: CookTriggerWorkflowBias[];
+	mainChatRerunGuidance: string;
+	adoptedArtifact?: CookTriggerAdoptedArtifact;
+}): CookTriggerClarificationLayout {
+	const actions: CookTriggerClarificationActionItem[] = [];
+	if (args.workflowBiases.includes("startup")) {
+		actions.push({
+			id: "route_startup",
+			label: "Start workflow",
+			description: "Treat this as a startup handoff into the shared /cook workflow from the recent discussion.",
+		});
+	}
+	if (args.workflowBiases.includes("resume")) {
+		actions.push({
+			id: "route_resume",
+			label: "Resume workflow",
+			description: "Keep the current canonical mission and resume the active workflow through the shared /cook entry.",
+		});
+	}
+	if (args.workflowBiases.includes("refocus")) {
+		actions.push({
+			id: "route_refocus",
+			label: "Refocus from recent discussion",
+			description: "Route into the shared /cook entry and keep its existing chooser + approval flow before any canonical state rewrite.",
+		});
+	}
+	if (args.workflowBiases.includes("next_round")) {
+		actions.push({
+			id: "route_next_round",
+			label: "Start next round",
+			description: "Treat this as a next-round handoff into the shared /cook entry after the finished workflow.",
+		});
+	}
+	actions.push(
+		{
+			id: "keep_chatting",
+			label: "Keep chatting",
+			description: "Dismiss this clarification without routing or replaying the original start-intent message.",
+		},
+		{
+			id: "cancel",
+			label: "Cancel",
+			description: `Stop here without routing or replaying the original message. ${args.mainChatRerunGuidance}`,
+		},
+	);
+	return {
+		title: "Clarify how the completion workflow should proceed",
+		intro:
+			"This start-intent looks workflow-related, but not enough to safely choose startup, resume, refocus, or next-round automatically. Pick the minimal next step or cancel without changing canonical workflow state.",
+		currentMissionHeading: args.currentMission ? "Current mission" : undefined,
+		currentMissionBody: args.currentMission,
+		candidateMissionHeading: args.candidateMission ? "Recent-discussion candidate" : undefined,
+		candidateMissionBody: args.candidateMission,
+		adoptedArtifactHeading: args.adoptedArtifact ? "Adopted artifact" : undefined,
+		adoptedArtifactBody: summarizeAdoptedArtifact(args.adoptedArtifact),
+		actionsHeading: "Actions",
+		actions,
+		footer: "↑↓ navigate • enter select • esc cancel",
+	};
+}
+
 export function buildCookTriggerAssistConfirmationLayout(args: {
 	classification: CookTriggerClassification;
 	mainChatRerunGuidance: string;
@@ -387,8 +469,56 @@ export function maybeWriteCookTriggerConfirmationSnapshot(
 	writeJsonSnapshot(snapshotPath, layout);
 }
 
+export function maybeWriteCookTriggerClarificationSnapshot(
+	layout: CookTriggerClarificationLayout,
+	snapshotPath: string | undefined,
+): void {
+	writeJsonSnapshot(snapshotPath, layout);
+}
+
 export function maybeWriteCookTriggerRoutingSnapshot(snapshot: Record<string, unknown>, snapshotPath: string | undefined): void {
 	writeJsonSnapshot(snapshotPath, snapshot);
+}
+
+function buildNaturalLanguageHandoffArtifactLines(adoptedArtifact: CookTriggerAdoptedArtifact | undefined): string[] {
+	if (!adoptedArtifact) return [];
+	const lines = [
+		`- adopted_artifact_kind: ${adoptedArtifact.kind}`,
+		`- adopted_artifact_basis: ${adoptedArtifact.basis}`,
+		`- adopted_artifact_title: ${adoptedArtifact.title}`,
+	];
+	if (adoptedArtifact.path) lines.push(`- adopted_artifact_path: ${adoptedArtifact.path}`);
+	if (adoptedArtifact.preview) lines.push(`- adopted_artifact_preview: ${adoptedArtifact.preview}`);
+	return lines;
+}
+
+function buildNaturalLanguageHandoffClarificationLines(
+	clarificationCapsule: CookNaturalLanguageHandoff["clarificationCapsule"] | undefined,
+): string[] {
+	if (!clarificationCapsule) return [];
+	const lines = [
+		`- clarification_selected_bias: ${clarificationCapsule.selectedWorkflowBias}`,
+		`- clarification_reason: ${clarificationCapsule.reason}`,
+	];
+	if (clarificationCapsule.goal) lines.push(`- clarification_goal: ${clarificationCapsule.goal}`);
+	if (clarificationCapsule.scope?.length) lines.push(`- clarification_scope: ${clarificationCapsule.scope.join(" | ")}`);
+	if (clarificationCapsule.nonGoal?.length) lines.push(`- clarification_non_goal: ${clarificationCapsule.nonGoal.join(" | ")}`);
+	if (clarificationCapsule.doneWhen?.length) lines.push(`- clarification_done_when: ${clarificationCapsule.doneWhen.join(" | ")}`);
+	return lines;
+}
+
+export function buildNaturalLanguageHandoffMetadataLines(handoff: CookNaturalLanguageHandoff | undefined): string[] {
+	if (!handoff) return [];
+	return [
+		"Natural-language handoff metadata:",
+		`- source: natural_language_handoff`,
+		`- preferred_routing_bias: ${handoff.preferredRoutingBias ?? "unknown"}`,
+		`- trigger_text: ${handoff.triggerText ?? "(none)"}`,
+		`- focus_hint: ${handoff.hintText ?? "(none)"}`,
+		...buildNaturalLanguageHandoffArtifactLines(handoff.adoptedArtifact),
+		...buildNaturalLanguageHandoffClarificationLines(handoff.clarificationCapsule),
+		"",
+	];
 }
 
 export function buildContextProposalConfirmationSelectItems(layout: ContextProposalConfirmationLayout) {
