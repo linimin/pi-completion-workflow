@@ -2,7 +2,7 @@
 
 `/cook` turns main-chat discussion about concrete repo changes into a resumable repo workflow stored in repo-local `.agent/**` state.
 
-Assist-mode natural-language handoff can also offer to enter that same `/cook` flow before the primary agent starts implementation work, but `/cook` remains the canonical workflow boundary.
+Natural-language routing is optional and shipped in three modes: `off` disables it, `assist` offers short confirm-first handoffs after clear workflow discussion, and `router` reviews each non-bypass user turn before implementation starts while leaving ordinary questions in the main chat. In every mode, `/cook` remains the canonical workflow boundary and manual fallback.
 
 ## Use it when
 
@@ -46,9 +46,10 @@ Then run `/reload` in Pi.
 |---|---|
 | Start a long-running task | Discuss the concrete repo change in the main chat, then run `/cook` |
 | Bias mission detection toward one intent | Run `/cook <hint>` |
-| Hand off from discussion into the same `/cook` flow | Say `開始做`, `開始實作`, or `go ahead`, then accept the confirmation |
+| Change natural-language routing behavior | Set `PI_COMPLETION_TRIGGER_MODE=off`, `assist`, or `router` before starting Pi |
+| Hand off from discussion into the same `/cook` flow | In `assist`, say `開始做`, `開始實作`, or `go ahead`, then accept the confirmation |
 | Continue the current workflow | Run `/cook` |
-| Use the canonical fallback when the natural-language trigger does not fire | Run `/cook` explicitly |
+| Use the canonical fallback when natural-language routing does not fire or you want to bypass it | Run `/cook` explicitly |
 
 ## What `/cook` expects
 
@@ -60,15 +61,20 @@ Then run `/reload` in Pi.
 
 If recent discussion is missing, weak, ambiguous, assistant-produced, or only describes planning artifacts instead of concrete repo changes, `/cook` fails closed, leaves canonical `.agent/**` state unchanged, and tells you to clarify the mission in the main chat before rerunning `/cook`.
 
-## Natural-language handoff (assist mode)
+## Natural-language routing modes
 
-After you have discussed a concrete repo change in the main chat, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.
+Set `PI_COMPLETION_TRIGGER_MODE` before starting Pi if you want to change how natural-language routing behaves:
+
+- `off` — natural-language routing is disabled. Only explicit `/cook` or `/cook <hint>` can enter the workflow.
+- `assist` *(default)* — after clear discussion of a concrete repo change, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.
+- `router` — the workflow-aware router reviews each non-bypass normal user turn before implementation starts. Ordinary questions stay in the main chat, while direct start/resume/refocus/next-round prompts can offer the shared `/cook` flow with confirmation or clarification.
 
 Important behavior:
-- the handoff is only a shortcut into `/cook`; `/cook` is still the canonical workflow boundary
-- it asks for confirmation before `/cook` takes over
-- if the trigger is unclear or unavailable, nothing is auto-started and you can run `/cook` explicitly
-- ordinary questions and explicit slash commands continue normally
+- natural-language routing is only a shortcut into `/cook`; `/cook` is still the canonical workflow boundary and manual fallback
+- startup, refocus, and next-round routing stay confirm-first; nothing silently starts a workflow
+- unclear router offers and classifier recovery stay fail-closed
+- in router mode, the original message only reaches the normal chat path if you explicitly choose **Send as normal chat**
+- explicit slash commands and ordinary main-chat questions continue normally unless you choose the workflow boundary
 
 ## Typical examples
 
@@ -94,7 +100,7 @@ We should implement the natural-language routing path next.
 
 ## What happens when you run `/cook`
 
-`/cook` supports both bare discussion-driven startup and optional inline intent hints. Assist-mode natural-language handoff is optional; explicit `/cook` is always the canonical fallback.
+`/cook` supports both bare discussion-driven startup and optional inline intent hints. Explicit `/cook` is always the canonical fallback, even when natural-language routing is enabled in `assist` or `router` mode.
 
 | Repo state | What you'll see |
 |---|---|
@@ -110,6 +116,7 @@ We should implement the natural-language routing path next.
 - actions are **Start** and **Cancel**
 - **Cancel** is side-effect free: discuss changes in the main chat and rerun `/cook`
 - weak, ambiguous, assistant-produced, or planning-only discussion does not start a workflow
+- router-mode false positives and classifier failures stay fail-closed unless you explicitly choose **Send as normal chat**
 - when recent discussion suggests a different workflow, `/cook` shows a chooser before any canonical state rewrite
 
 When you accept startup or refocus, `/cook` persists the chosen workflow state in canonical `.agent/**` files before the re-ground round begins.
@@ -260,7 +267,7 @@ npm run rubric-contract-test
 npm run release-check
 ```
 
-`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then asserts the shipped single-command `/cook` public parity surfaces in `README.md`, `CHANGELOG.md`, and the `/cook` help/fail-closed copy in `extensions/completion/index.ts`, reruns `bash ./scripts/cook-trigger-routing-test.sh` for the assist-mode natural-language handoff path, reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
+`npm run release-check` is the broad packaged-release verifier. It begins with `bash .agent/verify_completion_control_plane.sh`, so missing or stale `.agent/verification-evidence.json` parity fails closed before the broader suite runs, then asserts the shipped `/cook` public parity surfaces in `README.md`, `CHANGELOG.md`, and the `/cook` help/fail-closed copy in `extensions/completion/index.ts`, reruns `bash ./scripts/cook-trigger-routing-test.sh` for workflow-aware router coverage including explicit **Send as normal chat** recovery, reruns the startup/refocus/context checks — including the critique-aware `/cook` confirmation regression and the smoke auto-resume prompt path — includes deterministic canonical evidence artifact coverage and includes deterministic active-slice contract coverage plus observability coverage, evaluator calibration, and the rubric-contract regression, and finishes with `npm pack --dry-run`.
 
 The direct package-root verifier commands above intentionally self-isolate the repo-local extension when they shell back into `pi`, so you should not need to wrap them with `pi --no-extensions` even if `@linimin/pi-letscook` is also installed globally on the same machine.
 

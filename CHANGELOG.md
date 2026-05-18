@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- updated README/help/release parity copy to describe the shipped `off` / `assist` / `router` natural-language routing behavior truthfully while keeping `/cook` as the canonical confirm-first workflow boundary and manual fallback
+- documented the explicit router-mode **Send as normal chat** recovery path as a user choice, not as a silent downgrade, and kept public copy scoped to currently shipped router behavior rather than future auto-mode plans
+- made `npm run release-check` fail closed on the shipped workflow-aware router docs/help contract while continuing to rerun `bash ./scripts/cook-trigger-routing-test.sh` alongside the existing `/cook` smoke/refocus/context regressions
+
 ## 0.1.51
 
 ### Added

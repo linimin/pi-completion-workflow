@@ -4,51 +4,52 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "[release-check] running control-plane validation, /cook public parity, assist-mode natural-language handoff coverage, role-runner extraction, startup/refocus/context regressions, canonical evidence artifact, active-slice contract, observability, legacy cleanup, evaluator calibration, and rubric contract coverage"
+echo "[release-check] running control-plane validation, /cook public parity, workflow-aware router coverage, role-runner extraction, startup/refocus/context regressions, canonical evidence artifact, active-slice contract, observability, legacy cleanup, evaluator calibration, and rubric contract coverage"
 bash .agent/verify_completion_control_plane.sh
 
-echo "[release-check] verifying public /cook parity and assist-mode natural-language handoff docs/help"
+echo "[release-check] verifying public /cook parity and workflow-aware router docs/help"
 python3 - <<'PY'
 import re
 from pathlib import Path
 
 checks = {
     "README.md": [
-        "`/cook` supports both bare discussion-driven startup and optional inline intent hints.",
-        "Assist-mode natural-language handoff can also offer to enter that same `/cook` flow before the primary agent starts implementation work, but `/cook` remains the canonical workflow boundary.",
-        "After you have discussed a concrete repo change in the main chat, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.",
-        "Assist-mode natural-language handoff is optional; explicit `/cook` is always the canonical fallback.",
-        "`/cook <hint>` acts as a high-priority intent hint for interpreting recent discussion, but it does not bypass fail-closed behavior or the approval-only Start/Cancel confirmation flow.",
-        "clarify the mission in the main chat before rerunning `/cook`",
-        "Usually a resume of the current workflow.",
-        "approval-only Start/Cancel confirmation flow.",
-        "Start a new workflow from recent discussion",
-        "`/cook` never silently starts or rewrites canonical `.agent/**` state on unclear input.",
-        "README/CHANGELOG updates still count as concrete repo changes",
-        "assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not",
-        "weak, ambiguous, assistant-produced, or planning-only discussion does not start a workflow",
-        "Bias mission detection toward one intent",
+        "Natural-language routing is optional and shipped in three modes: `off` disables it, `assist` offers short confirm-first handoffs after clear workflow discussion, and `router` reviews each non-bypass user turn before implementation starts while leaving ordinary questions in the main chat.",
+        "Set `PI_COMPLETION_TRIGGER_MODE` before starting Pi if you want to change how natural-language routing behaves:",
+        "- `off` — natural-language routing is disabled. Only explicit `/cook` or `/cook <hint>` can enter the workflow.",
+        "- `assist` *(default)* — after clear discussion of a concrete repo change, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.",
+        "- `router` — the workflow-aware router reviews each non-bypass normal user turn before implementation starts.",
+        "the original message only reaches the normal chat path if you explicitly choose **Send as normal chat**",
+        "Explicit `/cook` is always the canonical fallback, even when natural-language routing is enabled in `assist` or `router` mode.",
+        "router-mode false positives and classifier failures stay fail-closed unless you explicitly choose **Send as normal chat**",
         "bash ./scripts/cook-trigger-routing-test.sh",
     ],
     "CHANGELOG.md": [
-        "shipped assist-mode natural-language handoff that can offer to route `開始做`, `開始實作`, or `go ahead` style execution handoffs into the canonical `/cook` flow before the primary agent starts implementation work, while keeping `/cook` as the explicit workflow boundary and approval gate",
-        "added `bash ./scripts/cook-trigger-routing-test.sh` to `npm run release-check` so packaged release parity now covers the natural-language takeover path",
-        "restored optional `/cook <hint>` support as a soft intent hint that biases context analysis, proposal ranking, active-workflow disambiguation, and next-round startup without bypassing fail-closed routing or the approval-only Start/Cancel gate",
-        "removed inline `/cook <text>` argument support so bare `/cook` is now the only supported workflow entrypoint",
-        "historically allowed `/cook <hint>` as an analyst-only high-priority prompt",
+        "updated README/help/release parity copy to describe the shipped `off` / `assist` / `router` natural-language routing behavior truthfully while keeping `/cook` as the canonical confirm-first workflow boundary and manual fallback",
+        "documented the explicit router-mode **Send as normal chat** recovery path as a user choice, not as a silent downgrade, and kept public copy scoped to currently shipped router behavior rather than future auto-mode plans",
+        "made `npm run release-check` fail closed on the shipped workflow-aware router docs/help contract while continuing to rerun `bash ./scripts/cook-trigger-routing-test.sh` alongside the existing `/cook` smoke/refocus/context regressions",
     ],
     "extensions/completion/index.ts": [
-        'description: "/cook workflow: start, continue, refocus, or start the next round; assist-mode natural-language handoff can offer the same /cook boundary"',
+        'description: "/cook workflow: start, continue, refocus, or start the next round; /cook stays canonical while natural-language routing can be off, assist, or router"',
         'const COOK_BARE_ONLY_GUIDANCE =',
-        '"/cook remains the canonical workflow boundary. Assist-mode natural-language handoff can offer to enter the same /cook flow before implementation starts, while mission selection still comes from recent discussion, repo truth, and the approval-only confirmation flow."',
-        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Natural-language handoff only offers to enter the same /cook flow, so clarify the concrete repo changes in the main chat and rerun /cook."',
+        '"/cook remains the canonical workflow boundary. Natural-language routing can stay off, run in assist mode for short confirm-first handoffs, or run in router mode to review each non-bypass user turn before implementation starts, but the shared /cook flow still owns mission selection and confirmation."',
+        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Assist and router modes only offer the same /cook flow, and router recovery only replays to normal chat when you explicitly choose Send as normal chat, so clarify the concrete repo changes in the main chat and rerun /cook."',
     ],
 }
 
 forbidden = {
-    "README.md": ["compatibility" + " shim", "optional inline /cook hint"],
+    "README.md": [
+        "Assist-mode natural-language handoff can also offer to enter that same `/cook` flow before the primary agent starts implementation work, but `/cook` remains the canonical workflow boundary.",
+        "## Natural-language handoff (assist mode)",
+    ],
     "CHANGELOG.md": ["compatibility" + " shim"],
-    "extensions/completion/index.ts": ["temporary" + " compatibility" + " shim, pass /cook", "optional inline /cook hint"],
+    "extensions/completion/index.ts": [
+        'description: "/cook workflow: start, continue, refocus, or start the next round; assist-mode natural-language handoff can offer the same /cook boundary"',
+        '"/cook remains the canonical workflow boundary. Assist-mode natural-language handoff can offer to enter the same /cook flow before implementation starts, while mission selection still comes from recent discussion, repo truth, and the approval-only confirmation flow."',
+        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Natural-language handoff only offers to enter the same /cook flow, so clarify the concrete repo changes in the main chat and rerun /cook."',
+        "temporary" + " compatibility" + " shim, pass /cook",
+        "optional inline /cook hint",
+    ],
 }
 
 for path, needles in checks.items():

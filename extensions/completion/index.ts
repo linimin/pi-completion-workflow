@@ -209,9 +209,9 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
 const COOK_BARE_ONLY_GUIDANCE =
-	"/cook remains the canonical workflow boundary. Assist-mode natural-language handoff can offer to enter the same /cook flow before implementation starts, while mission selection still comes from recent discussion, repo truth, and the approval-only confirmation flow.";
+	"/cook remains the canonical workflow boundary. Natural-language routing can stay off, run in assist mode for short confirm-first handoffs, or run in router mode to review each non-bypass user turn before implementation starts, but the shared /cook flow still owns mission selection and confirmation.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Natural-language handoff only offers to enter the same /cook flow, so clarify the concrete repo changes in the main chat and rerun /cook.";
+	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Assist and router modes only offer the same /cook flow, and router recovery only replays to normal chat when you explicitly choose Send as normal chat, so clarify the concrete repo changes in the main chat and rerun /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -931,7 +931,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
 		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
 		cookCommandSpec: {
-			description: "/cook workflow: start, continue, refocus, or start the next round; assist-mode natural-language handoff can offer the same /cook boundary",
+			description: "/cook workflow: start, continue, refocus, or start the next round; /cook stays canonical while natural-language routing can be off, assist, or router",
 		},
 		buildContextProposalContinuationReason,
 		completionKickoff,
