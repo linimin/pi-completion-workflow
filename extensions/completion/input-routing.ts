@@ -291,8 +291,7 @@ async function detectExplicitAdoptedArtifact(
 	if (!isExplicitArtifactAdoption(eventText)) return undefined;
 	const markdownPath = extractMarkdownPath(eventText);
 	if (markdownPath) {
-		const artifact = await readRepoMarkdownArtifact(root, markdownPath);
-		if (artifact) return artifact;
+		return readRepoMarkdownArtifact(root, markdownPath);
 	}
 	return findRecentPlanArtifact(recentMessages);
 }

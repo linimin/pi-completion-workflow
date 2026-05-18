@@ -763,6 +763,40 @@ assert '- adopted_artifact_kind: repo_markdown' in prompt, 'repo markdown adopti
 assert '- adopted_artifact_path: docs/plan.md' in prompt, 'repo markdown adoption should preserve the adopted path in the shared driver prompt'
 PY
 
+# An unresolved explicit repo markdown path must fail closed instead of falling back to recent-plan metadata.
+MISSING_MD_ROOT="$TMPDIR/missing-md-repo"
+MISSING_MD_SESSION="$TMPDIR/missing-md-session.jsonl"
+MISSING_MD_PROMPT="$TMPDIR/missing-md-driver-prompt.txt"
+MISSING_MD_ROUTING="$TMPDIR/missing-md-routing.json"
+mkdir -p "$MISSING_MD_ROOT"
+cd "$MISSING_MD_ROOT"
+git init -q
+write_mixed_session "$MISSING_MD_SESSION" "$MISSING_MD_ROOT" "$STARTUP_DISCUSSION" "$STARTUP_DISCUSSION"
+
+PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=accept \
+PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST=1 \
+PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
+PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$MISSING_MD_PROMPT" \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$STARTUP_CLASSIFIER_OUTPUT" \
+PI_COMPLETION_TEST_TRIGGER_CONFIRM_ACTION=start \
+PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$MISSING_MD_ROUTING" \
+pi --session "$MISSING_MD_SESSION" -e "$PKG_ROOT" -p "use docs/missing.md" \
+  >"$TMPDIR/pi-cook-trigger-missing-md.out" 2>"$TMPDIR/pi-cook-trigger-missing-md.err"
+
+python3 - "$MISSING_MD_PROMPT" "$MISSING_MD_ROUTING" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+prompt = Path(sys.argv[1]).read_text()
+routing = json.loads(Path(sys.argv[2]).read_text())
+
+assert routing['adoptedArtifactKind'] is None, 'unresolved explicit repo markdown paths must not fall back to recent_plan adoption metadata'
+assert routing['adoptedArtifactBasis'] is None, 'unresolved explicit repo markdown paths must not preserve adopted-artifact trust metadata'
+assert '- adopted_artifact_kind:' not in prompt, 'unresolved explicit repo markdown paths must not be elevated into the shared /cook handoff metadata'
+assert '- adopted_artifact_basis:' not in prompt, 'unresolved explicit repo markdown paths must not preserve adopted-artifact basis metadata in the shared driver prompt'
+PY
+
 # Unadopted assistant plans should remain background only and should not be elevated into handoff context.
 UNADOPTED_PLAN_ROOT="$TMPDIR/unadopted-plan-repo"
 UNADOPTED_PLAN_SESSION="$TMPDIR/unadopted-plan-session.jsonl"
