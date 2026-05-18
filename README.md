@@ -1,33 +1,21 @@
 # @linimin/pi-letscook
 
-A Pi extension for long-running repo work.
-
-It gives you `/cook`: a discussion-driven workflow command that keeps mission, progress, and verification in repo-local `.agent/**` state instead of chat memory.
+`/cook` turns main-chat discussion about concrete repo changes into a resumable repo workflow stored in repo-local `.agent/**` state.
 
 Assist-mode natural-language handoff can also offer to enter that same `/cook` flow before the primary agent starts implementation work, but `/cook` remains the canonical workflow boundary.
 
-## Is this for you?
+## Use it when
 
-**Useful if your work needs to:**
-- continue across sessions
-- stay anchored to one mission
-- resume from repo state instead of chat memory
-- keep review, audit, and verification tied to the repo
+- work spans multiple sessions
+- you want one mission tracked in repo state instead of chat memory
+- you want clear continue / refocus / next-round behavior
+- you want review, audit, and verification tied to the repo
 
-**Probably overkill if you mostly do:**
-- one-off chat tasks
-- brainstorming
-- planning docs without immediate implementation
+## Skip it when
 
-## What you get
-
-- one canonical workflow boundary: `/cook`
-- assist-mode natural-language handoff that can offer to enter the same `/cook` flow before the primary agent starts implementation work
-- repo-local canonical state in `.agent/**`
-- resumable long-running workflows
-- discussion-first startup, continue, refocus, and next-round routing
-- fail-closed guidance that sends you back to the main chat when the mission still needs clarification
-- deterministic verification, review, audit, and stop checks
+- you only need a one-off answer
+- you are brainstorming
+- you are writing planning docs but are not ready to start concrete repo changes
 
 ## Install
 
@@ -37,66 +25,94 @@ pi install npm:@linimin/pi-letscook
 
 Then run `/reload` in Pi.
 
-## Quick start
+## 30-second quick start
 
-`/cook` supports both bare discussion-driven startup and optional inline intent hints.
+1. Install the package:
+   `pi install npm:@linimin/pi-letscook`
+2. Run `/reload` in Pi.
+3. In the main chat, describe the concrete repo change you want.
+4. Run `/cook` or `/cook <hint>`.
+5. Review the proposal and choose **Start** or **Cancel**.
+6. Later, run `/cook` again to continue, refocus, or start the next round.
 
 ```text
 /cook
 /cook login redirect
 ```
 
-Use `/cook` after you discuss the mission in the main chat.
+## Common actions
 
-Execution handoff phrases like `開始做`, `開始實作`, or `go ahead` can also trigger an assist-mode confirmation asking whether `/cook` should take over. Accepting that handoff enters the same `/cook` flow; if the trigger is unclear or unavailable, nothing is auto-routed and you can run `/cook` explicitly.
+| If you want to... | Do this |
+|---|---|
+| Start a long-running task | Discuss the concrete repo change in the main chat, then run `/cook` |
+| Bias mission detection toward one intent | Run `/cook <hint>` |
+| Hand off from discussion into the same `/cook` flow | Say `開始做`, `開始實作`, or `go ahead`, then accept the confirmation |
+| Continue the current workflow | Run `/cook` |
+| Use the canonical fallback when the natural-language trigger does not fire | Run `/cook` explicitly |
 
-What it can do:
-- start a brand-new workflow from recent discussion
-- continue the current workflow when recent discussion still matches it, or when discussion is too weak or ambiguous to justify a refocus
-- surface a conservative refocus chooser when recent discussion clearly points to a different workflow
-- start the next workflow round after the previous one is `done`
+## What `/cook` expects
 
-What it expects:
 - recent main-chat discussion about concrete repo changes
 - README/CHANGELOG updates still count as concrete repo changes
 - assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not
 
-`/cook <hint>` acts as a high-priority intent hint that helps proposal derivation interpret the recent discussion, but it still goes through the same fail-closed routing and approval-only Start/Cancel confirmation flow.
+`/cook <hint>` acts as a high-priority intent hint for interpreting recent discussion, but it does not bypass fail-closed behavior or the approval-only Start/Cancel confirmation flow.
 
-On startup and next-round flows, if recent discussion is missing, weak, ambiguous, assistant-produced, or only describes planning artifacts instead of concrete repo changes, `/cook` fails closed, leaves canonical `.agent/**` state unchanged, and tells you to clarify the mission in the main chat before rerunning `/cook`.
+If recent discussion is missing, weak, ambiguous, assistant-produced, or only describes planning artifacts instead of concrete repo changes, `/cook` fails closed, leaves canonical `.agent/**` state unchanged, and tells you to clarify the mission in the main chat before rerunning `/cook`.
 
-## How `/cook` works
+## Natural-language handoff (assist mode)
 
-`/cook` supports both bare discussion-driven startup and optional inline intent hints.
+After you have discussed a concrete repo change in the main chat, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.
 
-Assist-mode natural-language handoff is optional. It only offers to enter the same `/cook` flow from recent discussion; explicit `/cook` remains the canonical workflow boundary and the fallback when the trigger is unclear or unavailable.
+Important behavior:
+- the handoff is only a shortcut into `/cook`; `/cook` is still the canonical workflow boundary
+- it asks for confirmation before `/cook` takes over
+- if the trigger is unclear or unavailable, nothing is auto-started and you can run `/cook` explicitly
+- ordinary questions and explicit slash commands continue normally
 
-| Repo state | `/cook` behavior |
+## Typical examples
+
+Start a new workflow from recent discussion:
+
+```text
+I want to add login redirect handling and tests.
+/cook
+```
+
+Bias proposal derivation toward a specific intent:
+
+```text
+/cook login redirect
+```
+
+Hand off from discussion into the same `/cook` flow:
+
+```text
+We should implement the natural-language routing path next.
+開始做
+```
+
+## What happens when you run `/cook`
+
+`/cook` supports both bare discussion-driven startup and optional inline intent hints. Assist-mode natural-language handoff is optional; explicit `/cook` is always the canonical fallback.
+
+| Repo state | What you'll see |
 |---|---|
-| No workflow yet | Summarizes recent main-chat discussion into a startup proposal, weighting the latest clear implementation intent ahead of older background discussion. Optional `/cook <hint>` text is treated as a high-priority cue for how to interpret that discussion, not as an unconditional mission override. The result still asks for approval with **Start** or **Cancel**. If the discussion is weak, ambiguous, assistant-produced, or only a plan/spec/design-doc/proposal artifact instead of concrete repo changes, `/cook` fails closed without writing `.agent/**` state and tells you to clarify the mission in the main chat before rerunning `/cook`. |
-| Active workflow exists | Reads the current mission plus recent non-command main-chat discussion. Matching or unclear discussion resumes from canonical `.agent/**` state. Clear replacement discussion about different concrete repo changes opens a chooser first, then only rewrites canonical state after the follow-on **Start** confirmation. If recent discussion implies more than one plausible replacement mission, `/cook` keeps the current workflow parked behind a multi-candidate chooser instead of silently resuming or guessing. Optional `/cook <hint>` text biases that routing and candidate ranking toward the hinted implementation intent without bypassing the chooser or final confirmation. Assistant/summary artifacts or plan/spec/design-doc/proposal-only context do not refocus the workflow. |
-| Previous workflow is `done` | Starts the next round from recent main-chat discussion, then asks for approval with **Start** or **Cancel**. Optional `/cook <hint>` text biases next-round proposal derivation toward the hinted intent while still preserving fail-closed behavior. Weak, ambiguous, assistant-produced, or planning-artifact-only discussion fails closed without rewriting canonical state and tells you to clarify the mission in the main chat before rerunning `/cook`. Recent discussion that only restates already-completed or already-verified work also fails closed instead of reopening the finished mission. |
+| No workflow yet | A startup proposal built from recent main-chat discussion. You choose **Start** or **Cancel**. Weak or planning-only discussion fails closed. |
+| Active workflow exists | Usually a resume of the current workflow. If recent discussion clearly points to a different concrete repo change, `/cook` shows a chooser first and only rewrites canonical state after confirmation. Ambiguous discussion stays conservative. |
+| Previous workflow is `done` | A next-round proposal from recent main-chat discussion, again behind **Start** or **Cancel**. Discussion that only restates already-finished work fails closed. |
 
-## Approval-only confirmation and fail-closed behavior
+## Confirmation and fail-closed behavior
 
-All startup, next-round, and replacement proposals are **approval-only**:
+`/cook` never silently starts or rewrites canonical `.agent/**` state on unclear input.
 
-- the proposal body is shown separately from actions
-- actions are only **Start** and **Cancel**
+- startup, next-round, and refocus proposals are approval-only
+- actions are **Start** and **Cancel**
 - **Cancel** is side-effect free: discuss changes in the main chat and rerun `/cook`
+- weak, ambiguous, assistant-produced, or planning-only discussion does not start a workflow
+- when recent discussion suggests a different workflow, `/cook` shows a chooser before any canonical state rewrite
 
-When `/cook` cannot derive a clear startup, next-round, or replacement proposal for concrete repo changes from recent main-chat discussion, it fails closed instead of guessing. That means no canonical `.agent/**` state is created or rewritten until the discussion is clarified in the main chat and you rerun `/cook`. Tracked docs-only work such as README/CHANGELOG updates is still execution-ready, but assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts are not enough to start or refocus a workflow on their own. Optional `/cook <hint>` text can bias proposal ranking, but it still fails closed when repo truth or recent discussion does not support a clear executable mission.
-
-When an active workflow already exists and recent discussion suggests a different workflow, `/cook` shows a separate chooser first. The chooser can stay conservative or list multiple candidate replacements when the latest discussion contains more than one plausible implementation goal:
-
-- **Continue current workflow**
-- **Start new workflow from recent discussion**
-- **Start alternate workflow from recent discussion** (when a second plausible mission exists)
-- **Cancel**
-
-Chooser options summarize each candidate mission with its latest scope/constraint/acceptance highlights before the follow-on approval-only Start/Cancel gate. Canonical `.agent/**` state changes still happen only after **Start** is accepted.
-
-When you accept startup or refocus from that flow, `/cook` persists the chosen `task_type` and `evaluation_profile` across `.agent/profile.json`, `.agent/state.json`, `.agent/plan.json`, and `.agent/active-slice.json`, and records the accepted critique outcome plus any alternate-mission / suppression notes in canonical continuation state before the re-ground round begins.
+When you accept startup or refocus, `/cook` persists the chosen workflow state in canonical `.agent/**` files before the re-ground round begins.
 
 ## Observability
 
@@ -115,6 +131,10 @@ While a `completion_role` subprocess is running:
 - tool activity is shown separately from assistant-reported progress
 - running-role output distinguishes tool work from `PROGRESS`, `RATIONALE`, `NEXT`, `VERIFYING`, and `STATE-DELTA`
 - waiting and stalled states are surfaced deterministically from timestamps
+
+## Maintainer and protocol details
+
+The sections below are mainly useful if you maintain the extension, inspect canonical `.agent/**` state, or work on the packaged completion protocol itself.
 
 ## Structured evaluation rubrics
 
