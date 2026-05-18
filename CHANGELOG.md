@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.52
+
 ### Changed
 
 - updated README/help/release parity copy to describe the shipped `off` / `assist` / `router` natural-language routing behavior truthfully while keeping `/cook` as the canonical confirm-first workflow boundary and manual fallback
