@@ -2,6 +2,7 @@ import { promises as fsp } from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
+	buildMission,
 	buildProfileRecord,
 	defaultActiveSlice,
 	defaultPlan,
@@ -12,7 +13,7 @@ import {
 	loadCompletionSnapshot,
 	writeJsonFile,
 } from "./state-store";
-import type { CompletionStateSnapshot, CookNaturalLanguageHandoff, CookTriggerWorkflowBias } from "./types";
+import type { CompletionStateSnapshot } from "./types";
 
 type ContextProposalAnalysis = {
 	taskType?: string;
@@ -82,7 +83,6 @@ type DriverContinuationTracker = {
 };
 
 export type CompletionDriverDeps = {
-	bareOnlyGuidance: string;
 	structuredDiscussionFailureDetail: string;
 	mainChatRerunGuidance: string;
 	cookCommandSpec: {
@@ -104,13 +104,8 @@ export type CompletionDriverDeps = {
 		evaluationProfile: string,
 		intent?: "auto" | "continue" | "refocus",
 		missionAnchor?: string,
-		naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 	) => string;
-	completionResumePrompt: (
-		taskType: string,
-		evaluationProfile: string,
-		naturalLanguageHandoff?: CookNaturalLanguageHandoff,
-	) => string;
+	completionResumePrompt: (taskType: string, evaluationProfile: string) => string;
 	deriveCookContextProposal: (ctx: DriverContext, projectName: string, hintText?: string) => Promise<ContextProposal | undefined>;
 	confirmContextProposal: (
 		ctx: { hasUI: boolean; ui: any },
@@ -379,15 +374,10 @@ async function resumeActiveWorkflowFromCanonicalState(
 	ctx: { cwd: string; hasUI: boolean; ui: any },
 	snapshot: CompletionStateSnapshot,
 	deps: CompletionDriverDeps,
-	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 ): Promise<void> {
 	const mission = currentMissionAnchor(snapshot);
 	pi.setSessionName(`completion: ${mission.slice(0, 60)}`);
-	const resumePrompt = deps.completionResumePrompt(
-		currentTaskType(snapshot) ?? "(missing)",
-		currentEvaluationProfile(snapshot) ?? "(missing)",
-		naturalLanguageHandoff,
-	);
+	const resumePrompt = deps.completionResumePrompt(currentTaskType(snapshot) ?? "(missing)", currentEvaluationProfile(snapshot) ?? "(missing)");
 	const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
 	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
 		kind: "resume",
@@ -536,40 +526,9 @@ function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean 
 	return asString(snapshot?.state?.continuation_policy) === "done";
 }
 
-function buildMission(projectName: string, missionAnchor: string): string {
-	return `# Mission\n\nProject: ${projectName}\n\nMission anchor:\n${missionAnchor}\n\nThis file is a tracked human-readable statement of the repo's completion mission. Re-grounders may refine this file when repo truth becomes clearer, but it must stay truthful to shipped behavior and the active completion objective.\n`;
-}
-
-export type CookInvocationOrigin = "command" | "natural-language-trigger";
-
 export type RunCookEntryOptions = {
-	origin: CookInvocationOrigin;
 	hintText?: string;
-	originalInput?: string;
-	triggerText?: string;
-	preferredRoutingBias?: CookTriggerWorkflowBias;
-	clarificationCapsule?: CookNaturalLanguageHandoff["clarificationCapsule"];
-	adoptedArtifact?: CookNaturalLanguageHandoff["adoptedArtifact"];
 };
-
-function buildNaturalLanguageDerivationHint(handoff: CookNaturalLanguageHandoff | undefined): string | undefined {
-	if (!handoff) return undefined;
-	const lines: string[] = [];
-	if (handoff.hintText) lines.push(`Focus hint: ${handoff.hintText}`);
-	if (handoff.clarificationCapsule?.goal) lines.push(`Clarified goal: ${handoff.clarificationCapsule.goal}`);
-	if (handoff.clarificationCapsule?.scope?.length) lines.push(`Clarified scope: ${handoff.clarificationCapsule.scope.join(" | ")}`);
-	if (handoff.clarificationCapsule?.nonGoal?.length) lines.push(`Clarified non-goal: ${handoff.clarificationCapsule.nonGoal.join(" | ")}`);
-	if (handoff.clarificationCapsule?.doneWhen?.length) lines.push(`Clarified done-when: ${handoff.clarificationCapsule.doneWhen.join(" | ")}`);
-	if (handoff.clarificationCapsule?.selectedWorkflowBias) {
-		lines.push(`Clarified routing bias: ${handoff.clarificationCapsule.selectedWorkflowBias}`);
-	}
-	if (handoff.adoptedArtifact) {
-		lines.push(`User explicitly adopted artifact: ${handoff.adoptedArtifact.title}`);
-		if (handoff.adoptedArtifact.path) lines.push(`Adopted artifact path: ${handoff.adoptedArtifact.path}`);
-		if (handoff.adoptedArtifact.preview) lines.push(`Adopted artifact preview: ${handoff.adoptedArtifact.preview}`);
-	}
-	return lines.length > 0 ? lines.join("\n") : undefined;
-}
 
 export async function runCookEntry(
 	pi: ExtensionAPI,
@@ -577,18 +536,7 @@ export async function runCookEntry(
 	deps: CompletionDriverDeps,
 	options: RunCookEntryOptions,
 ): Promise<void> {
-	const naturalLanguageHandoff =
-		options.origin === "natural-language-trigger"
-			? {
-				preferredRoutingBias: options.preferredRoutingBias,
-				triggerText: options.triggerText?.trim() ? options.triggerText.trim() : options.originalInput?.trim() ? options.originalInput.trim() : undefined,
-				hintText: options.hintText?.trim() ? options.hintText.trim() : undefined,
-				clarificationCapsule: options.clarificationCapsule,
-				adoptedArtifact: options.adoptedArtifact,
-			}
-			: undefined;
-	const derivationHint = buildNaturalLanguageDerivationHint(naturalLanguageHandoff);
-	const explicitHint = [options.hintText?.trim(), derivationHint].filter((value): value is string => Boolean(value)).join("\n\n") || undefined;
+	const explicitHint = options.hintText?.trim() || undefined;
 	let goal: string | undefined;
 	const cwd = deps.getCtxCwd(ctx);
 	let snapshot = await loadCompletionSnapshot(cwd);
@@ -660,7 +608,7 @@ export async function runCookEntry(
 		} else {
 			const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
 			if (!assessment.proposal || assessment.action === "continue") {
-				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps, naturalLanguageHandoff);
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 				return;
 			}
 			const decision = await confirmExistingWorkflowProposal(ctx, snapshot, assessment.proposal, deps, {
@@ -678,7 +626,7 @@ export async function runCookEntry(
 				return;
 			}
 			if (decision.action === "continue") {
-				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps, naturalLanguageHandoff);
+				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 				return;
 			}
 			const selectedProposal = decision.proposal;
@@ -709,7 +657,6 @@ export async function runCookEntry(
 		currentEvaluationProfile(snapshot) ?? "(missing)",
 		kickoffIntent,
 		kickoffMissionAnchor,
-		naturalLanguageHandoff,
 	);
 	const rootKey = deps.completionRootKey(snapshot, deps.getCtxCwd(ctx));
 	const fingerprint = completionContinuationFingerprint(snapshot) ?? JSON.stringify({
@@ -727,10 +674,7 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 	pi.registerCommand("cook", {
 		description: deps.cookCommandSpec.description,
 		handler: async (args, ctx) => {
-			await runCookEntry(pi, ctx, deps, {
-				origin: "command",
-				hintText: args,
-			});
+			await runCookEntry(pi, ctx, deps, { hintText: args });
 		},
 	});
 }

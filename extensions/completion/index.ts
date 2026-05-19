@@ -41,7 +41,6 @@ import {
 	buildContextProposalContinuationReason as buildExtractedContextProposalContinuationReason,
 	buildEvaluationRoleContextLines as buildExtractedEvaluationRoleContextLines,
 	buildEvaluationRoleReminderText as buildExtractedEvaluationRoleReminderText,
-	buildNaturalLanguageHandoffMetadataLines,
 	buildResumeCapsule as buildExtractedResumeCapsule,
 	buildSystemReminder as buildExtractedSystemReminder,
 	maybeWriteContextProposalConfirmationSnapshot,
@@ -78,7 +77,7 @@ import {
 } from "./state-store";
 import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
-import type { CompletionStateSnapshot, CompletionRole, CookNaturalLanguageHandoff, JsonRecord, LiveRoleActivity } from "./types";
+import type { CompletionStateSnapshot, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
 
 const PROTOCOL_ID = "completion";
 const ROLE_NAMES = [
@@ -123,22 +122,11 @@ function candidateSlices(plan: JsonRecord | undefined): JsonRecord[] {
 	return Array.isArray(slices) ? slices.filter(isRecord) : [];
 }
 
-type ExistingWorkflowDecision =
-	| { action: "continue"; currentMissionAnchor: string }
-	| { action: "refocus"; currentMissionAnchor: string; missionAnchor: string };
-
 type ActiveWorkflowProposalAssessment = {
 	action: "continue" | "refocus" | "unclear";
 	currentMissionAnchor: string;
 	proposal?: ContextProposal;
 	reason: "matching_mission" | "clear_refocus" | "missing_proposal" | "ambiguous_discussion";
-};
-
-type ExistingWorkflowChooserOptions = {
-	intro?: string;
-	proposedMissionLabel?: string;
-	refocusChoiceLabel?: string;
-	comparison?: "semantic" | "strict";
 };
 
 function completionTestWorkflowActionOverride(): "continue" | "refocus" | "cancel" | undefined {
@@ -207,26 +195,8 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 }
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
-const COOK_BARE_ONLY_GUIDANCE =
-	"/cook is the canonical workflow boundary. Discuss the concrete repo changes in the main chat, then run /cook when you want to start, continue, refocus, or begin the next workflow round.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
 	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
-
-function buildCookCancellationMessage(prefix: string): string {
-	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
-}
-
-function buildCookStructuredDiscussionFailureMessage(prefix?: string): string {
-	return prefix ? `${prefix} ${COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL}` : COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL;
-}
-
-function shouldDisableContextProposalAnalyst(): boolean {
-	return process.env.PI_COMPLETION_DISABLE_CONTEXT_PROPOSAL_ANALYST === "1";
-}
-
-function completionTestContextProposalAnalystOutput(): string | undefined {
-	return asString(process.env.PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT);
-}
 
 function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean {
 	return asString(snapshot?.state?.continuation_policy) === "done";
@@ -895,25 +865,18 @@ function completionKickoff(
 	evaluationProfile: string,
 	intent: "auto" | "continue" | "refocus" = "auto",
 	missionAnchor?: string,
-	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
 ): string {
-	const naturalLanguageHandoffBlock = buildNaturalLanguageHandoffMetadataLines(naturalLanguageHandoff).join("\n");
 	const intentBlock =
 		intent === "continue" && missionAnchor
 			? `Existing canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- Continue the existing workflow.\n- Treat the new user text as supplemental direction unless canonical reconciliation proves the mission itself must change.\n\n`
 			: intent === "refocus" && missionAnchor
 				? `Updated canonical mission anchor:\n${missionAnchor}\n\nWorkflow intent:\n- The user explicitly refocused the workflow before this kickoff.\n- Re-read canonical .agent/** state and continue from the refocused mission.\n\n`
 				: "";
-	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${naturalLanguageHandoffBlock}${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+	return `/skill:completion-protocol Start or continue the completion workflow for this repo.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nUser goal:\n${goal}\n\n${intentBlock}Driver instructions:\n- Canonical truth is in .agent/**. Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting when they exist.\n- If tracked completion contract files are missing or onboarding is required, invoke completion_role with role completion-bootstrapper.\n- Otherwise follow the mandatory dispatch rules from completion-protocol.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Use completion_role for all completion-* role work. Do not directly implement tracked product changes yourself.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
-function completionResumePrompt(
-	taskType: string,
-	evaluationProfile: string,
-	naturalLanguageHandoff?: CookNaturalLanguageHandoff,
-): string {
-	const naturalLanguageHandoffBlock = buildNaturalLanguageHandoffMetadataLines(naturalLanguageHandoff).join("\n");
-	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\n${naturalLanguageHandoffBlock}Resume instructions:\n- Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
+function completionResumePrompt(taskType: string, evaluationProfile: string): string {
+	return `/skill:completion-protocol Resume the completion workflow from canonical state.\n\nBefore acting, read:\n- ${SKILL_PATH}\n- ${REFERENCE_PATH}\n\nCanonical routing profile:\n- task_type: ${taskType}\n- evaluation_profile: ${evaluationProfile}\n\nResume instructions:\n- Re-read .agent/state.json, .agent/plan.json, .agent/active-slice.json, and .agent/verification-evidence.json before acting.\n- If canonical state is missing, invalid, contradictory, stale, or ambiguous, route to completion-regrounder first.\n- For selected, in-progress, committed, or done slices, treat .agent/active-slice.json as the canonical implementation contract and route to completion-regrounder if it drifts from the selected plan slice or the exact handoff is unclear.\n- Consume .agent/verification-evidence.json instead of temp-only verification summaries when it is populated.\n- Continue from next_mandatory_role and next_mandatory_action.\n- Use completion_role for all completion-* role work.\n- Continue dispatching mandatory roles while continuation_policy == continue.\n- Only stop for the user when continuation_policy is await_user_input, blocked, paused, or done.`;
 }
 
 export default function completionExtension(pi: ExtensionAPI) {
@@ -926,7 +889,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 		getCtxUi,
 	};
 	const driverDeps = {
-		bareOnlyGuidance: COOK_BARE_ONLY_GUIDANCE,
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
 		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
 		cookCommandSpec: {

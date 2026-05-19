@@ -25,8 +25,6 @@ checks = {
     ],
     "extensions/completion/index.ts": [
         'description: "/cook workflow: start, continue, refocus, or start the next round from an explicit /cook command"',
-        'const COOK_BARE_ONLY_GUIDANCE =',
-        '"/cook is the canonical workflow boundary. Discuss the concrete repo changes in the main chat, then run /cook when you want to start, continue, refocus, or begin the next workflow round."',
         '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook."',
     ],
 }

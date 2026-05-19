@@ -54,6 +54,13 @@ assertIncludes('extensions/completion/role-runner.ts', 'async function runContex
 assertIncludes('extensions/completion/prompt-surfaces.ts', 'export function buildSystemReminder(');
 assertIncludes('extensions/completion/prompt-surfaces.ts', 'export function buildResumeCapsule(');
 
+if (fs.existsSync('extensions/completion/input-routing.ts')) {
+  throw new Error('extensions/completion/input-routing.ts should be removed after explicit-/cook cleanup');
+}
+if (fs.existsSync('scripts/cook-trigger-routing-test.sh')) {
+  throw new Error('scripts/cook-trigger-routing-test.sh should be removed after explicit-/cook cleanup');
+}
+
 assertIncludes('extensions/completion/index.ts', 'scaffoldCompletionFiles as scaffoldCompletionFilesOnDisk');
 assertIncludes('extensions/completion/index.ts', 'return await scaffoldCompletionFilesOnDisk(root, missionAnchor, {');
 assertIncludes('extensions/completion/index.ts', 'applyLiveRoleEvent,');
@@ -102,6 +109,10 @@ assertNotIncludes('extensions/completion/index.ts', 'async function analyzeConte
 assertNotIncludes('extensions/completion/index.ts', 'function deriveMissionAnchor(');
 assertNotIncludes('extensions/completion/index.ts', 'function buildSystemReminder(');
 assertNotIncludes('extensions/completion/index.ts', 'function buildResumeCapsule(');
+assertNotIncludes('extensions/completion/role-runner.ts', 'classifyCookTriggerIntentWithAgent(');
+assertNotIncludes('extensions/completion/role-runner.ts', 'COOK_TRIGGER_CLASSIFIER_SYSTEM_PROMPT');
+assertNotIncludes('extensions/completion/prompt-surfaces.ts', 'buildCookTriggerConfirmationLayout(');
+assertNotIncludes('extensions/completion/prompt-surfaces.ts', 'buildNaturalLanguageHandoffMetadataLines(');
 NODE
 
 echo "legacy cleanup test passed: $ROOT"
