@@ -8,6 +8,22 @@ import type {
 	ContextProposalConfirmationLayout,
 } from "./proposal";
 
+export type AdvisoryStartupBrief = {
+	kind: "startup_brief";
+	source: "recent_discussion";
+	confirmed: true;
+	captured_at: string;
+	goal_text: string;
+	mission: string;
+	scope: string[];
+	constraints: string[];
+	acceptance: string[];
+	risks: string[];
+	notes: string[];
+	task_type?: string;
+	evaluation_profile?: string;
+};
+
 export function buildContextProposalGoalText(proposal: {
 	mission: string;
 	scope: string[];
@@ -47,6 +63,36 @@ export function buildContextProposalDisplayText(proposal: ContextProposal): stri
 	return lines.join("\n");
 }
 
+function buildAdvisoryStartupBriefNotes(analysis: ContextProposalAnalysis): string[] {
+	const notes = [
+		...analysis.critique,
+		...analysis.possibleNoise.map((item) => `Possible noise: ${item}`),
+	];
+	return notes.length > 0 ? notes : ["No additional operator notes were derived from recent discussion."];
+}
+
+export function buildAdvisoryStartupBrief(args: {
+	proposal: Pick<ContextProposal, "goalText" | "mission" | "scope" | "constraints" | "acceptance">;
+	analysis: ContextProposalAnalysis;
+	capturedAt?: string;
+}): AdvisoryStartupBrief {
+	return {
+		kind: "startup_brief",
+		source: "recent_discussion",
+		confirmed: true,
+		captured_at: args.capturedAt ?? new Date().toISOString(),
+		goal_text: args.proposal.goalText,
+		mission: args.proposal.mission,
+		scope: [...args.proposal.scope],
+		constraints: [...args.proposal.constraints],
+		acceptance: [...args.proposal.acceptance],
+		risks: [...args.analysis.risks],
+		notes: buildAdvisoryStartupBriefNotes(args.analysis),
+		task_type: args.analysis.taskType,
+		evaluation_profile: args.analysis.evaluationProfile,
+	};
+}
+
 export function buildContextProposalCritiqueText(analysis: ContextProposalAnalysis): string {
 	const lines: string[] = [];
 	if (analysis.critique.length > 0) {
@@ -79,7 +125,7 @@ export function buildContextProposalCritiqueText(analysis: ContextProposalAnalys
 		for (const item of analysis.suppressedNegatedTopics) lines.push(`- ${item}`);
 	}
 	if (lines.length === 0) {
-		return "No critique, risk, noise, alternate-mission, or suppression notes were derived for this startup proposal.";
+		return "No additional operator notes or risks were derived for this startup brief.";
 	}
 	return lines.join("\n");
 }
@@ -128,7 +174,7 @@ export function buildContextProposalConfirmationActions(mainChatRerunGuidance: s
 		{
 			id: "start",
 			label: "Start",
-			description: "Accept this proposal and let /cook write or refocus canonical workflow state.",
+			description: "Accept this startup brief and let /cook write or refocus canonical workflow state.",
 		},
 		{
 			id: "cancel",
@@ -148,10 +194,10 @@ export function buildContextProposalConfirmationLayout(args: {
 }): ContextProposalConfirmationLayout {
 	return {
 		title: args.title,
-		intro: "Review the proposed mission, scope, constraints, acceptance, critique, and routing details before /cook writes canonical workflow state. This gate is approval-only: either Start it as-is or Cancel, discuss changes in the main chat, and rerun /cook.",
-		proposalHeading: "Proposed workflow",
+		intro: "Review the startup brief (mission, scope, constraints, acceptance, and notes/risks) plus the routing details before /cook writes canonical workflow state. This gate is approval-only: either Start it as-is or Cancel, discuss changes in the main chat, and rerun /cook.",
+		proposalHeading: "Startup brief",
 		proposalBody: buildContextProposalDisplayText(args.proposal),
-		critiqueHeading: "Critique and risks",
+		critiqueHeading: "Notes and risks",
 		critiqueBody: buildContextProposalCritiqueText(args.analysis),
 		routingHeading: "Routing recommendations",
 		routingBody: buildContextProposalRoutingText(args.analysis, {
@@ -202,7 +248,7 @@ export function buildContextProposalAnalystPrompt(projectName: string, discussio
 		"Infer the current implementation mission from the discussion.",
 		"Prefer the latest clear user implementation intent over older background context.",
 		"Treat stale, completed, or explicitly negated topics as context to ignore unless the latest discussion clearly reopens them.",
-		"If canonical workflow context includes a /cook hint, use it as a high-priority cue for how to interpret the recent discussion without treating it as an unconditional override.",
+		"Use only recent user/custom discussion plus canonical workflow context; do not infer startup intent from slash-command arguments or planning-only artifacts.",
 	];
 	if (contextLines.length > 0) lines.push("", "Canonical workflow context:", ...contextLines);
 	lines.push("", "Recent discussion:", discussion || "(none)");

@@ -4,8 +4,8 @@
 
 ### Changed
 
-- removed workflow-aware prompt interception so only explicit `/cook` or `/cook <hint>` enters the workflow; ordinary prompts now always stay on the main chat path
-- updated docs and release checks to describe explicit `/cook` entry instead of router-managed natural-language takeover
+- made `/cook` derive a confirmable startup brief from recent discussion before any canonical workflow rewrite, then preserve the confirmed brief in canonical state as advisory intake for later re-grounding
+- removed inline `/cook` arguments from the shipped entry path again so explicit bare `/cook` is the only public command, and fail closed when recent discussion is insufficient or unreliable
 
 ## 0.1.54
 

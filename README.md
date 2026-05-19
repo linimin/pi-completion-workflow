@@ -31,13 +31,12 @@ Then run `/reload` in Pi.
    `pi install npm:@linimin/pi-letscook`
 2. Run `/reload` in Pi.
 3. In the main chat, describe the concrete repo change you want.
-4. Run `/cook` or `/cook <hint>`.
-5. Review the proposal and choose **Start** or **Cancel**.
+4. Run `/cook`.
+5. Review the startup brief and choose **Start** or **Cancel**.
 6. Later, run `/cook` again to continue, refocus, or start the next round.
 
 ```text
 /cook
-/cook login redirect
 ```
 
 ## Common actions
@@ -45,23 +44,23 @@ Then run `/reload` in Pi.
 | If you want to... | Do this |
 |---|---|
 | Start a long-running task | Discuss the concrete repo change in the main chat, then run `/cook` |
-| Bias mission detection toward one intent | Run `/cook <hint>` |
 | Continue the current workflow | Run `/cook` |
 | Refocus or start the next round | Discuss the new concrete repo change in the main chat, then run `/cook` |
 
 ## What `/cook` expects
 
 - recent main-chat discussion about concrete repo changes
+- enough detail to derive a startup brief with mission, scope, constraints or non-goals, acceptance, and notes or risks
 - README/CHANGELOG updates still count as concrete repo changes
 - assistant-produced summaries and plan/spec/design-doc/proposal-only artifacts do not
 
-`/cook <hint>` acts as a high-priority intent hint for interpreting recent discussion, but it does not bypass fail-closed behavior or the approval-only Start/Cancel confirmation flow.
-
 If recent discussion is missing, weak, ambiguous, assistant-produced, or only describes planning artifacts instead of concrete repo changes, `/cook` fails closed, leaves canonical `.agent/**` state unchanged, and tells you to clarify the mission in the main chat before rerunning `/cook`.
+
+If you pass inline arguments to `/cook`, it also fails closed and tells you to move that intent into the main chat before rerunning bare `/cook`.
 
 ## Workflow entry
 
-Only explicit `/cook` or `/cook <hint>` enters the workflow. Ordinary prompts stay in the main chat and go straight to the primary agent.
+Only explicit `/cook` enters the workflow. Ordinary prompts stay in the main chat and go straight to the primary agent.
 
 Important behavior:
 - `/cook` is the canonical workflow boundary and manual entry point
@@ -77,21 +76,15 @@ I want to add login redirect handling and tests.
 /cook
 ```
 
-Bias proposal derivation toward a specific intent:
-
-```text
-/cook login redirect
-```
-
 ## What happens when you run `/cook`
 
-`/cook` supports both bare discussion-driven startup and optional inline intent hints.
+`/cook` first derives a startup brief from recent discussion, then shows the existing approval-only Start/Cancel gate.
 
 | Repo state | What you'll see |
 |---|---|
-| No workflow yet | A startup proposal built from recent main-chat discussion. You choose **Start** or **Cancel**. Weak or planning-only discussion fails closed. |
-| Active workflow exists | Usually a resume of the current workflow. If recent discussion clearly points to a different concrete repo change, `/cook` shows a chooser first and only rewrites canonical state after confirmation. Ambiguous discussion stays conservative. |
-| Previous workflow is `done` | A next-round proposal from recent main-chat discussion, again behind **Start** or **Cancel**. Discussion that only restates already-finished work fails closed. |
+| No workflow yet | A startup brief built from recent main-chat discussion. You choose **Start** or **Cancel**. Weak, unreliable, or planning-only discussion fails closed. |
+| Active workflow exists | Usually a resume of the current workflow. If recent discussion clearly points to a different concrete repo change, `/cook` shows a chooser first and only rewrites canonical state after you confirm the new startup brief. Ambiguous discussion stays conservative. |
+| Previous workflow is `done` | A next-round startup brief from recent main-chat discussion, again behind **Start** or **Cancel**. Discussion that only restates already-finished work fails closed. |
 
 ## Confirmation and fail-closed behavior
 
@@ -104,6 +97,8 @@ Bias proposal derivation toward a specific intent:
 - when recent discussion suggests a different workflow, `/cook` shows a chooser before any canonical state rewrite
 
 When you accept startup or refocus, `/cook` persists the chosen workflow state in canonical `.agent/**` files before the re-ground round begins.
+
+The confirmed startup brief is also preserved there as advisory intake for later re-grounding. It does not replace `.agent/plan.json` or `.agent/active-slice.json`, which remain under regrounder authority.
 
 ## Observability
 

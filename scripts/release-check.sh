@@ -15,22 +15,24 @@ from pathlib import Path
 checks = {
     "README.md": [
         "`/cook` is the explicit workflow boundary for starting, continuing, refocusing, or beginning the next round of long-running repo work.",
-        "Only explicit `/cook` or `/cook <hint>` enters the workflow. Ordinary prompts stay in the main chat and go straight to the primary agent.",
+        "Only explicit `/cook` enters the workflow. Ordinary prompts stay in the main chat and go straight to the primary agent.",
         "`/cook` is the canonical workflow boundary and manual entry point",
         "Discuss the concrete repo change in the main chat, then run `/cook`",
+        "The confirmed startup brief is also preserved there as advisory intake for later re-grounding.",
     ],
     "CHANGELOG.md": [
-        "removed workflow-aware prompt interception so only explicit `/cook` or `/cook <hint>` enters the workflow; ordinary prompts now always stay on the main chat path",
-        "updated docs and release checks to describe explicit `/cook` entry instead of router-managed natural-language takeover",
+        "made `/cook` derive a confirmable startup brief from recent discussion before any canonical workflow rewrite, then preserve the confirmed brief in canonical state as advisory intake for later re-grounding",
+        "removed inline `/cook` arguments from the shipped entry path again so explicit bare `/cook` is the only public command, and fail closed when recent discussion is insufficient or unreliable",
     ],
     "extensions/completion/index.ts": [
-        'description: "/cook workflow: start, continue, refocus, or start the next round from an explicit /cook command"',
-        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook."',
+        'description: "/cook workflow: derive a startup brief from recent discussion, then start, continue, refocus, or start the next round from the explicit /cook command"',
+        '"/cook failed closed because recent discussion did not produce a clear execution-ready startup brief with Mission/Scope/Constraints/Acceptance for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook."',
     ],
 }
 
 forbidden = {
     "README.md": [
+        "`/cook <hint>`",
         "Natural-language routing is optional and shipped in two modes",
         "PI_COMPLETION_TRIGGER_MODE",
         "workflow-aware router",
@@ -39,9 +41,8 @@ forbidden = {
     ],
     "CHANGELOG.md": ["compatibility" + " shim"],
     "extensions/completion/index.ts": [
-        'description: "/cook workflow: start, continue, refocus, or start the next round; /cook stays canonical while natural-language routing can be off or router"',
-        '"/cook remains the canonical workflow boundary. Natural-language routing can stay off or run in router mode to review each non-bypass user turn before implementation starts, but the shared /cook flow still owns mission selection and confirmation."',
-        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Router mode only offers the same /cook flow, and router recovery only replays to normal chat when you explicitly choose Send as normal chat, so clarify the concrete repo changes in the main chat and rerun /cook."',
+        'description: "/cook workflow: start, continue, refocus, or start the next round from an explicit /cook command"',
+        '"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook."',
         'handleCookNaturalLanguageTrigger',
     ],
 }

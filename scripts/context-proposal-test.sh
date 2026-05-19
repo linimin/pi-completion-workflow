@@ -654,6 +654,16 @@ assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluatio
 assert active['mission_anchor'] == mission, 'active-slice.json mission_anchor mismatch after analyst-derived bootstrap'
 assert active['task_type'] == expected_task_type, 'active-slice.json task_type mismatch after analyst-derived bootstrap'
 assert active['evaluation_profile'] == expected_eval_profile, 'active-slice.json evaluation_profile mismatch after analyst-derived bootstrap'
+brief = state['advisory_startup_brief']
+assert brief['kind'] == 'startup_brief', 'state.json should preserve the confirmed startup brief as advisory intake'
+assert brief['mission'] == mission, 'advisory startup brief mission should match the accepted mission anchor'
+assert brief['scope'] == ['Keep the non-running completion widget.', 'Suppress the widget while a completion role is active.'], 'advisory startup brief should preserve scope items separately from canonical planning state'
+assert brief['constraints'] == ['Do not reintroduce any other completion status surface.'], 'advisory startup brief should preserve constraints separately from canonical planning state'
+assert brief['acceptance'] == ['Update README to match the shipped behavior.', 'Keep observability regression coverage truthful.'], 'advisory startup brief should preserve acceptance separately from canonical planning state'
+assert brief['risks'] == ['Stale widget-removal discussion could broaden the startup plan if it gets treated as mission text.'], 'advisory startup brief should preserve derived risks'
+assert brief['notes'] == ['Keep critique separate from the mission anchor so startup analysis does not rewrite the workflow goal.', 'Possible noise: older widget restyle ideas'], 'advisory startup brief should preserve operator notes and possible-noise cautions'
+assert plan['candidate_slices'] == [], 'startup brief should remain advisory intake only until regrounder owns plan selection'
+assert active['status'] == 'idle', 'startup brief should not become the active-slice source before regrounder runs'
 assert proposal['mission'] == mission, 'discussion-only proposal snapshot should keep the inferred mission anchor'
 assert proposal['analysis']['taskType'] == expected_task_type, 'discussion-only proposal snapshot should expose task_type hints separately'
 assert proposal['analysis']['evaluationProfile'] == expected_eval_profile, 'discussion-only proposal snapshot should expose evaluation_profile hints separately'
@@ -1080,6 +1090,7 @@ assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json eva
 assert state['mission_anchor'] == mission, 'state.json mission_anchor mismatch after starting the next workflow round'
 assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after starting the next workflow round'
 assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after starting the next workflow round'
+assert state['advisory_startup_brief']['mission'] == mission, 'next-round startup should preserve the confirmed startup brief as advisory intake'
 assert plan['mission_anchor'] == mission, 'plan.json mission_anchor mismatch after starting the next workflow round'
 assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after starting the next workflow round'
 assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after starting the next workflow round'
@@ -1101,8 +1112,7 @@ assert plan['plan_basis'] == 'user_refocus', 'plan_basis should reset to user_re
 assert active['status'] == 'idle', 'active-slice should reset to idle for the next workflow round'
 PY
 
-# Active workflow: /cook <hint> should bias active-workflow proposal derivation,
-# still route through the chooser, and leave canonical state unchanged when the user cancels.
+# Active workflow: inline `/cook` arguments should fail closed immediately and leave canonical state unchanged.
 ACTIVE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-active-inline-arg-routing.json"
 ACTIVE_INLINE_REJECTION_PROPOSAL="$TMPDIR/context-proposal-active-inline-arg-proposal.json"
 ACTIVE_INLINE_REJECTION_CHOOSER="$TMPDIR/context-proposal-active-inline-arg-chooser.json"
@@ -1123,9 +1133,6 @@ tracked = [
 Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
 PY
 
-PI_COMPLETION_EXISTING_WORKFLOW_ACTION=refocus \
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
-PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Replacement mission for the active workflow.","scope":["Review the replacement through the existing workflow chooser first."],"constraints":["Do not rewrite canonical state before the final Start confirmation."],"acceptance":["Show the final replacement proposal only after the chooser selects refocus."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$ACTIVE_INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$ACTIVE_INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$ACTIVE_INLINE_REJECTION_CHOOSER" \
@@ -1138,9 +1145,9 @@ import sys
 from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
-routing = json.loads(Path(sys.argv[3]).read_text())
+routing = Path(sys.argv[3])
 proposal = Path(sys.argv[4])
-chooser = json.loads(Path(sys.argv[5]).read_text())
+chooser = Path(sys.argv[5])
 before = json.loads(Path(sys.argv[6]).read_text())
 tracked = [
     Path('.agent/mission.md'),
@@ -1151,17 +1158,15 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 
-assert routing['action'] == 'refocus', 'active /cook <hint> should run active-workflow routing'
-assert routing['proposedMissionAnchor'] == 'Replacement mission for the active workflow.', 'active /cook <hint> should bias toward the hinted replacement mission'
-assert json.loads(proposal.read_text())['mission'] == 'Replacement mission for the active workflow.', 'active /cook <hint> should carry the hinted mission into the final replacement proposal'
-assert chooser['choices'][1].startswith('Start new workflow from recent discussion'), 'active /cook <hint> should open the existing-workflow chooser'
-assert 'Cancelled replacement workflow proposal.' in output or 'Cancelled existing workflow confirmation.' in output, 'active /cook <hint> cancel should report cancellation'
+assert not routing.exists(), 'active /cook inline-args rejection should not run active-workflow routing'
+assert not proposal.exists(), 'active /cook inline-args rejection should not emit a replacement startup-brief proposal'
+assert not chooser.exists(), 'active /cook inline-args rejection should not open the existing-workflow chooser'
+assert '/cook no longer accepts inline arguments.' in output, 'active /cook inline-args rejection should explain the bare-only entry contract'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active /cook <hint> cancel should leave canonical files unchanged'
+assert before == after, 'active /cook inline-args rejection should leave canonical files unchanged'
 PY
 
-# Completed workflow: /cook <hint> should bias next-round proposal derivation and still leave canonical state
-# unchanged when the user cancels the approval-only proposal.
+# Completed workflow: inline `/cook` arguments should also fail closed before any next-round proposal derivation.
 mark_done
 
 DONE_INLINE_REJECTION_ROUTING="$TMPDIR/context-proposal-done-inline-arg-routing.json"
@@ -1184,8 +1189,6 @@ tracked = [
 Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
 PY
 
-PI_COMPLETION_CONTEXT_PROPOSAL_ACTION=cancel \
-PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Update README guidance for the next workflow round.","scope":["Refresh README guidance for /cook hint-driven startup behavior."],"constraints":["Do not rewrite canonical state before Start is accepted."],"acceptance":["Keep the next-round proposal scoped to README updates only."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$DONE_INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$DONE_INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$DONE_INLINE_REJECTION_CHOOSER" \
@@ -1199,7 +1202,7 @@ from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
 routing = Path(sys.argv[3])
-proposal = json.loads(Path(sys.argv[4]).read_text())
+proposal = Path(sys.argv[4])
 chooser = Path(sys.argv[5])
 before = json.loads(Path(sys.argv[6]).read_text())
 tracked = [
@@ -1211,14 +1214,14 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 state_before = json.loads(before['state.json'])
-assert state_before['current_phase'] == 'done', 'done /cook <hint> should start from a completed workflow'
-assert state_before['project_done'] is True, 'done /cook <hint> should start from project_done=true'
-assert not routing.exists(), 'done /cook <hint> should not run active-workflow routing while starting the next round'
-assert proposal['mission'] == 'Update README guidance for the next workflow round.', 'done /cook <hint> should bias next-round mission derivation toward the hint'
-assert not chooser.exists(), 'done /cook <hint> should not open the existing-workflow chooser when starting the next round'
-assert 'Cancelled next workflow round proposal.' in output, 'done /cook <hint> cancel should report next-round proposal cancellation'
+assert state_before['current_phase'] == 'done', 'done /cook inline-args rejection should start from a completed workflow'
+assert state_before['project_done'] is True, 'done /cook inline-args rejection should start from project_done=true'
+assert not routing.exists(), 'done /cook inline-args rejection should not run active-workflow routing while starting the next round'
+assert not proposal.exists(), 'done /cook inline-args rejection should not emit a next-round startup-brief proposal'
+assert not chooser.exists(), 'done /cook inline-args rejection should not open the existing-workflow chooser when starting the next round'
+assert '/cook no longer accepts inline arguments.' in output, 'done /cook inline-args rejection should explain the bare-only entry contract'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'done /cook <hint> cancel should leave canonical files unchanged'
+assert before == after, 'done /cook inline-args rejection should leave canonical files unchanged'
 PY
 
 # Completed workflow again: /cook with no goal should be able to use model-assisted
@@ -1296,15 +1299,15 @@ from pathlib import Path
 snapshot = json.loads(Path(sys.argv[1]).read_text())
 state = json.loads(Path('.agent/state.json').read_text())
 
-assert snapshot['proposalHeading'] == 'Proposed workflow', 'custom confirmation snapshot should expose a dedicated proposal section'
-assert snapshot['critiqueHeading'] == 'Critique and risks', 'custom confirmation snapshot should expose critique separately from the proposal body'
+assert snapshot['proposalHeading'] == 'Startup brief', 'custom confirmation snapshot should expose a dedicated startup-brief section'
+assert snapshot['critiqueHeading'] == 'Notes and risks', 'custom confirmation snapshot should expose notes separately from the startup-brief body'
 assert snapshot['routingHeading'] == 'Routing recommendations', 'custom confirmation snapshot should expose routing recommendations separately from the proposal body'
 assert 'approval-only' in snapshot['intro'], 'custom confirmation intro should explain the approval-only gate'
 assert state['task_type'] == 'completion-workflow', 'start action should preserve canonical task_type'
 assert state['evaluation_profile'] == 'completion-rubric-v1', 'start action should preserve canonical evaluation_profile'
 assert 'Mission\nReplace the crowded selector with a clearer action layout.' in snapshot['proposalBody'], 'proposal body should be captured separately from the action list'
-assert 'Keep critique details separate from the approval-only proposal summary.' not in snapshot['proposalBody'], 'critique notes should not be embedded in the proposal body'
-assert 'Critique\n- Keep critique details separate from the approval-only proposal summary.' in snapshot['critiqueBody'], 'critique section should render accepted critique notes separately'
+assert 'Keep critique details separate from the approval-only proposal summary.' not in snapshot['proposalBody'], 'critique notes should not be embedded in the startup-brief body'
+assert 'Critique\n- Keep critique details separate from the approval-only proposal summary.' in snapshot['critiqueBody'], 'notes section should render accepted critique notes separately'
 assert 'Risks\n- Bundling critique into the action list would make the confirmation harder to scan.' in snapshot['critiqueBody'], 'critique section should render risk notes separately'
 assert 'Possible noise\n- old selector wording' in snapshot['critiqueBody'], 'critique section should render possible-noise notes separately'
 assert '- task_type: completion-workflow' in snapshot['routingBody'], 'routing section should render the recommended task_type'
@@ -1316,6 +1319,7 @@ for action in snapshot['actions']:
     assert 'Replace the crowded selector with a clearer action layout.' not in action['label'], 'proposal mission should not be embedded in action labels'
     assert 'Separate proposal text from actions.' not in action['description'], 'proposal scope should not be embedded in action descriptions'
 assert state['mission_anchor'] == 'Replace the crowded selector with a clearer action layout.', 'start action should still accept the proposed mission'
+assert state['advisory_startup_brief']['mission'] == 'Replace the crowded selector with a clearer action layout.', 'start action should preserve the confirmed startup brief canonically'
 assert state['continuation_reason'].startswith('User started workflow via /cook:'), 'start action should persist the startup routing outcome in continuation_reason'
 assert 'Keep critique details separate from the approval-only proposal summary.' in state['continuation_reason'], 'start action should persist the accepted critique outcome canonically'
 PY

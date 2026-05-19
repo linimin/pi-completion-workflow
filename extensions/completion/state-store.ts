@@ -223,10 +223,12 @@ export function buildProfileRecord(args: {
 export function defaultState(
 	missionAnchor: string,
 	routing?: { taskType?: string; evaluationProfile?: string; continuationReason?: string },
+	advisoryStartupBrief?: JsonRecord,
 ): JsonRecord {
 	return {
 		schema_version: 1,
 		mission_anchor: missionAnchor,
+		advisory_startup_brief: advisoryStartupBrief ?? null,
 		current_phase: "reground",
 		continuation_policy: "continue",
 		continuation_reason: routing?.continuationReason ?? "Fresh completion bootstrap requires canonical re-ground",
@@ -390,7 +392,7 @@ export type ScaffoldResult = {
 export async function scaffoldCompletionFiles(
 	root: string,
 	missionAnchor: string,
-	options?: { analysis?: { taskType?: string; evaluationProfile?: string }; continuationReason?: string },
+	options?: { analysis?: { taskType?: string; evaluationProfile?: string }; continuationReason?: string; advisoryStartupBrief?: JsonRecord },
 ): Promise<ScaffoldResult> {
 	const files = resolveFiles(root);
 	const created: string[] = [];
@@ -411,7 +413,7 @@ export async function scaffoldCompletionFiles(
 		{ path: path.join(files.agentDir, "verify_completion_control_plane.sh"), content: buildVerifyControlPlaneScript(), executable: true },
 		{
 			path: files.statePath,
-			content: `${JSON.stringify(defaultState(missionAnchor, { taskType: options?.analysis?.taskType, evaluationProfile: options?.analysis?.evaluationProfile, continuationReason: options?.continuationReason }), null, 2)}\n`,
+			content: `${JSON.stringify(defaultState(missionAnchor, { taskType: options?.analysis?.taskType, evaluationProfile: options?.analysis?.evaluationProfile, continuationReason: options?.continuationReason }, options?.advisoryStartupBrief), null, 2)}\n`,
 		},
 		{ path: files.planPath, content: `${JSON.stringify(defaultPlan(missionAnchor, { taskType: options?.analysis?.taskType, evaluationProfile: options?.analysis?.evaluationProfile }), null, 2)}\n` },
 		{ path: files.activePath, content: `${JSON.stringify(defaultActiveSlice(missionAnchor, { taskType: options?.analysis?.taskType, evaluationProfile: options?.analysis?.evaluationProfile }), null, 2)}\n` },

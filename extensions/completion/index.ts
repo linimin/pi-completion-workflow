@@ -193,7 +193,7 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
+	"/cook failed closed because recent discussion did not produce a clear execution-ready startup brief with Mission/Scope/Constraints/Acceptance for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
 
 function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean {
 	return asString(snapshot?.state?.continuation_policy) === "done";
@@ -345,7 +345,6 @@ async function promptContextProposalConfirmationAction(
 async function deriveCookContextProposal(
 	ctx: { cwd: string; hasUI: boolean; ui: any; sessionManager: any; model?: any; modelRegistry?: any },
 	projectName: string,
-	hintText?: string,
 ): Promise<ContextProposal | undefined> {
 	const recentEntries = collectRecentDiscussionEntries(ctx, { isRecord, asString, isStaleContextError });
 	const snapshot = await loadCompletionSnapshot(getCtxCwd(ctx));
@@ -361,11 +360,9 @@ async function deriveCookContextProposal(
 			`verification summary: ${asString(snapshot.verificationEvidence?.summary) ?? "(none)"}`,
 		]
 		: [];
-	if (hintText) workflowContextLines.push(`cook hint: ${hintText}`);
 	return await deriveCookContextProposalFromRecentDiscussion(projectName, recentEntries, {
 		asString,
 		asStringArray,
-		hintText,
 		workflowContext: snapshot
 			? {
 				currentMissionAnchor:
@@ -379,15 +376,12 @@ async function deriveCookContextProposal(
 				continuationPolicy: asString(snapshot.state?.continuation_policy),
 			}
 			: undefined,
-		analyzeContextProposal: async (entries, derivedHintText) =>
+		analyzeContextProposal: async (entries) =>
 			await analyzeContextProposalWithAgent({
 				ctx,
 				projectName,
 				recentEntries: entries,
-				workflowContextLines:
-					derivedHintText && !workflowContextLines.includes(`cook hint: ${derivedHintText}`)
-						? [...workflowContextLines, `cook hint: ${derivedHintText}`]
-						: workflowContextLines,
+				workflowContextLines,
 				liveRoleActivityByRoot,
 				completionStatusKey: COMPLETION_STATUS_KEY,
 				safeUiCall,
@@ -437,12 +431,13 @@ async function confirmContextProposal(
 async function scaffoldCompletionFiles(
 	root: string,
 	missionAnchor: string,
-	options?: { analysis?: ContextProposalAnalysis; continuationReason?: string },
+	options?: { analysis?: ContextProposalAnalysis; continuationReason?: string; advisoryStartupBrief?: JsonRecord },
 ) {
 	const routing = finalizeContextProposalAnalysis(options?.analysis, [missionAnchor]);
 	return await scaffoldCompletionFilesOnDisk(root, missionAnchor, {
 		analysis: { taskType: routing.taskType, evaluationProfile: routing.evaluationProfile },
 		continuationReason: options?.continuationReason,
+		advisoryStartupBrief: options?.advisoryStartupBrief,
 	});
 }
 
@@ -875,7 +870,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
 		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
 		cookCommandSpec: {
-			description: "/cook workflow: start, continue, refocus, or start the next round from an explicit /cook command",
+			description: "/cook workflow: derive a startup brief from recent discussion, then start, continue, refocus, or start the next round from the explicit /cook command",
 		},
 		buildContextProposalContinuationReason,
 		completionKickoff,

@@ -16,6 +16,7 @@ import {
 	loadCompletionSnapshot,
 	writeJsonFile,
 } from "./state-store";
+import { buildAdvisoryStartupBrief } from "./prompt-surfaces";
 import type { CompletionStateSnapshot } from "./types";
 
 type ContextProposalAnalysis = {
@@ -109,7 +110,7 @@ export type CompletionDriverDeps = {
 		missionAnchor?: string,
 	) => string;
 	completionResumePrompt: (taskType: string, evaluationProfile: string) => string;
-	deriveCookContextProposal: (ctx: DriverContext, projectName: string, hintText?: string) => Promise<ContextProposal | undefined>;
+	deriveCookContextProposal: (ctx: DriverContext, projectName: string) => Promise<ContextProposal | undefined>;
 	confirmContextProposal: (
 		ctx: { hasUI: boolean; ui: any },
 		proposal: ContextProposal,
@@ -120,7 +121,7 @@ export type CompletionDriverDeps = {
 	scaffoldCompletionFiles: (
 		root: string,
 		missionAnchor: string,
-		options?: { analysis?: ContextProposalAnalysis; continuationReason?: string },
+		options?: { analysis?: ContextProposalAnalysis; continuationReason?: string; advisoryStartupBrief?: Record<string, unknown> },
 	) => Promise<{ root: string; created: string[] }>;
 	maybeWriteActiveWorkflowRoutingSnapshot: (assessment: ActiveWorkflowProposalAssessment) => void;
 	missionAnchorsLikelyEquivalent: (left: string, right: string) => boolean;
@@ -301,11 +302,10 @@ async function assessActiveWorkflowProposalRouting(
 	ctx: DriverContext,
 	snapshot: CompletionStateSnapshot,
 	deps: CompletionDriverDeps,
-	hintText?: string,
 ): Promise<ActiveWorkflowProposalAssessment> {
 	const currentMission = currentMissionAnchor(snapshot);
 	const projectName = path.basename(snapshot.files.root);
-	const proposal = await deps.deriveCookContextProposal(ctx, projectName, hintText);
+	const proposal = await deps.deriveCookContextProposal(ctx, projectName);
 	if (!proposal) {
 		const assessment: ActiveWorkflowProposalAssessment = {
 			action: "unclear",
@@ -461,6 +461,7 @@ async function refocusCompletionMission(
 	rawGoal: string,
 	analysis: ContextProposalAnalysis | undefined,
 	deps: CompletionDriverDeps,
+	advisoryStartupBrief?: Record<string, unknown>,
 ): Promise<void> {
 	const requiredStopJudges = asNumber(snapshot.profile?.required_stop_judges) ?? 3;
 	const root = snapshot.files.root;
@@ -479,7 +480,7 @@ async function refocusCompletionMission(
 			taskType: routing.taskType,
 			evaluationProfile: routing.evaluationProfile,
 			continuationReason: deps.buildContextProposalContinuationReason("User refocused workflow via /cook:", rawGoal, routing),
-		}),
+		}, advisoryStartupBrief),
 		remaining_stop_judges: requiredStopJudges,
 		next_mandatory_action: "Reconcile canonical state from current repo truth for the refocused mission",
 	};
@@ -502,17 +503,11 @@ function isWorkflowDone(snapshot: CompletionStateSnapshot | undefined): boolean 
 	return asString(snapshot?.state?.continuation_policy) === "done";
 }
 
-export type RunCookEntryOptions = {
-	hintText?: string;
-};
-
 export async function runCookEntry(
 	pi: ExtensionAPI,
 	ctx: DriverContext,
 	deps: CompletionDriverDeps,
-	options: RunCookEntryOptions,
 ): Promise<void> {
-	const explicitHint = options.hintText?.trim() || undefined;
 	let goal: string | undefined;
 	const cwd = deps.getCtxCwd(ctx);
 	let snapshot = await loadCompletionSnapshot(cwd);
@@ -524,13 +519,13 @@ export async function runCookEntry(
 	if (!snapshot) {
 		const root = findRepoRoot(cwd) ?? cwd;
 		const projectName = path.basename(root);
-		const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
+		const proposal = await deps.deriveCookContextProposal(ctx, projectName);
 		if (!proposal) {
 			deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps), "info");
 			return;
 		}
 		const decision = await deps.confirmContextProposal(ctx, proposal, {
-			title: "Start a completion workflow from the recent discussion?",
+			title: "Start a completion workflow from this startup brief?",
 		});
 		if (!decision) {
 			deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled recent-discussion workflow proposal", deps), "info");
@@ -547,6 +542,7 @@ export async function runCookEntry(
 				goal ?? kickoffMissionAnchor ?? projectName,
 				startupRouting,
 			),
+			advisoryStartupBrief: buildAdvisoryStartupBrief({ proposal, analysis: decision.analysis }),
 		});
 		deps.emitCommandText(
 			ctx,
@@ -563,13 +559,13 @@ export async function runCookEntry(
 	if (!goal) {
 		if (workflowDone) {
 			const projectName = path.basename(snapshot.files.root);
-			const proposal = await deps.deriveCookContextProposal(ctx, projectName, explicitHint);
+			const proposal = await deps.deriveCookContextProposal(ctx, projectName);
 			if (!proposal) {
 				deps.emitCommandText(ctx, buildCookStructuredDiscussionFailureMessage(deps, "The previous completion workflow is already done."), "info");
 				return;
 			}
 			const decision = await deps.confirmContextProposal(ctx, proposal, {
-				title: "The previous completion workflow is done. Start the next workflow round from the recent discussion?",
+				title: "The previous completion workflow is done. Start the next workflow round from this startup brief?",
 			});
 			if (!decision) {
 				deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled next workflow round proposal", deps), "info");
@@ -578,11 +574,18 @@ export async function runCookEntry(
 			goal = decision.goalText;
 			kickoffIntent = "refocus";
 			kickoffMissionAnchor = decision.missionAnchor;
-			await refocusCompletionMission(snapshot, decision.missionAnchor, decision.goalText, decision.analysis, deps);
+			await refocusCompletionMission(
+				snapshot,
+				decision.missionAnchor,
+				decision.goalText,
+				decision.analysis,
+				deps,
+				buildAdvisoryStartupBrief({ proposal, analysis: decision.analysis }),
+			);
 			snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 			deps.emitCommandText(ctx, `Started a new completion workflow round from recent discussion: ${decision.missionAnchor}`, "info");
 		} else {
-			const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps, explicitHint);
+			const assessment = await assessActiveWorkflowProposalRouting(ctx, snapshot, deps);
 			if (!assessment.proposal || assessment.action === "continue") {
 				await resumeActiveWorkflowFromCanonicalState(pi, ctx, snapshot, deps);
 				return;
@@ -609,8 +612,8 @@ export async function runCookEntry(
 			const proposalDecision = await deps.confirmContextProposal(ctx, selectedProposal, {
 				title:
 					assessment.action === "refocus"
-						? "Start the replacement workflow from recent discussion?"
-						: "Start the latest inferred workflow from recent discussion?",
+						? "Start the replacement workflow from this startup brief?"
+						: "Start the latest inferred workflow from this startup brief?",
 			});
 			if (!proposalDecision) {
 				deps.emitCommandText(ctx, buildCookCancellationMessage("Cancelled replacement workflow proposal", deps), "info");
@@ -619,7 +622,14 @@ export async function runCookEntry(
 			goal = proposalDecision.goalText;
 			kickoffIntent = "refocus";
 			kickoffMissionAnchor = proposalDecision.missionAnchor;
-			await refocusCompletionMission(snapshot, proposalDecision.missionAnchor, proposalDecision.goalText, proposalDecision.analysis, deps);
+			await refocusCompletionMission(
+				snapshot,
+				proposalDecision.missionAnchor,
+				proposalDecision.goalText,
+				proposalDecision.analysis,
+				deps,
+				buildAdvisoryStartupBrief({ proposal: selectedProposal, analysis: proposalDecision.analysis }),
+			);
 			snapshot = (await loadCompletionSnapshot(snapshot.files.root)) ?? snapshot;
 			deps.emitCommandText(ctx, `Refocused completion mission from recent discussion to: ${proposalDecision.missionAnchor}`, "info");
 		}
@@ -650,7 +660,11 @@ export function registerCookCommand(pi: ExtensionAPI, deps: CompletionDriverDeps
 	pi.registerCommand("cook", {
 		description: deps.cookCommandSpec.description,
 		handler: async (args, ctx) => {
-			await runCookEntry(pi, ctx, deps, { hintText: args });
+			if (args.trim().length > 0) {
+				deps.emitCommandText(ctx, "/cook no longer accepts inline arguments. Discuss the concrete repo change in the main chat and rerun /cook.", "info");
+				return;
+			}
+			await runCookEntry(pi, ctx, deps);
 		},
 	});
 }

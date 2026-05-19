@@ -102,8 +102,6 @@ tracked = [
 Path(sys.argv[1]).write_text(json.dumps({path.name: path.read_text() for path in tracked}, indent=2) + '\n')
 PY
 
-PI_COMPLETION_EXISTING_WORKFLOW_ACTION=cancel \
-PI_COMPLETION_CONTEXT_PROPOSAL_ANALYST_OUTPUT='{"mission":"Replacement mission that should stay in the main chat.","scope":["Replace the current workflow only after explicit approval."],"constraints":["Do not rewrite canonical state before the final Start confirmation."],"acceptance":["Surface the chooser before any replacement workflow rewrite."],"task_type":"completion-workflow","evaluation_profile":"completion-rubric-v1","confidence":0.9}' \
 PI_COMPLETION_TEST_ACTIVE_WORKFLOW_ROUTING_PATH="$INLINE_REJECTION_ROUTING" \
 PI_COMPLETION_TEST_CONTEXT_PROPOSAL_PATH="$INLINE_REJECTION_PROPOSAL" \
 PI_COMPLETION_TEST_EXISTING_WORKFLOW_CHOOSER_PATH="$INLINE_REJECTION_CHOOSER" \
@@ -117,9 +115,9 @@ import sys
 from pathlib import Path
 
 output = Path(sys.argv[1]).read_text() + Path(sys.argv[2]).read_text()
-routing = json.loads(Path(sys.argv[3]).read_text())
+routing = Path(sys.argv[3])
 proposal = Path(sys.argv[4])
-chooser = json.loads(Path(sys.argv[5]).read_text())
+chooser = Path(sys.argv[5])
 initial_mission = sys.argv[6]
 before = json.loads(Path(sys.argv[7]).read_text())
 tracked = [
@@ -131,14 +129,13 @@ tracked = [
     Path('.agent/verification-evidence.json'),
 ]
 current_state = json.loads(before['state.json'])
-assert current_state['mission_anchor'] == initial_mission, 'active /cook <hint> should start from the current mission anchor'
-assert routing['action'] == 'refocus', 'active /cook <hint> should route through active-workflow replacement assessment'
-assert routing['proposedMissionAnchor'] == 'Replacement mission that should stay in the main chat.', 'active /cook <hint> should preserve the hinted replacement mission'
-assert not proposal.exists(), 'active /cook <hint> chooser cancel should not open final proposal confirmation'
-assert chooser['choices'][1].startswith('Start new workflow from recent discussion'), 'active /cook <hint> should open the existing-workflow chooser'
-assert 'Cancelled existing workflow confirmation.' in output, 'active /cook <hint> chooser cancel should report cancellation'
+assert current_state['mission_anchor'] == initial_mission, 'active /cook inline-args rejection should start from the current mission anchor'
+assert not routing.exists(), 'active /cook inline-args rejection should not run active-workflow routing'
+assert not proposal.exists(), 'active /cook inline-args rejection should not open final startup-brief confirmation'
+assert not chooser.exists(), 'active /cook inline-args rejection should not open the existing-workflow chooser'
+assert '/cook no longer accepts inline arguments.' in output, 'active /cook inline-args rejection should explain the bare-only entry contract'
 after = {path.name: path.read_text() for path in tracked}
-assert before == after, 'active /cook <hint> chooser cancel should leave canonical files unchanged'
+assert before == after, 'active /cook inline-args rejection should leave canonical files unchanged'
 PY
 
 SESSION_INITIAL_REFOCUS="$TMPDIR/session-initial-bare-refocus.jsonl"
@@ -175,6 +172,7 @@ assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json eva
 assert state['mission_anchor'] == new_anchor, 'state.json mission_anchor mismatch after refocus'
 assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after refocus'
 assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after refocus'
+assert state['advisory_startup_brief']['mission'] == new_anchor, 'refocus should preserve the confirmed startup brief as advisory intake'
 assert plan['mission_anchor'] == new_anchor, 'plan.json mission_anchor mismatch after refocus'
 assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after refocus'
 assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after refocus'
@@ -338,6 +336,7 @@ assert profile['evaluation_profile'] == expected_eval_profile, 'profile.json eva
 assert state['mission_anchor'] == new_anchor, 'state.json mission_anchor mismatch after bare refocus'
 assert state['task_type'] == expected_task_type, 'state.json task_type mismatch after bare refocus'
 assert state['evaluation_profile'] == expected_eval_profile, 'state.json evaluation_profile mismatch after bare refocus'
+assert state['advisory_startup_brief']['mission'] == new_anchor, 'bare refocus should preserve the confirmed startup brief as advisory intake'
 assert plan['mission_anchor'] == new_anchor, 'plan.json mission_anchor mismatch after bare refocus'
 assert plan['task_type'] == expected_task_type, 'plan.json task_type mismatch after bare refocus'
 assert plan['evaluation_profile'] == expected_eval_profile, 'plan.json evaluation_profile mismatch after bare refocus'
