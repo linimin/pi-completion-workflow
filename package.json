@@ -1,6 +1,6 @@
 {
   "name": "@linimin/pi-letscook",
-  "version": "0.1.54",
+  "version": "0.1.55",
   "description": "Pi package for long-running completion workflows with canonical .agent state, role-based subagents, continuity, and verification helpers.",
   "license": "MIT",
   "private": false,
@@ -13,7 +13,14 @@
   "bugs": {
     "url": "https://github.com/linimin/pi-letscook/issues"
   },
-  "keywords": ["pi-package", "pi", "workflow", "completion", "agent", "subagent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "workflow",
+    "completion",
+    "agent",
+    "subagent"
+  ],
   "files": [
     "extensions",
     "skills",
@@ -43,7 +50,11 @@
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./extensions/completion"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions/completion"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }
