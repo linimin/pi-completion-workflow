@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- removed assist mode from public routing behavior so natural-language entry is now either off or router, and made router the default trigger mode while keeping `/cook` as the canonical workflow boundary
+
 ## 0.1.52
 
 ### Changed

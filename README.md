@@ -2,7 +2,7 @@
 
 `/cook` turns main-chat discussion about concrete repo changes into a resumable repo workflow stored in repo-local `.agent/**` state.
 
-Natural-language routing is optional and shipped in three modes: `off` disables it, `assist` offers short confirm-first handoffs after clear workflow discussion, and `router` reviews each non-bypass user turn before implementation starts while leaving ordinary questions in the main chat. In every mode, `/cook` remains the canonical workflow boundary and manual fallback.
+Natural-language routing is optional and shipped in two modes: `off` disables it, and `router` reviews each non-bypass user turn before implementation starts while leaving ordinary questions in the main chat. In every mode, `/cook` remains the canonical workflow boundary and manual fallback.
 
 ## Use it when
 
@@ -46,8 +46,8 @@ Then run `/reload` in Pi.
 |---|---|
 | Start a long-running task | Discuss the concrete repo change in the main chat, then run `/cook` |
 | Bias mission detection toward one intent | Run `/cook <hint>` |
-| Change natural-language routing behavior | Set `PI_COMPLETION_TRIGGER_MODE=off`, `assist`, or `router` before starting Pi |
-| Hand off from discussion into the same `/cook` flow | In `assist`, say `開始做`, `開始實作`, or `go ahead`, then accept the confirmation |
+| Change natural-language routing behavior | Set `PI_COMPLETION_TRIGGER_MODE=off` or `router` before starting Pi |
+| Hand off from discussion into the same `/cook` flow | In `router`, say `開始做`, `開始實作`, or `go ahead`, then accept the confirmation |
 | Continue the current workflow | Run `/cook` |
 | Use the canonical fallback when natural-language routing does not fire or you want to bypass it | Run `/cook` explicitly |
 
@@ -66,8 +66,7 @@ If recent discussion is missing, weak, ambiguous, assistant-produced, or only de
 Set `PI_COMPLETION_TRIGGER_MODE` before starting Pi if you want to change how natural-language routing behaves:
 
 - `off` — natural-language routing is disabled. Only explicit `/cook` or `/cook <hint>` can enter the workflow.
-- `assist` *(default)* — after clear discussion of a concrete repo change, short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` can offer to enter the same `/cook` flow before the primary agent starts implementation work.
-- `router` — the workflow-aware router reviews each non-bypass normal user turn before implementation starts. Ordinary questions stay in the main chat, while direct start/resume/refocus/next-round prompts can offer the shared `/cook` flow with confirmation or clarification.
+- `router` *(default)* — the workflow-aware router reviews each non-bypass normal user turn before implementation starts. Ordinary questions stay in the main chat, while direct start/resume/refocus/next-round prompts can offer the shared `/cook` flow with confirmation or clarification. Short execution handoff phrases such as `開始做`, `開始實作`, or `go ahead` are covered by the same router path.
 
 Important behavior:
 - natural-language routing is only a shortcut into `/cook`; `/cook` is still the canonical workflow boundary and manual fallback
@@ -100,7 +99,7 @@ We should implement the natural-language routing path next.
 
 ## What happens when you run `/cook`
 
-`/cook` supports both bare discussion-driven startup and optional inline intent hints. Explicit `/cook` is always the canonical fallback, even when natural-language routing is enabled in `assist` or `router` mode.
+`/cook` supports both bare discussion-driven startup and optional inline intent hints. Explicit `/cook` is always the canonical fallback, even when natural-language routing is enabled in `router` mode.
 
 | Repo state | What you'll see |
 |---|---|

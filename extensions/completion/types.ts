@@ -86,7 +86,7 @@ export type CompletionStatusSurface = {
 	liveDetailsLines?: string[];
 };
 
-export type NaturalLanguageCookTriggerMode = "off" | "assist" | "router" | "auto";
+export type NaturalLanguageCookTriggerMode = "off" | "router" | "auto";
 export type CookTriggerClassifierDecision = "offer_workflow" | "normal_prompt" | "unclear";
 export type CookTriggerWorkflowBias = "startup" | "resume" | "refocus" | "next_round" | "unknown";
 

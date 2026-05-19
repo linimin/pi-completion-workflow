@@ -3,8 +3,8 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { runCookEntry, type CompletionDriverDeps } from "./driver";
 import {
-	buildCookTriggerAssistConfirmationLayout,
 	buildCookTriggerClarificationLayout,
+	buildCookTriggerConfirmationLayout,
 	buildCookTriggerRecoveryLayout,
 	maybeWriteCookTriggerClarificationSnapshot,
 	maybeWriteCookTriggerConfirmationSnapshot,
@@ -89,13 +89,14 @@ function configuredTriggerMode(): NaturalLanguageCookTriggerMode {
 	const raw =
 		asString(process.env.PI_COMPLETION_TEST_TRIGGER_MODE)?.toLowerCase() ??
 		asString(process.env.PI_COMPLETION_TRIGGER_MODE)?.toLowerCase() ??
-		"assist";
-	return raw === "off" || raw === "assist" || raw === "router" || raw === "auto" ? raw : "assist";
+		"router";
+	if (raw === "off") return "off";
+	if (raw === "router" || raw === "auto" || raw === "assist") return "router";
+	return "router";
 }
 
-function effectiveTriggerMode(mode: NaturalLanguageCookTriggerMode): "off" | "assist" | "router" {
+function effectiveTriggerMode(mode: NaturalLanguageCookTriggerMode): "off" | "router" {
 	if (mode === "off") return "off";
-	if (mode === "assist") return "assist";
 	return "router";
 }
 
@@ -445,7 +446,7 @@ async function promptCookTriggerTakeover(
 	deps: CompletionDriverDeps,
 ): Promise<CookTriggerConfirmationAction> {
 	const override = triggerConfirmationOverride();
-	const layout = buildCookTriggerAssistConfirmationLayout({
+	const layout = buildCookTriggerConfirmationLayout({
 		classification,
 		mainChatRerunGuidance: deps.mainChatRerunGuidance,
 	});
@@ -785,7 +786,7 @@ export async function handleCookNaturalLanguageTrigger(
 		writeRoutingDecision(event, {
 			mode: configuredMode,
 			action: "handled",
-			reason: ctx.hasUI ? "user_cancelled_takeover" : "assist_confirmation_unavailable",
+			reason: ctx.hasUI ? "user_cancelled_takeover" : "router_confirmation_unavailable",
 			classification,
 		}, {
 			...routingExtrasForArtifact(adoptedArtifact),

@@ -215,7 +215,7 @@ User input
 新增設定模式：
 
 ```ts
-type NaturalLanguageCookTriggerMode = "off" | "assist" | "auto";
+type NaturalLanguageCookTriggerMode = "off" | "router" | "auto";
 ```
 
 ### `off`
@@ -223,12 +223,12 @@ type NaturalLanguageCookTriggerMode = "off" | "assist" | "auto";
 - 完全關閉
 - 維持現狀
 
-### `assist`
+### `router`
 
-- 偵測到高信心 handoff 時，不直接自動啟動
+- 偵測到 workflow-worthy handoff 時，不直接自動啟動
 - 先詢問使用者：
   - 「要把目前討論交給 `/cook` 接管嗎？」
-- 適合初期 rollout，降低誤觸風險
+- 作為 shipped 的 confirm-first 模式，降低誤觸風險
 
 ### `auto`
 
@@ -238,7 +238,7 @@ type NaturalLanguageCookTriggerMode = "off" | "assist" | "auto";
 
 ### 建議 rollout
 
-- 第一階段預設：`assist`
+- 第一階段預設：`router`
 - 測試成熟後再考慮預設 `auto`
 
 ---
@@ -420,7 +420,7 @@ type CookTriggerClassification = {
 
 ## 12.3 建議 decision policy
 
-### `assist` 模式
+### `router` 模式
 
 - `route_to_cook` 且 `confidence >= 0.80`
   - 顯示簡短確認
@@ -543,7 +543,7 @@ runCookEntry(pi, ctx, deps, options)
 - input gating
 - classifier 呼叫
 - confidence policy
-- confirm / assist / auto 決策
+- confirm / router / auto 決策
 - 呼叫 driver shared entry
 
 ### 建議 public API
@@ -663,7 +663,7 @@ type CookInvocationOptions = {
 
 ## 17. 確認 UX 設計
 
-## 17.1 `assist` 模式確認文案
+## 17.1 `router` 模式確認文案
 
 當 classifier 高信心判斷為 handoff 時：
 
@@ -857,11 +857,11 @@ Detected execution handoff from recent discussion; routing to /cook.
 
 - 新增 `input-routing.ts`
 - 新增 classifier subprocess helper
-- `assist` 模式先落地
+- `router` confirm-first 模式先落地
 
 ### 驗收
 
-- 自然語言 handoff 能在 assist 模式下彈確認
+- 自然語言 handoff 能在 router 模式下彈確認
 - 普通 prompt 不誤攔
 - classifier failure 保守 handled
 
@@ -911,7 +911,7 @@ Detected execution handoff from recent discussion; routing to /cook.
 
 ### 對應
 
-- 先以 `assist` 為預設 rollout
+- 先以 `router` confirm-first 為預設 rollout
 - `auto` 僅對高信心啟用
 - 增加 confirmation 與 chooser
 
@@ -936,7 +936,7 @@ Detected execution handoff from recent discussion; routing to /cook.
 ### 對應
 
 - notify 文案
-- assist mode confirmation
+- router mode confirmation
 - snapshot / custom message 記錄
 
 ## 23.4 與既有 `/cook` confirmation 語意衝突
@@ -995,7 +995,7 @@ Detected execution handoff from recent discussion; routing to /cook.
 1. 先抽 `driver.ts` 共享 cook entry
 2. 新增 `input-routing.ts`
 3. 新增 classifier helper（可掛在 `role-runner.ts`）
-4. 以 `assist` 模式先落地
+4. 以 `router` confirm-first 模式先落地
 5. 補 `cook-trigger-routing-test.sh`
 6. 全綠後再考慮 `auto`
 

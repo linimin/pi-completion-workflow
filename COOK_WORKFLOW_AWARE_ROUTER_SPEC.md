@@ -7,7 +7,7 @@
   - `COOK_COMMANDLESS_ENTRY_SPEC.md`
 - Current shipped baseline:
   - explicit `/cook` remains the canonical manual entry
-  - assist-mode natural-language handoff can offer the same shared `/cook` flow
+  - router-mode natural-language routing can offer the same shared `/cook` flow
 
 ## 1. 背景
 
@@ -213,10 +213,10 @@ LLM 比 regex 更適合判斷：
 
 ## 6. 模式設計
 
-建議把目前的 trigger mode 擴展成：
+建議把目前的 trigger mode 定義為：
 
 ```ts
-type CompletionEntryMode = "off" | "assist" | "router" | "auto";
+type CompletionEntryMode = "off" | "router" | "auto";
 ```
 
 ### `off`
@@ -224,15 +224,9 @@ type CompletionEntryMode = "off" | "assist" | "router" | "auto";
 - 關閉 commandless routing
 - 使用者僅能手動 `/cook`
 
-### `assist`
-
-- 目前 shipped 模式
-- 主要攔截短 handoff phrase 與採納計劃語句
-- 屬於過渡期模式
-
 ### `router`
 
-- 目標預設模式
+- 目前 shipped 且建議預設模式
 - 每個正常 user turn 都先經過 extension router
 - router 可判定 normal prompt 或 workflow offer / clarification
 - workflow 入口預設仍為 confirm-first
@@ -672,7 +666,7 @@ router-by-default 若要可控，必須加強觀測：
 - `extensions/completion/index.ts`
   - mode 設定與入口 wiring
 - `extensions/completion/input-routing.ts`
-  - assist-mode trigger routing 升級成 per-turn router
+  - router trigger routing 覆蓋 per-turn router
   - explicit replay / bypass 標記
 - `extensions/completion/role-runner.ts`
   - 專用 router classifier subprocess
@@ -687,7 +681,7 @@ router-by-default 若要可控，必須加強觀測：
 - `scripts/cook-trigger-routing-test.sh`
   - 擴充成 per-turn router regression suite
 - `README.md`
-  - 對外說明從「assist-mode shortcut」升級為「workflow-aware router」
+  - 對外說明統一為「workflow-aware router」
 - `CHANGELOG.md`
   - 行為與 migration 說明
 
@@ -698,7 +692,7 @@ router-by-default 若要可控，必須加強觀測：
 ### Phase 0：現況
 
 - explicit `/cook`
-- assist-mode natural-language handoff
+- router-mode natural-language routing
 
 ### Phase 1：shadow router
 
@@ -714,11 +708,11 @@ router-by-default 若要可控，必須加強觀測：
 - `Send as normal chat` 成為主要 false-positive 吸收機制
 - 這應是第一個可對外預設的 commandless 版本
 
-### Phase 3：default router mode
+### Phase 3：router-default public contract
 
-- `router` 成為預設
-- `assist` 保留一段時間作為 fallback
+- `router` 維持為預設
 - README 改為 commandless-first 說明
+- 對外移除舊 shortcut wording
 
 ### Phase 4：optional auto mode
 
@@ -770,4 +764,4 @@ router-by-default 若要可控，必須加強觀測：
 - primary agent 不再擁有 workflow-entry 裁決權
 - LLM 是主要語意裁決器，但 extension 才是最終 routing owner
 
-這是從目前 assist-mode handoff 走向真正 commandless-by-default completion workflow 的完整終局方案。
+這是從目前 router-mode natural-language routing 走向真正 commandless-by-default completion workflow 的完整終局方案。

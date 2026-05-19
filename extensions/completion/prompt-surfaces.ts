@@ -436,7 +436,7 @@ export function buildCookTriggerClarificationLayout(args: {
 	};
 }
 
-export function buildCookTriggerAssistConfirmationLayout(args: {
+export function buildCookTriggerConfirmationLayout(args: {
 	classification: CookTriggerClassification;
 	mainChatRerunGuidance: string;
 }): CookTriggerConfirmationLayout {

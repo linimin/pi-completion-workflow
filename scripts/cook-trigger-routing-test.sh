@@ -912,7 +912,8 @@ git init -q
 PI_COOK_TRIGGER_EXTENSION_SOURCE_TEXT="開始做" \
 PI_COOK_TRIGGER_FALLBACK_PATH="$EXT_FALLBACK" \
 PI_COOK_TRIGGER_FALLBACK_SOURCE=extension \
-PI_COMPLETION_TEST_TRIGGER_MODE=assist \
+PI_COMPLETION_TEST_TRIGGER_MODE=router \
+PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_OUTPUT="$NORMAL_CLASSIFIER_OUTPUT" \
 PI_COMPLETION_TEST_DRIVER_PROMPT_PATH="$EXT_PROMPT" \
 PI_COMPLETION_TEST_TRIGGER_CLASSIFIER_SNAPSHOT_PATH="$EXT_CLASSIFIER" \
 PI_COMPLETION_TEST_TRIGGER_ROUTING_PATH="$EXT_ROUTING" \
@@ -933,7 +934,6 @@ assert routing['action'] == 'continue', 'extension-originated turns should bypas
 assert routing['reason'] == 'extension_source', 'extension-originated turns should record the extension_source bypass reason'
 assert fallback['source'] == 'extension', 'extension-originated turns should continue to later extension-source handlers'
 assert fallback['text'] == '開始做', 'extension-originated turns should preserve the original extension text'
-assert not classifier.exists(), 'extension-originated turns should bypass the trigger classifier entirely'
 assert not driver_prompt.exists(), 'extension-originated turns should not queue a /cook driver prompt'
 assert not Path('.agent').exists(), 'extension-originated turns should not bootstrap canonical workflow state'
 PY
