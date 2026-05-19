@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- removed workflow-aware prompt interception so only explicit `/cook` or `/cook <hint>` enters the workflow; ordinary prompts now always stay on the main chat path
+- updated docs and release checks to describe explicit `/cook` entry instead of router-managed natural-language takeover
+
 ## 0.1.53
 
 ### Changed

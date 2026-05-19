@@ -14,7 +14,6 @@ import {
 	markQueuedDriverPromptInFlight,
 	registerCookCommand,
 } from "./driver";
-import { handleCookNaturalLanguageTrigger } from "./input-routing";
 import {
 	assessMissionAnchor,
 	collectRecentDiscussionEntries,
@@ -209,9 +208,9 @@ function maybeWriteTestSnapshot(targetPath: string | undefined, content: string)
 
 const COOK_MAIN_CHAT_RERUN_GUIDANCE = "Discuss changes in the main chat and rerun /cook.";
 const COOK_BARE_ONLY_GUIDANCE =
-	"/cook remains the canonical workflow boundary. Natural-language routing can stay off or run in router mode to review each non-bypass user turn before implementation starts, but the shared /cook flow still owns mission selection and confirmation.";
+	"/cook is the canonical workflow boundary. Discuss the concrete repo changes in the main chat, then run /cook when you want to start, continue, refocus, or begin the next workflow round.";
 const COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL =
-	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Router mode only offers the same /cook flow, and router recovery only replays to normal chat when you explicitly choose Send as normal chat, so clarify the concrete repo changes in the main chat and rerun /cook.";
+	"/cook failed closed because recent discussion did not produce a clear execution-ready Mission/Scope/Constraints/Acceptance proposal for concrete repo changes. Clarify the concrete repo changes in the main chat and rerun /cook.";
 
 function buildCookCancellationMessage(prefix: string): string {
 	return `${prefix}. ${COOK_MAIN_CHAT_RERUN_GUIDANCE}`;
@@ -931,7 +930,7 @@ export default function completionExtension(pi: ExtensionAPI) {
 		structuredDiscussionFailureDetail: COOK_STRUCTURED_DISCUSSION_FAILURE_DETAIL,
 		mainChatRerunGuidance: COOK_MAIN_CHAT_RERUN_GUIDANCE,
 		cookCommandSpec: {
-			description: "/cook workflow: start, continue, refocus, or start the next round; /cook stays canonical while natural-language routing can be off or router",
+			description: "/cook workflow: start, continue, refocus, or start the next round from an explicit /cook command",
 		},
 		buildContextProposalContinuationReason,
 		completionKickoff,
@@ -961,9 +960,6 @@ export default function completionExtension(pi: ExtensionAPI) {
 		shouldTreatBareActiveWorkflowProposalAsClearRefocus,
 	};
 
-	pi.on("input", async (event, ctx) => {
-		return await handleCookNaturalLanguageTrigger(pi, event, ctx, driverDeps);
-	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		await refreshCompletionStatus({ ctx, ...statusSurfaceArgs });
