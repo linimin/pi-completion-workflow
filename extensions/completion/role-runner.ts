@@ -23,7 +23,7 @@ import {
 	refreshCompletionStatus,
 	type RoleMessage,
 } from "./status-surface";
-import { completionRootKey, findCompletionRoot, findRepoRoot, loadCompletionDataForReminder } from "./state-store";
+import { completionRootKey, findCompletionRoot, findRepoRoot } from "./state-store";
 import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";
 import type { AgentDefinition, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
 
@@ -377,7 +377,6 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 
 export async function runCompletionRole(params: RunCompletionRoleParams): Promise<RunCompletionRoleResult> {
 	const agent = await loadAgentDefinition(params.root, params.role);
-	await loadCompletionDataForReminder(params.root);
 	const systemPromptTemp = await writeTempFile(params.root, "pi-completion-role-", agent.systemPrompt);
 	const taskLines = [...params.systemPromptPreamble];
 	if (params.evaluationContextLines?.length) taskLines.push("", ...params.evaluationContextLines);

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
@@ -75,11 +74,9 @@ import {
 	readText,
 	scaffoldCompletionFiles as scaffoldCompletionFilesOnDisk,
 } from "./state-store";
-import { parseFirstNumber, parseYesNo } from "./transcription";
 import type { TranscriptionResult } from "./transcription";
 import type { CompletionStateSnapshot, CompletionRole, JsonRecord, LiveRoleActivity } from "./types";
 
-const PROTOCOL_ID = "completion";
 const ROLE_NAMES = [
 	"completion-bootstrapper",
 	"completion-regrounder",
@@ -842,20 +839,6 @@ function composeResumeCapsule(snapshot: CompletionStateSnapshot, sliceHistory: J
 			highValueGapCountBefore: asNumber(snapshot.active?.high_value_gap_count_before),
 			acceptanceCriteria: acceptance,
 		},
-	});
-}
-
-async function gitHeadSha(cwd: string): Promise<string | undefined> {
-	return await new Promise((resolve) => {
-		const proc = spawn("git", ["rev-parse", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"] });
-		let stdout = "";
-		proc.stdout.on("data", (chunk) => {
-			stdout += chunk.toString();
-		});
-		proc.on("close", (code) => {
-			resolve(code === 0 ? asString(stdout) : undefined);
-		});
-		proc.on("error", () => resolve(undefined));
 	});
 }
 

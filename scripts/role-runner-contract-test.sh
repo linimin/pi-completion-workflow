@@ -21,10 +21,9 @@ const assertNotIncludes = (file, snippet) => {
   }
 };
 
-assertIncludes('extensions/completion/role-runner.ts', 'import { completionRootKey, findCompletionRoot, findRepoRoot, loadCompletionDataForReminder } from "./state-store";');
+assertIncludes('extensions/completion/role-runner.ts', 'import { completionRootKey, findCompletionRoot, findRepoRoot } from "./state-store";');
 assertIncludes('extensions/completion/role-runner.ts', 'import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";');
 assertIncludes('extensions/completion/role-runner.ts', 'const agent = await loadAgentDefinition(params.root, params.role);');
-assertIncludes('extensions/completion/role-runner.ts', 'await loadCompletionDataForReminder(params.root);');
 assertIncludes('extensions/completion/role-runner.ts', 'const systemPromptTemp = await writeTempFile(params.root, "pi-completion-role-", agent.systemPrompt);');
 assertIncludes('extensions/completion/role-runner.ts', 'const reportFields = parseReportFields(output);');
 assertIncludes('extensions/completion/role-runner.ts', 'const transcription = exitCode === 0 ? await transcribeRoleOutput(params.role, params.root, output, reportFields) : undefined;');

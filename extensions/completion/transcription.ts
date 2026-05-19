@@ -17,14 +17,6 @@ export function parseReportFields(text: string): Record<string, string> {
 	return roleReporting.parseReportFields(text);
 }
 
-export function parseYesNo(value: string | undefined): boolean | undefined {
-	return roleReporting.parseYesNo(value);
-}
-
-export function parseFirstNumber(value: string | undefined): number | undefined {
-	return roleReporting.parseFirstNumber(value);
-}
-
 async function gitHeadSha(cwd: string): Promise<string | undefined> {
 	return await new Promise((resolve) => {
 		const proc = spawn("git", ["rev-parse", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"] });

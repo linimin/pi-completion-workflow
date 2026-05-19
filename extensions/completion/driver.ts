@@ -4,6 +4,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	buildMission,
 	buildProfileRecord,
+	currentEvaluationProfile,
+	currentMissionAnchor,
+	currentTaskType,
 	defaultActiveSlice,
 	defaultPlan,
 	defaultState,
@@ -161,33 +164,6 @@ function buildCookCancellationMessage(prefix: string, deps: CompletionDriverDeps
 
 function buildCookStructuredDiscussionFailureMessage(deps: CompletionDriverDeps, prefix?: string): string {
 	return prefix ? `${prefix} ${deps.structuredDiscussionFailureDetail}` : deps.structuredDiscussionFailureDetail;
-}
-
-function currentMissionAnchor(snapshot: CompletionStateSnapshot): string {
-	return (
-		asString(snapshot.state?.mission_anchor) ??
-		asString(snapshot.plan?.mission_anchor) ??
-		asString(snapshot.active?.mission_anchor) ??
-		path.basename(snapshot.files.root)
-	);
-}
-
-function currentTaskType(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.task_type) ??
-		asString(snapshot.state?.task_type) ??
-		asString(snapshot.plan?.task_type) ??
-		asString(snapshot.profile?.task_type)
-	);
-}
-
-function currentEvaluationProfile(snapshot: CompletionStateSnapshot): string | undefined {
-	return (
-		asString(snapshot.active?.evaluation_profile) ??
-		asString(snapshot.state?.evaluation_profile) ??
-		asString(snapshot.plan?.evaluation_profile) ??
-		asString(snapshot.profile?.evaluation_profile)
-	);
 }
 
 export function completionContinuationFingerprint(snapshot: CompletionStateSnapshot): string | undefined {

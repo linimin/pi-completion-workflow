@@ -330,7 +330,8 @@ export function buildVerifyControlPlaneScript(): string {
 	if (fs.existsSync(trackedScriptPath)) {
 		return fs.readFileSync(trackedScriptPath, "utf8");
 	}
-	return `#!/usr/bin/env node
+	return `#!/usr/bin/env bash
+':' //; exec node "$0" "$@"
 const fs = require('node:fs');
 
 function fail(message) {

@@ -83,7 +83,6 @@ assertIncludes('extensions/completion/prompt-surfaces.ts', '`- task_type: ${deps
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`- evaluation_profile: ${deps.currentEvaluationProfile(snapshot) ?? "(missing)"}`');
 assertIncludes('extensions/completion/prompt-surfaces.ts', 'Canonical evaluation handoff for ${role}:');
 assertIncludes('extensions/completion/index.ts', 'buildEvaluationRoleReminderText(snapshot, nextRole)');
-assertIncludes('extensions/completion/index.ts', 'import { parseFirstNumber, parseYesNo } from "./transcription";');
 assertIncludes('extensions/completion/role-runner.ts', 'import { parseReportFields, transcribeRoleOutput, type TranscriptionResult } from "./transcription";');
 assertIncludes('extensions/completion/transcription.ts', 'roleReporting.transcribeCanonicalRoleReport');
 assertIncludes('extensions/completion/role-reporting.js', 'Missing Rubric heading for ${role}.');
