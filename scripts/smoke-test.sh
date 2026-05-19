@@ -101,6 +101,7 @@ for file in .agent/profile.json .agent/state.json .agent/plan.json .agent/active
   [[ -f "$file" ]] || { echo "missing canonical bootstrap file: $file" >&2; exit 1; }
 done
 
+git ls-files --error-unmatch .agent/README.md .agent/mission.md .agent/profile.json .agent/verify_completion_stop.sh .agent/verify_completion_control_plane.sh >/dev/null
 bash .agent/verify_completion_control_plane.sh >/dev/null
 bash .agent/verify_completion_stop.sh >/dev/null
 

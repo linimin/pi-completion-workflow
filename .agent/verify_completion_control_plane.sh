@@ -3,6 +3,14 @@
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 
+const REQUIRED_TRACKED_CONTRACT_FILES = [
+  '.agent/README.md',
+  '.agent/mission.md',
+  '.agent/profile.json',
+  '.agent/verify_completion_stop.sh',
+  '.agent/verify_completion_control_plane.sh',
+];
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -34,9 +42,42 @@ function sameStringArrays(left, right) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
+function runGit(args, options = {}) {
+  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (!options.allowFailure && result.status !== 0) {
+    const stderr = asString(result.stderr) ?? 'git command failed';
+    fail(`git ${args.join(' ')} failed: ${stderr}`);
+  }
+  return result;
+}
+
 function gitHeadSha() {
-  const result = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const result = runGit(['rev-parse', 'HEAD'], { allowFailure: true });
   return result.status === 0 ? asString(result.stdout) : undefined;
+}
+
+function ensureTrackedContractFiles() {
+  for (const file of REQUIRED_TRACKED_CONTRACT_FILES) {
+    const result = runGit(['ls-files', '--error-unmatch', file], { allowFailure: true });
+    if (result.status !== 0) {
+      fail(`Required tracked completion contract file is missing from git index: ${file}`);
+    }
+  }
+}
+
+function ensureCommitExists(commitish, label) {
+  const result = runGit(['rev-parse', '--verify', `${commitish}^{commit}`], { allowFailure: true });
+  if (result.status !== 0) {
+    fail(`${label} must resolve to an existing commit: ${commitish}`);
+  }
+}
+
+function trackedDiffFiles(fromCommit, toCommit) {
+  const result = runGit(['diff', '--name-only', '--diff-filter=ACMR', `${fromCommit}..${toCommit}`]);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 const profile = readJson('.agent/profile.json');
@@ -44,6 +85,8 @@ const state = readJson('.agent/state.json');
 const plan = readJson('.agent/plan.json');
 const active = readJson('.agent/active-slice.json');
 const evidence = readJson('.agent/verification-evidence.json');
+
+ensureTrackedContractFiles();
 
 for (const [file, record] of [
   ['.agent/profile.json', profile],
@@ -134,6 +177,21 @@ if (exactHandoff) {
   const headSha = gitHeadSha();
   if (headSha && asString(evidence.head_sha) !== headSha) {
     fail('.agent/verification-evidence.json head_sha must match current HEAD');
+  }
+
+  const basisCommit = asString(active.basis_commit);
+  if (basisCommit && headSha) {
+    ensureCommitExists(basisCommit, '.agent/active-slice.json basis_commit');
+    const ancestorCheck = runGit(['merge-base', '--is-ancestor', basisCommit, headSha], { allowFailure: true });
+    if (ancestorCheck.status !== 0) {
+      fail(`.agent/active-slice.json basis_commit must be an ancestor of current HEAD: ${basisCommit} -> ${headSha}`);
+    }
+    const changedFiles = trackedDiffFiles(basisCommit, headSha);
+    const implementationSurfaces = new Set(asStringArray(active.implementation_surfaces));
+    const missingSurfaces = changedFiles.filter((file) => !implementationSurfaces.has(file));
+    if (missingSurfaces.length > 0) {
+      fail('.agent/active-slice.json implementation_surfaces must cover every tracked file changed from basis_commit to current HEAD; missing: ' + missingSurfaces.join(', '));
+    }
   }
 } else {
   const subjectType = asString(evidence.subject_type);

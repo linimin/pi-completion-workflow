@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "protocol_id": "completion",
+  "project_name": "pi-letscook",
+  "required_stop_judges": 3,
+  "priority_policy_id": "completion-default",
+  "task_type": "feature",
+  "evaluation_profile": "acceptance-and-regression",
+  "docs_surfaces": [
+    "README.md",
+    "CHANGELOG.md"
+  ]
+}

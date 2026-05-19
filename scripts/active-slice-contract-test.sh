@@ -82,9 +82,13 @@ assertIncludes('extensions/completion/prompt-surfaces.ts', 'Active slice contrac
 assertIncludes('extensions/completion/index.ts', 'Canonical active-slice contract drift is currently: ${activeContractDrift}');
 assertIncludes('extensions/completion/prompt-surfaces.ts', '`active_slice_contract_drift_fields: ${args.activeSliceContractDrift}`');
 assertIncludes('extensions/completion/index.ts', 'treat .agent/active-slice.json as the canonical implementation contract');
+assertIncludes('.agent/verify_completion_control_plane.sh', 'const REQUIRED_TRACKED_CONTRACT_FILES = [');
+assertIncludes('.agent/verify_completion_control_plane.sh', 'Required tracked completion contract file is missing from git index:');
 assertIncludes('.agent/verify_completion_control_plane.sh', "const planMirrorFields = ['locked_notes', 'must_fix_findings', 'implementation_surfaces', 'verification_commands', 'basis_commit', 'remaining_contract_ids_before', 'release_blocker_count_before', 'high_value_gap_count_before'];");
 assertIncludes('.agent/verify_completion_control_plane.sh', 'slice_id must match a slice in .agent/plan.json when status carries an exact handoff');
 assertIncludes('.agent/verify_completion_control_plane.sh', '.agent/active-slice.json must match the selected .agent/plan.json slice across: ');
+assertIncludes('.agent/verify_completion_control_plane.sh', '.agent/active-slice.json implementation_surfaces must cover every tracked file changed from basis_commit to current HEAD; missing: ');
+assertIncludes('scripts/release-check.sh', 'git ls-files --error-unmatch .agent/README.md .agent/mission.md .agent/profile.json .agent/verify_completion_stop.sh .agent/verify_completion_control_plane.sh >/dev/null');
 NODE
 
 ROOT="$TMPDIR/repo"
@@ -102,11 +106,24 @@ PI_COMPLETION_SKIP_DRIVER_KICKOFF=1 \
 pi --session "$BOOTSTRAP_SESSION" -e "$PKG_ROOT" -p "/cook" \
   >"$TMPDIR/pi-active-slice-bootstrap.out" 2>"$TMPDIR/pi-active-slice-bootstrap.err"
 
-python3 - <<'PY'
+git config user.name 'Completion Fixture'
+git config user.email 'completion-fixture@example.com'
+git add .
+git commit -q -m 'fixture basis'
+BASIS_SHA="$(git rev-parse HEAD)"
+printf '\nSlice surface fixture change.\n' >> README.md
+git add README.md
+git commit -q -m 'fixture slice change'
+HEAD_SHA="$(git rev-parse HEAD)"
+
+BASIS_SHA="$BASIS_SHA" HEAD_SHA="$HEAD_SHA" python3 - <<'PY'
 import json
+import os
 from pathlib import Path
 
 mission = 'Exercise active-slice contract parity.'
+basis_sha = os.environ['BASIS_SHA']
+head_sha = os.environ['HEAD_SHA']
 task_type = 'completion-workflow'
 evaluation_profile = 'completion-rubric-v1'
 verification_commands = [
@@ -157,8 +174,8 @@ state = {
     'last_reground_at': '2026-05-03T00:00:00Z',
     'last_auditor_verdict': None,
     'contract_status': 'selected_slice_pending_implementation',
-    'latest_completed_slice': 'fixturebasis',
-    'latest_verified_slice': 'fixturebasis',
+    'latest_completed_slice': head_sha,
+    'latest_verified_slice': head_sha,
 }
 plan = {
     'schema_version': 1,
@@ -182,7 +199,7 @@ plan = {
             'must_fix_findings': must_fix_findings,
             'implementation_surfaces': implementation_surfaces,
             'verification_commands': verification_commands,
-            'basis_commit': 'fixturebasis',
+            'basis_commit': basis_sha,
             'remaining_contract_ids_before': remaining_contracts,
             'release_blocker_count_before': 0,
             'high_value_gap_count_before': 2,
@@ -204,7 +221,7 @@ active = {
     'must_fix_findings': must_fix_findings,
     'implementation_surfaces': implementation_surfaces,
     'verification_commands': verification_commands,
-    'basis_commit': 'fixturebasis',
+    'basis_commit': basis_sha,
     'remaining_contract_ids_before': remaining_contracts,
     'release_blocker_count_before': 0,
     'high_value_gap_count_before': 2,
@@ -223,7 +240,7 @@ Path('.agent/verification-evidence.json').write_text(json.dumps({
     'goal': active['goal'],
     'contract_ids': active['contract_ids'],
     'basis_commit': active['basis_commit'],
-    'head_sha': active['basis_commit'],
+    'head_sha': head_sha,
     'verification_commands': verification_commands,
     'outcome': 'passed',
     'recorded_at': '2026-05-03T00:00:00Z',
@@ -247,6 +264,19 @@ PY
 
 bash .agent/verify_completion_control_plane.sh >/dev/null
 
+git rm --cached -q .agent/profile.json
+if bash .agent/verify_completion_control_plane.sh >"$TMPDIR/untracked-contract.out" 2>"$TMPDIR/untracked-contract.err"; then
+  echo 'expected verifier to fail when a required tracked .agent contract file becomes untracked' >&2
+  exit 1
+fi
+if ! grep -q 'Required tracked completion contract file is missing from git index: .agent/profile.json' "$TMPDIR/untracked-contract.err"; then
+  echo 'expected verifier failure output to mention the untracked .agent/profile.json contract file' >&2
+  cat "$TMPDIR/untracked-contract.err" >&2
+  exit 1
+fi
+git add .agent/profile.json
+bash .agent/verify_completion_control_plane.sh >/dev/null
+
 python3 - <<'PY'
 import copy
 import json
@@ -254,7 +284,9 @@ import subprocess
 from pathlib import Path
 
 plan_path = Path('.agent/plan.json')
+active_path = Path('.agent/active-slice.json')
 base_plan = json.loads(plan_path.read_text())
+base_active = json.loads(active_path.read_text())
 
 cases = [
     ('slice_id', lambda slice: slice.__setitem__('slice_id', 'different-slice')),
@@ -285,6 +317,29 @@ for label, mutate in cases:
     assert label in combined, f'expected verifier output to mention {label}, got: {combined}'
 
 plan_path.write_text(json.dumps(base_plan, indent=2) + '\n')
+active_path.write_text(json.dumps(base_active, indent=2) + '\n')
+
+surface_drift_plan = copy.deepcopy(base_plan)
+surface_drift_active = copy.deepcopy(base_active)
+surface_drift_plan['candidate_slices'][0]['implementation_surfaces'] = [
+    surface for surface in surface_drift_plan['candidate_slices'][0]['implementation_surfaces']
+    if surface != 'README.md'
+]
+surface_drift_active['implementation_surfaces'] = [
+    surface for surface in surface_drift_active['implementation_surfaces']
+    if surface != 'README.md'
+]
+plan_path.write_text(json.dumps(surface_drift_plan, indent=2) + '\n')
+active_path.write_text(json.dumps(surface_drift_active, indent=2) + '\n')
+result = subprocess.run(['bash', '.agent/verify_completion_control_plane.sh'], capture_output=True, text=True)
+combined = (result.stdout or '') + (result.stderr or '')
+assert result.returncode != 0, 'expected verifier failure when implementation_surfaces omit a tracked basis-to-HEAD diff file'
+assert 'implementation_surfaces must cover every tracked file changed from basis_commit to current HEAD; missing: README.md' in combined, combined
+
+plan_path.write_text(json.dumps(base_plan, indent=2) + '\n')
+active_path.write_text(json.dumps(base_active, indent=2) + '\n')
 PY
+
+bash .agent/verify_completion_control_plane.sh >/dev/null
 
 echo "active-slice contract test passed: $TMPDIR"
